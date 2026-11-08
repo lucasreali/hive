@@ -10,7 +10,9 @@ use std::path::{Component, Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::UNIX_EPOCH;
 
-use hive_protocol::{Control, FileStatus, MAX_PAYLOAD, Media, READ_LIMIT, SaveError};
+use hive_protocol::{
+    Control, FileStatus, HTML_TYPE as HTML, MAX_PAYLOAD, Media, READ_LIMIT, SaveError,
+};
 
 use crate::changes::{self, BINARY_PROBE};
 use crate::paths::canonical;
@@ -1168,6 +1170,20 @@ fn svg(head: &[u8]) -> bool {
     after.is_some_and(|c| c.is_ascii_whitespace() || matches!(c, b'>' | b'/'))
 }
 
+/// The type of an HTML page, a style sheet or a script by the name of `path` (24.4): no bytes
+/// tell them apart, and the webview runs a style sheet or a script only with its type
+/// (`nosniff`). Read as UTF-8, as a worktree's text is.
+fn text_type(path: &str) -> Option<&'static str> {
+    let (_, extension) = path.rsplit_once('.')?;
+    let mime = match extension.to_ascii_lowercase().as_str() {
+        "html" | "htm" => HTML,
+        "css" => "text/css; charset=utf-8",
+        "js" | "mjs" => "text/javascript; charset=utf-8",
+        _ => return None,
+    };
+    Some(mime)
+}
+
 /// The token for an opened file in the app's `hive-file:` scheme (24.2): its size and the time
 /// it was last modified, since hashing up to 100 MiB on every read of 1 MiB would cost too much.
 fn stamp(meta: &fs::Metadata) -> String {
@@ -1177,8 +1193,8 @@ fn stamp(meta: &fs::Metadata) -> String {
 }
 
 /// The regular file `path` of the worktree at `dir`, checked as [`read`] checks it, for the
-/// app's scheme: opened, with its size, its type if known ([`media_type`]) and its
-/// [`stamp`]; over its type's cap ([`PDF_LIMIT`], else [`SERVE_LIMIT`]), an error.
+/// app's scheme: opened, with its size, its type if known ([`media_type`], else
+/// [`text_type`]) and its [`stamp`]; over its type's cap ([`PDF_LIMIT`], else [`SERVE_LIMIT`]), an error.
 fn served(dir: &Path, path: &str) -> io::Result<(File, u64, Option<&'static str>, String)> {
     let Some(mut file) = open_inside(dir, path)? else {
         let gone = format!("{path} does not exist");
@@ -1189,7 +1205,7 @@ fn served(dir: &Path, path: &str) -> io::Result<(File, u64, Option<&'static str>
     Read::by_ref(&mut file)
         .take(HEAD_LEN)
         .read_to_end(&mut head)?;
-    let mime = media_type(&head);
+    let mime = media_type(&head).or_else(|| text_type(path));
     let limit = if mime == Some(PDF) {
         PDF_LIMIT
     } else {
@@ -1203,10 +1219,11 @@ fn served(dir: &Path, path: &str) -> io::Result<(File, u64, Option<&'static str>
 }
 
 /// The type and [`stamp`] of `path` of the worktree at `dir` when it is an image or a PDF
-/// within its cap (24.2, 24.3).
+/// (24.2, 24.3) or an HTML page (24.4) within its cap: not a style sheet or a script.
 fn media(dir: &Path, path: &str) -> Option<(&'static str, String)> {
     let (_, _, mime, version) = served(dir, path).ok()?;
-    Some((mime?, version))
+    let mime = mime.filter(|&mime| mime == HTML || !mime.starts_with("text/"))?;
+    Some((mime, version))
 }
 
 /// What [`read_range`] read.
@@ -1214,7 +1231,7 @@ fn media(dir: &Path, path: &str) -> Option<(&'static str, String)> {
 pub struct Range {
     /// The whole file's size.
     pub size: u64,
-    /// Its type ([`media_type`]), `application/octet-stream` when not known.
+    /// Its type ([`media_type`], [`text_type`]), `application/octet-stream` when not known.
     pub mime: &'static str,
     /// Its [`stamp`].
     pub version: String,
@@ -2682,6 +2699,22 @@ mod tests {
             (b"text", None),
         ] {
             assert_eq!(media_type(head), mime, "{head:?}");
+        }
+    }
+
+    #[test]
+    fn a_page_its_style_sheets_and_its_scripts_are_known_by_their_names() {
+        for (path, mime) in [
+            ("a.html", Some(HTML)),
+            ("dir/A.HTM", Some(HTML)),
+            ("s.css", Some("text/css; charset=utf-8")),
+            ("s.js", Some("text/javascript; charset=utf-8")),
+            ("s.mjs", Some("text/javascript; charset=utf-8")),
+            ("a.html.txt", None),
+            ("html", None),
+            ("a.xhtml", None),
+        ] {
+            assert_eq!(text_type(path), mime, "{path}");
         }
     }
 

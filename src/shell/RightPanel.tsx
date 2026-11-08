@@ -62,7 +62,7 @@ import { isDirty } from "../viewer/buffer";
 import { CodeView, notice } from "../viewer/CodeView";
 import { EditView, saveOpenFile } from "../viewer/EditView";
 import { openInEditor } from "../viewer/external";
-import { MediaView } from "../viewer/MediaView";
+import { isPage, MediaView, PagePreview } from "../viewer/MediaView";
 import { useRenderedPlace } from "../viewer/place";
 import { referenceTarget, sendReference } from "../viewer/reference";
 import { CommentButton, CommentInput, ReviewList } from "../viewer/review";
@@ -1056,6 +1056,8 @@ export function FileView({ worktree }: { worktree: string }) {
   if (openFile?.worktree !== worktree) return null;
   const why = text && notice(text);
   const dirty = !!edit && isDirty(edit);
+  // An HTML page (24.4) shows as its text, with a Preview as Markdown's.
+  const page = text?.media && isPage(text.media) ? text.media : null;
   return (
     <section className="file-view" aria-label={openFile.path}>
       <div className="file-view-bar">
@@ -1113,6 +1115,18 @@ export function FileView({ worktree }: { worktree: string }) {
             <EyeIcon />
           </button>
         )}
+        {page && (
+          <button
+            type="button"
+            className="ghost"
+            aria-label="Preview the page"
+            aria-pressed={rendered}
+            title={rendered ? "Show the text" : "Preview the page as saved"}
+            onClick={() => setRendered(!rendered)}
+          >
+            <EyeIcon />
+          </button>
+        )}
         {isTable(openFile.path) && !isWorkbook(openFile.path) && (
           <button
             type="button"
@@ -1161,6 +1175,8 @@ export function FileView({ worktree }: { worktree: string }) {
       <div className="file-view-body">
         {asTable ? (
           table && <TableView key={`${worktree}\n${openFile.path}`} table={table} />
+        ) : rendered && page ? (
+          <PagePreview media={page} path={openFile.path} />
         ) : rendered ? (
           why ? (
             <div className="hint">{why}</div>
@@ -1178,7 +1194,7 @@ export function FileView({ worktree }: { worktree: string }) {
         ) : (
           <>
             {!file && <div className="hint">No changes in this file.</div>}
-            {text?.media ? (
+            {text?.media && !page ? (
               // An image or a PDF (24.2, 24.3) shows as itself, not as its text or diff.
               <MediaView media={text.media} path={openFile.path} />
             ) : (

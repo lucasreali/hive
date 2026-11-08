@@ -750,9 +750,15 @@ const MOCK_PDF = `data:application/pdf;base64,${[
 
 /**
  * A stand-in for `hive::file::media_type` (24.2, 24.3), by the name: the real one reads the
- * bytes. A `.png` or a `.pdf` shows from a `data:` URL.
+ * bytes. A `.png` or a `.pdf` shows from a `data:` URL; a `.html` page (24.4) keeps its text
+ * and previews from its Windows scheme URL, which nothing serves in a browser but a test's
+ * route (`e2e/html-preview.e2e.ts`).
  */
 function mockMedia(path: string): FileMedia | null {
+  if (path.endsWith(".html")) {
+    const page = { mime: "text/html; charset=utf-8", token: "mock", version: "1-0" };
+    return { ...page, url: `http://hive-file.localhost/mock/${encodeURI(path)}?v=1-0` };
+  }
   const png = path.endsWith(".png");
   if (!png && !path.endsWith(".pdf")) return null;
   const mime = png ? "image/png" : "application/pdf";
@@ -778,13 +784,15 @@ function file(
   }
   const status = MOCK_CHANGES[worktree]?.find((f) => f.path === path)?.status;
   const media = mockMedia(path);
-  if (media) return { ...answer, ...none, binary: true, error: null, media };
+  if (media && !path.endsWith(".html"))
+    return { ...answer, ...none, binary: true, error: null, media };
   const sample = `// ${path}\nexport const value = 1;\n`;
   const [text, original] = MOCK_TEXTS[path] ?? [sample.replace("1", "2"), sample];
   const content =
     written.get(`${worktree}/${path}`) ?? (status === "deleted" ? null : status ? text : original);
   const base = status === "added" || status === "untracked" ? null : original;
-  return { ...answer, content, base, version: content && mockVersion(content), error: null };
+  const version = content && mockVersion(content);
+  return { ...answer, content, base, version, error: null, ...(media && { media }) };
 }
 
 /** A stand-in for `hive::file::version`: the length and a 32-bit hash of the text. */

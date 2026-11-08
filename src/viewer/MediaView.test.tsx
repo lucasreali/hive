@@ -1,6 +1,6 @@
 import { afterEach, expect, test } from "bun:test";
 import { cleanup, render } from "@testing-library/react";
-import { MediaView } from "./MediaView";
+import { isPage, MediaView, PagePreview } from "./MediaView";
 
 afterEach(cleanup);
 
@@ -29,4 +29,20 @@ test("a PDF shows in a plain iframe, which the WebView draws it in", () => {
   expect(frame?.getAttribute("title")).toBe("doc.pdf");
   expect(frame?.hasAttribute("sandbox")).toBe(false);
   expect(container.querySelector("img")).toBeNull();
+});
+
+test("an HTML page previews in an iframe sandboxed to scripts alone, from its scheme URL", () => {
+  const page = media("text/html; charset=utf-8");
+  const { container } = render(<PagePreview media={page} path="site/index.html" />);
+  const frame = container.querySelector("iframe.media-view");
+  expect(frame?.getAttribute("src")).toBe("hive-file://localhost/t/a?v=1-2");
+  expect(frame?.getAttribute("title")).toBe("site/index.html");
+  expect(frame?.getAttribute("sandbox")).toBe("allow-scripts");
+});
+
+test("only the service's HTML type is a page", () => {
+  expect(isPage(media("text/html; charset=utf-8"))).toBe(true);
+  for (const m of [media("text/html"), media("image/png"), null, undefined]) {
+    expect(isPage(m)).toBe(false);
+  }
 });

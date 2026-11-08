@@ -941,6 +941,143 @@ unsafe fn from_app(text: Id) -> bool {
         .is_some_and(|(text, check)| check(&text))
 }
 
+/// Turns WebRTC off in `webview` (24.4): no CSP covers it, so a previewed page's
+/// `RTCPeerConnection` would send STUN packets (and resolve their host names) anywhere, and
+/// Hive has no use for it. WebKit's own preference (`_peerConnectionEnabled`, private) is
+/// shared by every page of the webview: a frame created after it has no `RTCPeerConnection`.
+/// False when this WebKit has no such preference or it did not take.
+///
+/// # Safety
+/// `webview` is a `WKWebView` or nil, used on the main thread.
+pub unsafe fn disable_peer_connections(webview: *mut c_void) -> bool {
+    // SAFETY: `WKWebView`'s and `WKPreferences`' messages with their signatures, nil answering
+    // nil and NO; in a pool of their own.
+    unsafe {
+        let pool = objc_autoreleasePoolPush();
+        let object = message::<unsafe extern "C" fn(Id, Sel) -> Id>();
+        let configuration = object(webview, selector(c"configuration"));
+        let preferences = object(configuration, selector(c"preferences"));
+        let set = selector(c"_setPeerConnectionEnabled:");
+        let responds = message::<unsafe extern "C" fn(Id, Sel, Sel) -> Bool>();
+        let known = responds(preferences, selector(c"respondsToSelector:"), set) != NO;
+        if known {
+            message::<unsafe extern "C" fn(Id, Sel, Bool)>()(preferences, set, NO);
+        }
+        let enabled = message::<unsafe extern "C" fn(Id, Sel) -> Bool>();
+        let off = known && enabled(preferences, selector(c"_peerConnectionEnabled")) == NO;
+        objc_autoreleasePoolPop(pool);
+        off
+    }
+}
+
+/// Whether a frame may navigate (24.4), given whether it is the main frame, its URL now, the
+/// URL of the frame asking and where it goes ([`guard_frames`]).
+type FrameCheck = Box<dyn Fn(bool, &str, &str, &str) -> bool + Send + Sync>;
+static FRAME_CHECK: OnceLock<FrameCheck> = OnceLock::new();
+/// wry's `webView:decidePolicyForNavigationAction:decisionHandler:` before [`guard_frames`]
+/// replaced it.
+static NAVIGATION: OnceLock<usize> = OnceLock::new();
+/// Its signature: nothing from self, _cmd, the webview, the action and the decision block.
+type Decide = unsafe extern "C" fn(Id, Sel, Id, Id, Id);
+/// `WKNavigationActionPolicyCancel`.
+const CANCEL: isize = 0;
+
+/// A block literal's head (the Blocks ABI): what calling one needs.
+#[repr(C)]
+struct BlockHead {
+    isa: *const c_void,
+    flags: c_int,
+    reserved: c_int,
+    invoke: unsafe extern "C" fn(Id, isize),
+}
+
+/// Checks every navigation of `webview`'s frames by frame (24.4), which Tauri's
+/// `on_navigation` cannot (it gets only the URL): wry's navigation delegate's
+/// `webView:decidePolicyForNavigationAction:decisionHandler:` is replaced by one that cancels
+/// what `check` (main frame, its URL now, the asking frame's URL, the URL it goes to) refuses
+/// and hands the rest to wry's, which still asks `on_navigation`. Only the first `check` is
+/// kept; false when the webview has no delegate with that method.
+///
+/// # Safety
+/// `webview` is a `WKWebView` or nil, used on the main thread.
+pub unsafe fn guard_frames(
+    webview: *mut c_void,
+    check: impl Fn(bool, &str, &str, &str) -> bool + Send + Sync + 'static,
+) -> bool {
+    let _ = FRAME_CHECK.set(Box::new(check));
+    // SAFETY: `WKWebView`'s `navigationDelegate`; the replacement keeps the method's own type
+    // encoding (`replace`). Nil has no class.
+    unsafe {
+        let object = message::<unsafe extern "C" fn(Id, Sel) -> Id>();
+        let delegate = object(webview, selector(c"navigationDelegate"));
+        !delegate.is_null()
+            && replace(
+                object_getClass(delegate),
+                c"webView:decidePolicyForNavigationAction:decisionHandler:",
+                decide_policy as *const c_void,
+                &NAVIGATION,
+            )
+    }
+}
+
+/// The replaced `webView:decidePolicyForNavigationAction:decisionHandler:`: wry's for a
+/// navigation the frame check admits, else cancelled. The check must stay panic-free:
+/// `catch_unwind` cancels on a panic in a debug build, but the release build aborts.
+unsafe extern "C" fn decide_policy(this: Id, name: Sel, webview: Id, action: Id, handler: Id) {
+    // SAFETY: WebKit calls this with a `WKNavigationAction`.
+    let admitted = catch_unwind(AssertUnwindSafe(|| unsafe { frame_admits(action) }));
+    // Without wry's method (never: `replace` keeps it first) the block is still called once.
+    if let Some(&own) = NAVIGATION.get().filter(|_| admitted.unwrap_or(false)) {
+        // SAFETY: the method `guard_frames` replaced, with its own arguments.
+        unsafe { std::mem::transmute::<usize, Decide>(own)(this, name, webview, action, handler) };
+        return;
+    }
+    // SAFETY: WebKit's decision block, `void (^)(WKNavigationActionPolicy)`, called once.
+    unsafe { ((*handler.cast::<BlockHead>()).invoke)(handler, CANCEL) };
+}
+
+/// Whether [`guard_frames`]'s check admits `action` (a `WKNavigationAction`); one without a
+/// target frame (a new window) is left to wry, which asks `on_navigation`: what stops a new
+/// window is `on_new_window` (denied) and the frames' sandbox without `allow-popups`.
+///
+/// # Safety
+/// `action` is a `WKNavigationAction` or nil.
+unsafe fn frame_admits(action: Id) -> bool {
+    // SAFETY: `WKNavigationAction`'s, `WKFrameInfo`'s, `NSURLRequest`'s, `NSURL`'s and
+    // `NSString`'s messages, nil answering nil, NO and null; in a pool of their own.
+    unsafe {
+        let pool = objc_autoreleasePoolPush();
+        let object = message::<unsafe extern "C" fn(Id, Sel) -> Id>();
+        let text = |request: Id| {
+            let url = object(
+                object(request, selector(c"URL")),
+                selector(c"absoluteString"),
+            );
+            let utf8 = message::<unsafe extern "C" fn(Id, Sel) -> *const c_char>();
+            let utf8 = utf8(url, selector(c"UTF8String"));
+            if utf8.is_null() {
+                String::new()
+            } else {
+                CStr::from_ptr(utf8).to_string_lossy().into_owned()
+            }
+        };
+        let target = object(action, selector(c"targetFrame"));
+        let admitted = target.is_null() || {
+            let main = message::<unsafe extern "C" fn(Id, Sel) -> Bool>();
+            let main = main(target, selector(c"isMainFrame")) != NO;
+            let current = text(object(target, selector(c"request")));
+            let source = object(action, selector(c"sourceFrame"));
+            let source = text(object(source, selector(c"request")));
+            let to = text(object(action, selector(c"request")));
+            FRAME_CHECK
+                .get()
+                .is_some_and(|check| check(main, &current, &source, &to))
+        };
+        objc_autoreleasePoolPop(pool);
+        admitted
+    }
+}
+
 /// An autoreleased `NSString` of `text`.
 ///
 /// # Safety
@@ -2193,6 +2330,205 @@ mod tests {
             assert_eq!(TASKS.load(SeqCst) - before, handed, "{origin:?}");
             let code = if handed == 1 { 0 } else { 403 };
             assert_eq!(FAILED.load(SeqCst), code, "{origin:?}");
+        }
+    }
+
+    /// The stand-ins' preferences, and their WebRTC preference (on at first).
+    static PREFERENCES: AtomicUsize = AtomicUsize::new(0);
+    static PEER: AtomicU8 = AtomicU8::new(YES as u8);
+    extern "C" fn preferences(_: Id, _: Sel) -> Id {
+        PREFERENCES.load(SeqCst) as Id
+    }
+    extern "C" fn set_peer(_: Id, _: Sel, on: Bool) {
+        PEER.store(on as u8, SeqCst);
+    }
+    extern "C" fn ignore_peer(_: Id, _: Sel, _: Bool) {}
+    extern "C" fn peer(_: Id, _: Sel) -> Bool {
+        PEER.load(SeqCst) as Bool
+    }
+
+    #[test]
+    fn webrtc_is_turned_off_in_the_webview_s_preferences() {
+        // The real `WKPreferences` has the preference (a real one is made on the main thread
+        // only; the app was checked in a real `WKWebView`: no `RTCPeerConnection` in a frame).
+        let class = unsafe { objc_getClass(c"WKPreferences".as_ptr()) };
+        for name in [c"_setPeerConnectionEnabled:", c"_peerConnectionEnabled"] {
+            let method = unsafe { class_getInstanceMethod(class, selector(name)) };
+            assert!(!method.is_null(), "{name:?}");
+        }
+        let webview = instance(
+            c"HivePeerWebView",
+            &[
+                (c"configuration", this as *const c_void, c"@@:"),
+                (c"preferences", preferences as *const c_void, c"@@:"),
+            ],
+        );
+        let methods = |set: *const c_void| {
+            [
+                (c"_setPeerConnectionEnabled:", set, c"v@:c"),
+                (c"_peerConnectionEnabled", peer as *const c_void, c"c@:"),
+            ]
+        };
+        let turned = instance(c"HivePeerPreferences", &methods(set_peer as *const c_void));
+        PREFERENCES.store(turned as usize, SeqCst);
+        assert!(unsafe { disable_peer_connections(webview) });
+        assert_eq!(PEER.load(SeqCst), NO as u8);
+        // A preference that does not take, a WebKit without it, no webview: not turned off.
+        PEER.store(YES as u8, SeqCst);
+        let stuck = instance(c"HivePeerStuck", &methods(ignore_peer as *const c_void));
+        PREFERENCES.store(stuck as usize, SeqCst);
+        assert!(!unsafe { disable_peer_connections(webview) });
+        PREFERENCES.store(string("not preferences") as usize, SeqCst);
+        assert!(!unsafe { disable_peer_connections(webview) });
+        assert!(!unsafe { disable_peer_connections(null_mut()) });
+    }
+
+    /// What the navigation stand-ins hold: the target frame (none for a new window), whether it
+    /// is the main one, the requests of it, of the asking frame and of the navigation; and what
+    /// came of it: wry's method called, the policy given to the block (-1: none).
+    static TARGET: AtomicUsize = AtomicUsize::new(0);
+    static TARGET_MAIN: AtomicU8 = AtomicU8::new(0);
+    static TARGET_REQUEST: AtomicUsize = AtomicUsize::new(0);
+    static SOURCE_REQUEST: AtomicUsize = AtomicUsize::new(0);
+    static ACTION_REQUEST: AtomicUsize = AtomicUsize::new(0);
+    static DECIDED: AtomicUsize = AtomicUsize::new(0);
+    static POLICY: AtomicIsize = AtomicIsize::new(-1);
+    /// The stand-in webview's navigation delegate.
+    static NAV_DELEGATE: AtomicUsize = AtomicUsize::new(0);
+
+    extern "C" fn delegate_of(_: Id, _: Sel) -> Id {
+        NAV_DELEGATE.load(SeqCst) as Id
+    }
+    extern "C" fn decided(_: Id, _: Sel, _: Id, _: Id, _: Id) {
+        DECIDED.fetch_add(1, SeqCst);
+    }
+    extern "C" fn target_of(_: Id, _: Sel) -> Id {
+        TARGET.load(SeqCst) as Id
+    }
+    extern "C" fn target_main(_: Id, _: Sel) -> Bool {
+        TARGET_MAIN.load(SeqCst) as Bool
+    }
+    extern "C" fn target_request(_: Id, _: Sel) -> Id {
+        TARGET_REQUEST.load(SeqCst) as Id
+    }
+    extern "C" fn source_request(_: Id, _: Sel) -> Id {
+        SOURCE_REQUEST.load(SeqCst) as Id
+    }
+    extern "C" fn action_request(_: Id, _: Sel) -> Id {
+        ACTION_REQUEST.load(SeqCst) as Id
+    }
+    unsafe extern "C" fn policy_given(_: Id, policy: isize) {
+        POLICY.store(policy, SeqCst);
+    }
+
+    /// An `NSURLRequest` of `url`; nil for an empty one (a frame before its first load).
+    fn request_for(url: &str) -> usize {
+        if url.is_empty() {
+            return 0;
+        }
+        // SAFETY: `NSURL`'s and `NSURLRequest`'s messages; never released (a test's).
+        unsafe {
+            let make = message::<unsafe extern "C" fn(Id, Sel, Id) -> Id>();
+            let url = make(
+                objc_getClass(c"NSURL".as_ptr()),
+                selector(c"URLWithString:"),
+                string(url),
+            );
+            assert!(!url.is_null());
+            let class = objc_getClass(c"NSURLRequest".as_ptr());
+            make(class, selector(c"requestWithURL:"), url) as usize
+        }
+    }
+
+    #[test]
+    fn a_file_s_frame_is_kept_in_its_scheme_by_frame_not_by_url() {
+        let webview = instance(
+            c"HiveNavWebView",
+            &[(c"navigationDelegate", delegate_of as *const c_void, c"@@:")],
+        );
+        let decide = c"webView:decidePolicyForNavigationAction:decisionHandler:";
+        let delegate = instance(
+            c"HiveNavDelegate",
+            &[(decide, decided as *const c_void, c"v@:@@@?")],
+        );
+        let frame = |name: &CStr, request: *const c_void| {
+            instance(
+                name,
+                &[
+                    (c"isMainFrame", target_main as *const c_void, c"c@:"),
+                    (c"request", request, c"@@:"),
+                ],
+            )
+        };
+        let target = frame(c"HiveNavTarget", target_request as *const c_void);
+        let source = frame(c"HiveNavSource", source_request as *const c_void);
+        static SOURCE: AtomicUsize = AtomicUsize::new(0);
+        extern "C" fn source_frame(_: Id, _: Sel) -> Id {
+            SOURCE.load(SeqCst) as Id
+        }
+        SOURCE.store(source as usize, SeqCst);
+        let action = instance(
+            c"HiveNavAction",
+            &[
+                (c"targetFrame", target_of as *const c_void, c"@@:"),
+                (c"sourceFrame", source_frame as *const c_void, c"@@:"),
+                (c"request", action_request as *const c_void, c"@@:"),
+            ],
+        );
+        let check = |main: bool, current: &str, source: &str, to: &str| {
+            assert_ne!(to, "tauri://panic", "a broken check");
+            crate::frame_navigation(main, current, source, to, None)
+        };
+        // A webview without a navigation delegate: not guarded.
+        assert!(!unsafe { guard_frames(webview, check) });
+        NAV_DELEGATE.store(delegate as usize, SeqCst);
+        assert!(unsafe { guard_frames(webview, check) });
+
+        #[repr(C)]
+        struct Decision {
+            isa: *const c_void,
+            flags: c_int,
+            reserved: c_int,
+            invoke: unsafe extern "C" fn(Id, isize),
+        }
+        let mut block = Decision {
+            isa: (&raw const _NSConcreteStackBlock).cast(),
+            flags: 0,
+            reserved: 0,
+            invoke: policy_given,
+        };
+        let page = "hive-file://localhost/t/page.html";
+        let app = "tauri://localhost/index.html";
+        let dev = "http://localhost:20001/evil.html";
+        let send = message::<unsafe extern "C" fn(Id, Sel, Id, Id, Id)>;
+        // (a target frame, main, its URL, the asking frame's, where to; handed to wry)
+        for (framed, main, current, asking, to, handed) in [
+            (true, 0, page, page, dev, false),
+            (true, 0, page, page, "hive-file://localhost/t/b.html", true),
+            (true, 0, "", page, dev, false),
+            (true, 0, "", app, dev, true),
+            (true, 1, app, app, dev, false),
+            (true, 1, app, app, "tauri://localhost/x", true),
+            (true, 0, "", app, "tauri://panic", false),
+            (false, 0, page, page, dev, true),
+        ] {
+            TARGET.store(if framed { target as usize } else { 0 }, SeqCst);
+            TARGET_MAIN.store(main, SeqCst);
+            TARGET_REQUEST.store(request_for(current), SeqCst);
+            SOURCE_REQUEST.store(request_for(asking), SeqCst);
+            ACTION_REQUEST.store(request_for(to), SeqCst);
+            POLICY.store(-1, SeqCst);
+            let before = DECIDED.load(SeqCst);
+            let handler = (&raw mut block).cast::<c_void>();
+            // SAFETY: the replaced method, with stand-ins and a block of its signature.
+            unsafe { send()(delegate, selector(decide), null_mut(), action, handler) };
+            let case = format!("{framed} {main} {current:?} {asking:?} → {to}");
+            assert_eq!(DECIDED.load(SeqCst) - before, usize::from(handed), "{case}");
+            assert_eq!(
+                POLICY.load(SeqCst),
+                if handed { -1 } else { CANCEL },
+                "{case}"
+            );
         }
     }
 }

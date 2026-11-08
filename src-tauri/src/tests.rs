@@ -181,10 +181,84 @@ fn only_the_apps_own_origin_reaches_the_ipc() {
         "hive-file://localhost/token/page.html",
         "http://hive-file.localhost",
         "http://localhost:5173",
+        "http://localhost:20000",
         "http://tauri.localhost",
         "about:srcdoc",
     ] {
         assert!(!ipc_from_app(text, true, Some(&dev)), "{text}");
+    }
+}
+
+#[test]
+fn a_file_s_frame_stays_in_the_scheme_and_only_the_scripts_frame_reaches_a_dev_server() {
+    let page = "hive-file://localhost/t/page.html";
+    let app = "tauri://localhost/index.html";
+    let dev = "http://localhost:20001/";
+    for (main, current, source, to, admitted) in [
+        // A previewed page: its own files only, whoever asks.
+        (
+            false,
+            page,
+            page,
+            "hive-file://localhost/t/other.html",
+            true,
+        ),
+        (false, page, page, dev, false),
+        (false, page, page, "http://localhost:20001/evil.html", false),
+        (false, page, page, "https://evil.com/", false),
+        (false, page, page, "about:blank", false),
+        (false, "", page, dev, false),
+        (false, page, app, dev, false),
+        (false, page, app, "https://evil.com/", false),
+        (false, "", page, "https://evil.com/", false),
+        // The Scripts tab's frame: its first load, then within the dev servers.
+        (false, "", app, dev, true),
+        (false, "about:blank", app, dev, true),
+        // A fresh frame a page made (an `about:blank` child, its script run there): not the app's.
+        (false, "about:blank", "about:blank", dev, false),
+        (false, "", "", dev, false),
+        (false, "", "https://evil.com/", dev, false),
+        (false, dev, dev, "http://localhost:20003/", true),
+        (false, "http://localhost:5173/", app, dev, false),
+        (false, app, app, dev, false),
+        // The main frame never goes to a dev server; the rest is the navigation guard's.
+        (true, app, app, dev, false),
+        (true, "", "", dev, false),
+        (true, app, app, "tauri://localhost/other", true),
+        (false, "", app, page, true),
+        (false, "", app, "https://evil.com/", true),
+        (false, "not a url", "", "also not", true),
+    ] {
+        assert_eq!(
+            frame_navigation(main, current, source, to, None),
+            admitted,
+            "{main} {current:?} {source:?} → {to}"
+        );
+    }
+    // A development build's app is at its dev server.
+    let vite = tauri::Url::parse("http://localhost:1420").unwrap();
+    let from_vite = "http://localhost:1420/index.html";
+    assert!(frame_navigation(false, "", from_vite, dev, Some(&vite)));
+    assert!(!frame_navigation(false, "", from_vite, dev, None));
+}
+
+#[test]
+fn a_frame_loads_a_worktree_s_dev_server_on_localhost_at_a_block_s_port() {
+    let url = |text: &str| tauri::Url::parse(text).unwrap();
+    for text in ["http://localhost:20000/", "http://localhost:29999/a?b#c"] {
+        assert!(dev_server_url(&url(text)), "{text}");
+    }
+    for text in [
+        "http://localhost:19999/",
+        "http://localhost:30000/",
+        "http://localhost/",
+        "https://localhost:20000/",
+        "ws://localhost:20000/",
+        "http://127.0.0.1:20000/",
+        "http://localhost.evil.com:20000/",
+        "http://evil.com:20000/",
+    ] {
+        assert!(!dev_server_url(&url(text)), "{text}");
     }
 }
 
@@ -335,8 +409,8 @@ fn the_built_config_has_the_csp_and_builds_its_own_window() {
     let security = &config.app.security;
     let csp = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; \
                img-src 'self' data: hive-file: http://hive-file.localhost; \
-               frame-src hive-file: http://hive-file.localhost; font-src 'self' data:; \
-               connect-src ipc: http://ipc.localhost";
+               frame-src hive-file: http://hive-file.localhost http://localhost:*; \
+               font-src 'self' data:; connect-src ipc: http://ipc.localhost";
     assert_eq!(security.csp.as_ref().unwrap().to_string(), csp);
     // The dev CSP adds the Vite hot-reload socket. Tauri applies a CSP only to the pages it
     // serves itself, so on desktop not to the dev server's.
@@ -3880,6 +3954,106 @@ async fn a_file_url_is_read_from_the_service_in_ranges() {
     let (status, body, _) = served(&hive, "/t/a.png", ended).await;
     assert_eq!((status, &body[..]), (404, NOT_CONNECTED.as_bytes()));
     assert!(hive.link().reads.is_empty());
+}
+
+#[tokio::test]
+async fn only_a_few_file_urls_are_read_at_once() {
+    // A page's scripts can ask for many large files: past `SERVING`, they wait their turn.
+    assert_eq!(SERVING, 4, "five pages below");
+    let (hive, mut service, _rx) = welcomed().await;
+    let reads = async {
+        let mut asked = Vec::new();
+        for _ in 0..SERVING {
+            let (0, Control::ReadFile { id, .. }) = service.control().await else {
+                panic!("expected read_file");
+            };
+            asked.push(id);
+        }
+        let more = tokio::time::timeout(Duration::from_millis(200), service.control()).await;
+        assert!(more.is_err(), "a read past the limit: {more:?}");
+        for id in asked {
+            let reply = Control::FileRange {
+                id,
+                size: 1,
+                mime: "text/javascript".into(),
+                version: "v".into(),
+                error: None,
+            };
+            service.send(0, reply).await;
+            service.writer.send(Frame::data(id, vec![1])).await.unwrap();
+        }
+        // One answered, the last one is read.
+        answer_read(
+            &mut service,
+            Some((1, "text/javascript", "v")),
+            None,
+            Some(vec![2]),
+        )
+        .await;
+    };
+    let all = async {
+        let (a, b, c, d, e, ()) = tokio::join!(
+            hive.serve_file("/t/a.js"),
+            hive.serve_file("/t/b.js"),
+            hive.serve_file("/t/c.js"),
+            hive.serve_file("/t/d.js"),
+            hive.serve_file("/t/e.js"),
+            reads
+        );
+        [a, b, c, d, e].map(|answer| answer.status().as_u16())
+    };
+    let statuses = tokio::time::timeout(WAIT, all).await.unwrap();
+    assert_eq!(statuses, [200; 5]);
+}
+
+#[tokio::test]
+async fn past_the_queue_a_file_url_is_busy_and_a_silent_read_gives_up() {
+    let (hive, mut service, _rx) = welcomed().await;
+    let hive = Arc::new(hive);
+    // Every place taken: `SERVING` asked of the service, `QUEUED` waiting.
+    let pages: Vec<_> = (0..SERVING + QUEUED)
+        .map(|i| {
+            let hive = Arc::clone(&hive);
+            tokio::spawn(async move { hive.serve_file(&format!("/t/{i}.png")).await })
+        })
+        .collect();
+    for _ in 0..SERVING {
+        assert!(matches!(
+            service.control().await,
+            (0, Control::ReadFile { .. })
+        ));
+    }
+    while hive.waiting.available_permits() > 0 {
+        tokio::task::yield_now().await;
+    }
+    // One more: refused at once, nothing asked.
+    let busy = tokio::time::timeout(WAIT, hive.serve_file("/t/more.png")).await;
+    let busy = busy.unwrap();
+    assert_eq!(busy.status(), 503);
+    assert_eq!(busy.body(), b"too many files asked for at once");
+    assert!(busy.headers()["Content-Security-Policy"]
+        .to_str()
+        .unwrap()
+        .ends_with("; sandbox"));
+    for page in pages {
+        page.abort();
+    }
+    while hive.waiting.available_permits() < SERVING + QUEUED {
+        tokio::task::yield_now().await;
+    }
+    hive.link().reads.clear();
+
+    // A read the service never answers fails after `read_wait`, forgotten, its turn given back.
+    let mut hive = Arc::into_inner(hive).unwrap();
+    hive.read_wait = Duration::from_millis(50);
+    let silent = async { drop(service.control().await) };
+    let (status, body, _) = served(&hive, "/t/slow.png", silent).await;
+    assert_eq!(
+        (status, &body[..]),
+        (404, &b"slow.png took too long to read"[..])
+    );
+    assert!(hive.link().reads.is_empty());
+    assert_eq!(hive.serving.available_permits(), SERVING);
 }
 
 #[tokio::test]

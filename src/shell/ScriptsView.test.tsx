@@ -55,7 +55,7 @@ test("the tab asks for the worktree's scripts and lists them by source with thei
     scripts.map((s) => [`${s.name}${s.command}`, `Run in a new terminal: ${s.command}`]),
   );
   expect(view().querySelector(".scripts-ports")?.textContent).toBe(
-    "Ports 20010–20019$PORT 20010$HIVE_PORT 20010",
+    "Ports 20010–20019$PORT 20010$HIVE_PORT 20010Preview",
   );
   expect(view().querySelector(".scripts-problem")?.textContent).toBe(
     "Makefile: 1 script left out (a name Hive cannot type as one word)",
@@ -111,5 +111,39 @@ test("without scripts it points to Settings, opened on the project's scripts", (
     within(view()).getByRole("button", { name: "Edit this project's scripts in Settings" }),
   );
   expect(useHive.getState().modalProject).toBe(shop.id);
+  list.mockRestore();
+});
+
+test("Preview shows the dev server at a port of the block in a sandboxed frame, and back", () => {
+  const list = spyOn(transport, "listScripts").mockResolvedValue();
+  show();
+  listed(scripts);
+  const toggle = within(view()).getByRole("button", { name: "Preview" });
+  expect(toggle.getAttribute("aria-pressed")).toBe("false");
+  fireEvent.click(toggle);
+  expect(toggle.getAttribute("aria-pressed")).toBe("true");
+  const frame = () => view().querySelector("iframe.page-frame");
+  expect([frame()?.getAttribute("src"), frame()?.getAttribute("sandbox")]).toEqual([
+    "http://localhost:20010/",
+    "allow-scripts allow-same-origin allow-forms",
+  ]);
+  expect(frame()?.getAttribute("title")).toBe("Dev server at localhost:20010");
+  // The scripts give way to the page.
+  expect(within(view()).queryByRole("region", { name: "Settings" })).toBeNull();
+  // Another port of the block, then a reload: a new frame at the same port.
+  const port = within(view()).getByRole("combobox", { name: "Port" });
+  expect(port.textContent).toContain("localhost:20010 ($PORT)");
+  fireEvent.mouseDown(port);
+  const ports = screen.getAllByRole("option").map((o) => o.textContent);
+  expect([ports.length, ports.at(-1)]).toEqual([10, "localhost:20019"]);
+  fireEvent.click(screen.getByRole("option", { name: "localhost:20013" }));
+  expect(frame()?.getAttribute("src")).toBe("http://localhost:20013/");
+  const before = frame();
+  fireEvent.click(within(view()).getByRole("button", { name: "Reload the preview" }));
+  expect(frame()).not.toBe(before);
+  expect(frame()?.getAttribute("src")).toBe("http://localhost:20013/");
+  fireEvent.click(toggle);
+  expect(frame()).toBeNull();
+  expect(within(view()).getByRole("region", { name: "Settings" })).toBeTruthy();
   list.mockRestore();
 });

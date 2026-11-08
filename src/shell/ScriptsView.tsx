@@ -1,11 +1,13 @@
 import { PlayIcon, StopIcon, TerminalWindowIcon } from "@phosphor-icons/react";
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 import type { Project, Script, ScriptSource, Worktree } from "../protocol";
 import { runningScripts, runScript, stopScript } from "../scripts";
 import { activateTab, openModal, useHive } from "../store";
 import { showOpenFailure } from "../terminals";
 import { transport } from "../transport";
+import { Select } from "../ui/Select";
+import { RefreshIcon } from "./icons";
 
 const ICON = { size: 14, "aria-hidden": true } as const;
 
@@ -24,7 +26,8 @@ const BLOCK = 10;
  * The right panel's Scripts tab (23.4): the shown worktree's port block, the scripts started
  * here that still run (show their terminal, stop with Ctrl+C), then every script by source; a
  * click types one into a new terminal in the worktree. The list is asked for when shown and
- * follows the service's changes.
+ * follows the service's changes. Preview (24.4) shows instead the dev server at a port of the
+ * block, `$PORT` first.
  */
 export function ScriptsView({ project, worktree }: { project: Project; worktree: Worktree }) {
   const path = worktree.path;
@@ -47,6 +50,9 @@ export function ScriptsView({ project, worktree }: { project: Project; worktree:
     scripts: (listed?.scripts ?? []).filter((s) => s.source === g.source),
   })).filter((g) => g.scripts.length > 0);
   const port = listed?.port ?? null;
+  // The previewed port's place in the block (24.4), and a count of reloads asked.
+  const [preview, setPreview] = useState<number | null>(null);
+  const [loads, setLoads] = useState(0);
   return (
     <div className="scripts">
       {port !== null && (
@@ -56,86 +62,154 @@ export function ScriptsView({ project, worktree }: { project: Project; worktree:
           </span>
           <code className="scripts-code">$PORT {port}</code>
           <code className="scripts-code">$HIVE_PORT {port}</code>
-        </div>
-      )}
-      {running.length > 0 && (
-        <section className="scripts-group" aria-label="Running">
-          <h3>Running</h3>
-          <ul>
-            {running.map((r) => (
-              <li key={r.id} className="script running">
-                <span className="script-dot" aria-hidden="true" />
-                <span className="script-name">{r.name}</span>
-                <span className="script-command">{r.command}</span>
-                <button
-                  type="button"
-                  className="ghost icon"
-                  title={`Show the terminal of ${r.name}`}
-                  onClick={() => show(r.id)}
-                >
-                  <TerminalWindowIcon {...ICON} />
-                </button>
-                <button
-                  type="button"
-                  className="ghost icon"
-                  title={`Stop ${r.name} (sends Ctrl+C)`}
-                  onClick={() => stopScript(r.id)}
-                >
-                  <StopIcon {...ICON} />
-                </button>
-              </li>
-            ))}
-          </ul>
-        </section>
-      )}
-      {!listed && <div className="hint">Loading…</div>}
-      {listed && groups.length === 0 && (
-        <div className="hint scripts-empty">
-          <span>
-            No scripts. Add this project's own in Settings, or a{" "}
-            <code className="scripts-code">package.json</code>,{" "}
-            <code className="scripts-code">Taskfile.yml</code> or{" "}
-            <code className="scripts-code">Makefile</code> to the repository.
-          </span>
-          <button type="button" className="secondary" onClick={settings}>
-            Open Settings
+          <button
+            type="button"
+            className="ghost text scripts-preview-toggle"
+            aria-pressed={preview !== null}
+            title={preview === null ? "Preview the dev server" : "Show the scripts"}
+            onClick={() => setPreview(preview === null ? 0 : null)}
+          >
+            Preview
           </button>
         </div>
       )}
-      {groups.map((g) => (
-        <section key={g.source} className="scripts-group" aria-label={g.label}>
-          <h3>{g.label}</h3>
-          <ul>
-            {g.scripts.map((script) => (
-              <li key={script.name} className="script">
-                <button
-                  type="button"
-                  className="script-main"
-                  title={`Run in a new terminal: ${script.command}`}
-                  onClick={() => run(script)}
-                >
-                  <PlayIcon {...ICON} className="script-play" />
-                  <span className="script-name">{script.name}</span>
-                  <span className="script-command">{script.command}</span>
-                </button>
-              </li>
-            ))}
-          </ul>
-        </section>
-      ))}
-      {listed?.problems.map((p) => (
-        <p key={p} className="scripts-problem">
-          {p}
-        </p>
-      ))}
-      {listed && groups.length > 0 && (
-        <div className="hint">
-          Nothing runs until you click it.{" "}
-          <button type="button" className="link" onClick={settings}>
-            Edit this project's scripts in Settings
-          </button>
-        </div>
+      {port !== null && preview !== null ? (
+        <DevServer
+          port={port}
+          at={preview}
+          onPick={setPreview}
+          loads={loads}
+          onReload={() => setLoads(loads + 1)}
+        />
+      ) : (
+        <>
+          {running.length > 0 && (
+            <section className="scripts-group" aria-label="Running">
+              <h3>Running</h3>
+              <ul>
+                {running.map((r) => (
+                  <li key={r.id} className="script running">
+                    <span className="script-dot" aria-hidden="true" />
+                    <span className="script-name">{r.name}</span>
+                    <span className="script-command">{r.command}</span>
+                    <button
+                      type="button"
+                      className="ghost icon"
+                      title={`Show the terminal of ${r.name}`}
+                      onClick={() => show(r.id)}
+                    >
+                      <TerminalWindowIcon {...ICON} />
+                    </button>
+                    <button
+                      type="button"
+                      className="ghost icon"
+                      title={`Stop ${r.name} (sends Ctrl+C)`}
+                      onClick={() => stopScript(r.id)}
+                    >
+                      <StopIcon {...ICON} />
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            </section>
+          )}
+          {!listed && <div className="hint">Loading…</div>}
+          {listed && groups.length === 0 && (
+            <div className="hint scripts-empty">
+              <span>
+                No scripts. Add this project's own in Settings, or a{" "}
+                <code className="scripts-code">package.json</code>,{" "}
+                <code className="scripts-code">Taskfile.yml</code> or{" "}
+                <code className="scripts-code">Makefile</code> to the repository.
+              </span>
+              <button type="button" className="secondary" onClick={settings}>
+                Open Settings
+              </button>
+            </div>
+          )}
+          {groups.map((g) => (
+            <section key={g.source} className="scripts-group" aria-label={g.label}>
+              <h3>{g.label}</h3>
+              <ul>
+                {g.scripts.map((script) => (
+                  <li key={script.name} className="script">
+                    <button
+                      type="button"
+                      className="script-main"
+                      title={`Run in a new terminal: ${script.command}`}
+                      onClick={() => run(script)}
+                    >
+                      <PlayIcon {...ICON} className="script-play" />
+                      <span className="script-name">{script.name}</span>
+                      <span className="script-command">{script.command}</span>
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            </section>
+          ))}
+          {listed?.problems.map((p) => (
+            <p key={p} className="scripts-problem">
+              {p}
+            </p>
+          ))}
+          {listed && groups.length > 0 && (
+            <div className="hint">
+              Nothing runs until you click it.{" "}
+              <button type="button" className="link" onClick={settings}>
+                Edit this project's scripts in Settings
+              </button>
+            </div>
+          )}
+        </>
       )}
+    </div>
+  );
+}
+
+/**
+ * A worktree's dev server (24.4) at `localhost`, the port `at` of the block from `port`, in a
+ * frame sandboxed to its own origin (no top navigation, no popup), which the navigation guard
+ * admits only at a block's port (`dev_server_url`) and which never reaches the app's IPC.
+ */
+function DevServer(props: {
+  port: number;
+  at: number;
+  onPick: (at: number) => void;
+  loads: number;
+  onReload: () => void;
+}) {
+  const shown = props.port + props.at;
+  const options = Array.from({ length: BLOCK }, (_, i) => ({
+    value: String(i),
+    label: `localhost:${props.port + i}${i === 0 ? " ($PORT)" : ""}`,
+  }));
+  return (
+    <div className="scripts-preview">
+      <div className="scripts-preview-bar">
+        <Select
+          aria-label="Port"
+          value={String(props.at)}
+          options={options}
+          onChange={(at) => props.onPick(Number(at))}
+        />
+        <button
+          type="button"
+          className="ghost icon"
+          title="Reload the preview"
+          aria-label="Reload the preview"
+          onClick={props.onReload}
+        >
+          <RefreshIcon />
+        </button>
+      </div>
+      <iframe
+        key={props.loads}
+        className="page-frame"
+        title={`Dev server at localhost:${shown}`}
+        src={`http://localhost:${shown}/`}
+        sandbox="allow-scripts allow-same-origin allow-forms"
+      />
     </div>
   );
 }

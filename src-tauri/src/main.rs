@@ -129,11 +129,15 @@ fn main() {
                 .flatten();
             #[cfg(target_os = "macos")]
             let ipc_dev = dev.clone();
+            #[cfg(target_os = "macos")]
+            let frame_dev = dev.clone();
             let _window = tauri::WebviewWindowBuilder::from_config(app.handle(), &window)?
-                // A frame may also load the files' scheme (a PDF, 24.3).
+                // A frame may also load the files' scheme (a PDF, 24.3) and a worktree's dev
+                // server (24.4).
                 .on_navigation(move |url| {
                     hive_lib::app_url(url, macos, dev.as_ref())
                         || hive_lib::scheme::file_url(url, macos)
+                        || hive_lib::dev_server_url(url)
                 })
                 .on_new_window(|_, _| tauri::webview::NewWindowResponse::Deny)
                 .build()?;
@@ -159,6 +163,19 @@ fn main() {
                         unsafe { hive_lib::macos::guard_ipc(webview.inner(), delegate, from_app) };
                     if !guarded {
                         eprintln!("hive-app: Tauri's IPC is not guarded from framed pages");
+                    }
+                    // A previewed page stays in its scheme, and has no WebRTC (24.4).
+                    // SAFETY: as above.
+                    let check = move |main: bool, current: &str, source: &str, to: &str| {
+                        hive_lib::frame_navigation(main, current, source, to, frame_dev.as_ref())
+                    };
+                    let frames = unsafe { hive_lib::macos::guard_frames(webview.inner(), check) };
+                    if !frames {
+                        eprintln!("hive-app: frames' navigations are not guarded");
+                    }
+                    // SAFETY: as above.
+                    if !unsafe { hive_lib::macos::disable_peer_connections(webview.inner()) } {
+                        eprintln!("hive-app: WebRTC could not be turned off");
                     }
                 })?;
             }
