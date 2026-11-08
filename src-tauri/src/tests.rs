@@ -3338,6 +3338,85 @@ fn the_notification_settings_open_at_their_pane() {
 }
 
 #[test]
+fn the_terminal_permissions_go_to_the_ui() {
+    let (channel, mut rx) = ui();
+    let hive = hive().with_terminal_permissions(|| TerminalPermissions {
+        screen_recording: Permission::Denied,
+        accessibility: Permission::Granted,
+    });
+    hive.link().ui = Some(channel);
+    let app = mock_builder()
+        .manage(hive)
+        .invoke_handler(tauri::generate_handler![check_terminal_permissions])
+        .build(mock_context(noop_assets()))
+        .unwrap();
+    let webview = tauri::WebviewWindowBuilder::new(&app, "main", Default::default())
+        .build()
+        .unwrap();
+    let checking = invoke(&webview, "check_terminal_permissions", json!({}));
+    assert_eq!(checking, Ok(Value::Null));
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    let answer = json!({
+        "type": "terminal_permissions",
+        "screen_recording": "denied",
+        "accessibility": "granted",
+    });
+    assert_eq!(runtime.block_on(next(&mut rx)), answer);
+    // An app that cannot read them (any other platform) says so, and the UI shows nothing.
+    let (channel, mut rx) = ui();
+    let unknown = self::hive();
+    unknown.link().ui = Some(channel);
+    unknown.check_terminal_permissions();
+    let answer = json!({
+        "type": "terminal_permissions",
+        "screen_recording": "unknown",
+        "accessibility": "unknown",
+    });
+    assert_eq!(runtime.block_on(next(&mut rx)), answer);
+}
+
+#[test]
+fn the_privacy_settings_open_at_their_panes_and_nowhere_else() {
+    let (tx, opened) = std::sync::mpsc::channel::<String>();
+    let hive = hive().with_url(move |url: &str| {
+        tx.send(url.into()).unwrap();
+        Ok(())
+    });
+    let app = mock_builder()
+        .manage(hive)
+        .invoke_handler(tauri::generate_handler![open_privacy_settings])
+        .build(mock_context(noop_assets()))
+        .unwrap();
+    let webview = tauri::WebviewWindowBuilder::new(&app, "main", Default::default())
+        .build()
+        .unwrap();
+    let open = |pane: &str| invoke(&webview, "open_privacy_settings", json!({ "pane": pane }));
+    assert_eq!(open("screen_recording"), Ok(Value::Null));
+    assert_eq!(
+        opened.try_recv().unwrap(),
+        "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture"
+    );
+    assert_eq!(open("accessibility"), Ok(Value::Null));
+    assert_eq!(
+        opened.try_recv().unwrap(),
+        "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility"
+    );
+    // Anything else never reaches the opener.
+    assert_eq!(
+        open("https://example.com"),
+        Err(json!("no such privacy pane"))
+    );
+    assert!(opened.try_recv().is_err());
+    let none = self::hive().open_privacy_settings("accessibility");
+    assert_eq!(none, Err("this app cannot open URLs".into()));
+    let refused = self::hive().with_url(|_: &str| Err("no handler".into()));
+    assert_eq!(
+        refused.open_privacy_settings("screen_recording"),
+        Err("no handler".into())
+    );
+}
+
+#[test]
 fn the_tone_is_the_web_audio_beep_as_a_wav_file() {
     let wav = tone_wav();
     let word = |at: usize| u32::from_le_bytes(wav[at..at + 4].try_into().unwrap());

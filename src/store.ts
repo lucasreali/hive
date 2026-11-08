@@ -312,6 +312,11 @@ export type HiveState = {
   translocated: boolean;
   /** Whether the OS lets Hive notify (17.19), as the app last said (`notification_permission`). */
   notificationPermission: NotificationPermission;
+  /** What macOS lets programs in Hive's terminals do (25.5), as the app last said. */
+  terminalPermissions: {
+    screenRecording: NotificationPermission;
+    accessibility: NotificationPermission;
+  };
   rightPanel: RightPanel;
   /** Whether the left sidebar shows (the View menu hides it, 17.13). */
   sidebarShown: boolean;
@@ -518,6 +523,7 @@ export const initialState: HiveState = {
   update: null,
   translocated: false,
   notificationPermission: "unknown",
+  terminalPermissions: { screenRecording: "unknown", accessibility: "unknown" },
   rightPanel: "files",
   sidebarShown: true,
   panelView: "files",

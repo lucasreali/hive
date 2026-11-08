@@ -9,6 +9,8 @@
 //!   Tested against stand-in classes: a test process is no app bundle, and the real center
 //!   raises an exception for one.
 //! - Where the traffic lights go (18.4), from a close button laid out by this macOS.
+//! - Whether Hive holds Screen Recording and Accessibility, which programs in its terminals get
+//!   through it (25.5): only read, which never prompts.
 //!
 //! Nothing unwinds across this boundary: `applicationShouldTerminate:` catches any panic, the
 //! center is asked only by an app bundle (`in_app_bundle`), and the completion blocks only hand
@@ -22,7 +24,7 @@ use std::sync::mpsc::{sync_channel, SyncSender};
 use std::sync::OnceLock;
 use std::time::Duration;
 
-use crate::{in_app_bundle, Permission};
+use crate::{in_app_bundle, Permission, TerminalPermissions};
 
 /// An Objective-C object (or class) and a selector.
 type Id = *mut c_void;
@@ -45,6 +47,40 @@ unsafe extern "C" {
 #[link(name = "UserNotifications", kind = "framework")]
 unsafe extern "C" {
     static _NSConcreteStackBlock: [*const c_void; 32];
+}
+
+#[link(name = "CoreGraphics", kind = "framework")]
+unsafe extern "C" {
+    /// Whether this process's responsible app holds Screen Recording; never prompts. `bool`.
+    fn CGPreflightScreenCaptureAccess() -> u8;
+}
+
+#[link(name = "ApplicationServices", kind = "framework")]
+unsafe extern "C" {
+    /// Whether this process's responsible app holds Accessibility; never prompts. `Boolean`.
+    fn AXIsProcessTrusted() -> u8;
+}
+
+/// A yes or no from the OS: `Denied` also stands for never asked, as macOS does not tell them
+/// apart here.
+fn held(answer: u8) -> Permission {
+    if answer == 0 {
+        Permission::Denied
+    } else {
+        Permission::Granted
+    }
+}
+
+/// What macOS lets programs in Hive's terminals do (25.5), as Hive itself holds it: a terminal's
+/// process has Hive.app as its responsible process, so macOS answers it the same.
+pub fn terminal_permissions() -> TerminalPermissions {
+    // SAFETY: neither takes arguments or has requirements; both only read.
+    unsafe {
+        TerminalPermissions {
+            screen_recording: held(CGPreflightScreenCaptureAccess()),
+            accessibility: held(AXIsProcessTrusted()),
+        }
+    }
 }
 
 /// The notification center's class.
@@ -1308,6 +1344,23 @@ mod tests {
             stand_in(c"HiveSilentCenter", itself, silent);
             stand_in(c"HiveNoCenter", none, settings);
         });
+    }
+
+    #[test]
+    fn a_yes_or_no_is_a_permission() {
+        assert_eq!(held(0), Permission::Denied);
+        assert_eq!(held(1), Permission::Granted);
+        assert_eq!(held(2), Permission::Granted, "C's truth: anything but zero");
+    }
+
+    #[test]
+    fn the_terminals_permissions_are_what_macos_says() {
+        // Whatever this machine holds, each comes from its own call, and reading prompts nothing.
+        // SAFETY: both only read.
+        let (screen, trusted) = unsafe { (CGPreflightScreenCaptureAccess(), AXIsProcessTrusted()) };
+        let read = terminal_permissions();
+        assert_eq!(read.screen_recording, held(screen));
+        assert_eq!(read.accessibility, held(trusted));
     }
 
     #[test]

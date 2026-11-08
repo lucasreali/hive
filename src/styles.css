@@ -2506,6 +2506,18 @@ button.chevron:hover {
   border-top: 1px solid var(--border-subtle);
 }
 
+.terminal-permission {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  padding: 4px 0;
+}
+
+.terminal-permission-state {
+  color: var(--text-3);
+  margin-right: auto;
+}
+
 .settings-group h3 {
   margin: 0;
   font-size: var(--fs-meta);

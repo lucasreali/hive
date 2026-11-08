@@ -1368,6 +1368,21 @@ test("?mock=denied says notifications are off; the browser plays its own tone", 
   await denied.checkNotifications();
   await tick();
   expect(said.at(-1)).toEqual({ type: "notification_permission", permission: "denied" });
+  await denied.checkTerminalPermissions();
+  await denied.openPrivacySettings("screen_recording");
+  await tick();
+  expect(said.at(-1)).toEqual({
+    type: "terminal_permissions",
+    screen_recording: "denied",
+    accessibility: "granted",
+  });
+  await transport.checkTerminalPermissions();
+  await tick();
+  expect(messages.at(-1)).toEqual({
+    type: "terminal_permissions",
+    screen_recording: "granted",
+    accessibility: "granted",
+  });
 });
 
 test("folders are browsed on both sides of the fake machine", async () => {
