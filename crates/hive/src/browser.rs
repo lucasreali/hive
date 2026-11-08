@@ -82,9 +82,10 @@ const GROUP_FILE: &str = "hive-browser-group";
 /// Ends the browsers an earlier service left running (killed before it could stop them: their
 /// DevTools port has no password) and removes `dir`, their profiles' folder. A profile's
 /// [`GROUP_FILE`] names the group killed, and only while its leader still runs with that
-/// profile: a number the system gave another process since is left alone.
+/// profile: a number the system gave another process since is left alone. `kill` ends a group
+/// ([`kill_group`]).
 #[cfg(unix)]
-pub fn reap(dir: &Path, source: crate::procs::Source) {
+pub fn reap(dir: &Path, source: crate::procs::Source, kill: &mut dyn FnMut(i32)) {
     for profile in std::fs::read_dir(dir)
         .into_iter()
         .flatten()
@@ -98,16 +99,21 @@ pub fn reap(dir: &Path, source: crate::procs::Source) {
         let mut flag = OsString::from("--user-data-dir=");
         flag.push(&profile);
         let flag = flag.to_string_lossy().into_owned();
-        // Only a process running with this profile: never 0 (our own group), 1 or a negative
-        // number, whose arguments are not a browser's of ours.
+        // Never 0 (the service's own group), 1 (`killpg(1)` is `kill(-1)`: every process of
+        // the user) or a negative number, whatever their arguments.
         let leader = group
+            .filter(|&g| g > 1)
             .filter(|&g| crate::procs::args(source, g).is_some_and(|args| args.contains(&flag)));
-        if let Some(group) = leader {
-            use nix::sys::signal::{Signal, killpg};
-            let _ = killpg(nix::unistd::Pid::from_raw(group), Signal::SIGKILL);
-        }
+        leader.into_iter().for_each(&mut *kill);
     }
     let _ = std::fs::remove_dir_all(dir);
+}
+
+/// Ends the process group `group` at once (SIGKILL).
+#[cfg(unix)]
+pub fn kill_group(group: i32) {
+    use nix::sys::signal::{Signal, killpg};
+    let _ = killpg(nix::unistd::Pid::from_raw(group), Signal::SIGKILL);
 }
 
 /// The browser to run: `setting` (`browser.path`) when set, else the first installed one of
@@ -1379,13 +1385,13 @@ mod tests {
         std::fs::create_dir_all(dir.join("2")).unwrap();
         std::fs::write(dir.join("2").join(GROUP_FILE), stranger.to_string()).unwrap();
         // Unreadable numbers and a profile without one: nothing to kill.
-        for (name, text) in [("3", "x"), ("4", "1"), ("5", "-7")] {
+        for (name, text) in [("3", "x"), ("4", "")] {
             std::fs::create_dir_all(dir.join(name)).unwrap();
             std::fs::write(dir.join(name).join(GROUP_FILE), text).unwrap();
         }
         std::fs::create_dir_all(dir.join("6")).unwrap();
         let source = crate::procs::Source::System;
-        reap(&dir, source);
+        reap(&dir, source, &mut kill_group);
         assert!(!dir.exists());
         let pid = nix::unistd::Pid::from_raw(group as i32);
         // A thread of its own: a test runtime would wait for it on a failure.
@@ -1399,7 +1405,31 @@ mod tests {
         assert!(alive(stranger), "{stranger} was killed");
         drop(other);
         // No folder: nothing to do.
-        reap(&dir, source);
+        reap(&dir, source, &mut kill_group);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn groups_0_1_and_negative_are_never_killed_even_with_a_browsers_arguments() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("browsers");
+        // A process table where each of them runs with its profile's arguments.
+        let procs = tmp.path().join("proc");
+        for (name, group) in [("a", 1), ("b", 0), ("c", -7), ("d", 4242)] {
+            let profile = dir.join(name);
+            std::fs::create_dir_all(&profile).unwrap();
+            std::fs::write(profile.join(GROUP_FILE), group.to_string()).unwrap();
+            let entry = procs.join(group.to_string());
+            std::fs::create_dir_all(&entry).unwrap();
+            let cmdline = format!("chrome\0--user-data-dir={}\0", profile.display());
+            std::fs::write(entry.join("cmdline"), cmdline).unwrap();
+        }
+        let mut killed = Vec::new();
+        reap(&dir, crate::procs::Source::Dir(&procs), &mut |g| {
+            killed.push(g)
+        });
+        assert_eq!(killed, [4242]);
+        assert!(!dir.exists());
     }
 
     #[cfg(unix)]
