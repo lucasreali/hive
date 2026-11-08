@@ -3,7 +3,6 @@ import {
   FilesIcon,
   GitDiffIcon,
   GitPullRequestIcon,
-  GlobeIcon,
   MagnifyingGlassIcon,
   PlayCircleIcon,
   TerminalIcon as PromptIcon,
@@ -68,7 +67,6 @@ import { referenceTarget, sendReference } from "../viewer/reference";
 import { CommentButton, CommentInput, ReviewList } from "../viewer/review";
 import { TableView } from "../viewer/TableView";
 import { commandKey, isMac, keyText } from "../window";
-import { BrowserView } from "./BrowserView";
 import { askDiscard } from "./ConfirmDialog";
 import { askDelete } from "./FileMenu";
 import {
@@ -334,17 +332,11 @@ const VIEWS: { view: PanelView; label: string; icon: ReactNode }[] = [
   { view: "actions", label: "Actions", icon: <PlayCircleIcon size={14} aria-hidden="true" /> },
   { view: "scripts", label: "Scripts", icon: <PromptIcon size={14} aria-hidden="true" /> },
   // 24.6, while the setting is on.
-  { view: "browser", label: "Browser", icon: <GlobeIcon size={14} aria-hidden="true" /> },
 ];
 
-/**
- * The panel's views for `project`: a folder project (23.1) has only its files and sessions;
- * the agent's browser shows only while `browser` (its setting) is on.
- */
-export const panelViews = (project: Project | undefined, browser = false) =>
-  project?.folder
-    ? VIEWS.filter((v) => v.view === "files" || v.view === "sessions")
-    : VIEWS.filter((v) => v.view !== "browser" || browser);
+/** The panel's views for `project`: a folder project (23.1) has only its files and sessions. */
+export const panelViews = (project: Project | undefined) =>
+  project?.folder ? VIEWS.filter((v) => v.view === "files" || v.view === "sessions") : VIEWS;
 
 /**
  * The right panel (screen 1g, grown), toggled by Ctrl+Shift+B: for the shown worktree, every
@@ -354,8 +346,7 @@ export const panelViews = (project: Project | undefined, browser = false) =>
 export function RightPanel() {
   const target = useShownWorktree();
   const selected = useHive((s) => s.panelView);
-  const browser = useHive((s) => s.settings.browser.enabled);
-  const views = panelViews(target?.project, browser);
+  const views = panelViews(target?.project);
   // A view the shown place lacks shows its files.
   const shown = (views.find((v) => v.view === selected) ?? views[0]) as (typeof VIEWS)[number];
   const view = shown.view;
@@ -401,7 +392,6 @@ export function RightPanel() {
           {view === "scripts" && (
             <ScriptsView project={target.project} worktree={target.worktree} />
           )}
-          {view === "browser" && <BrowserView worktree={target.worktree.id} />}
           {view === "actions" && (
             <RunsView
               key={target.worktree.id}

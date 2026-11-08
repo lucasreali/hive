@@ -18,6 +18,7 @@ import {
   MOCK_ACCOUNTS_DIR,
   MOCK_BRANCHES,
   MOCK_BROWSER_FRAME,
+  MOCK_BROWSER_TITLE,
   MOCK_BROWSER_URL,
   MOCK_CHANGES,
   MOCK_CLAUDE_DIR,
@@ -557,7 +558,14 @@ test("agent states carry the service's urgency and pending flag", () => {
     "waiting_plan",
     "waiting_permission",
   ] as const;
-  const doing = { activity: null, since_ms: 0, interrupted: false, alert: null, notify: false };
+  const doing = {
+    activity: null,
+    since_ms: 0,
+    interrupted: false,
+    alert: null,
+    notify: false,
+    browsing: false,
+  };
   expect([...calm, ...pending].map((s) => agentStatus(s))).toEqual([
     { state: "ended", urgency: 0, pending: false, ...doing },
     { state: "idle", urgency: 1, pending: false, ...doing },
@@ -739,7 +747,14 @@ test("a watched browser runs only while the setting is on, with one frame (24.6)
   await transport.watchBrowser(null);
   await transport.browserDrawn();
   await tick();
-  const off = { type: "browser_status" as const, worktree, running: false, url: null, error: null };
+  const off = {
+    type: "browser_status" as const,
+    worktree,
+    running: false,
+    url: null,
+    title: null,
+    error: null,
+  };
   expect(messages).toEqual([off]);
   await transport.setSettings({
     ...DEFAULT_SETTINGS,
@@ -749,10 +764,59 @@ test("a watched browser runs only while the setting is on, with one frame (24.6)
   messages.length = 0;
   await transport.watchBrowser(worktree);
   await tick();
-  expect(messages).toEqual([
-    { type: "browser_status", worktree, running: true, url: MOCK_BROWSER_URL, error: null },
-    { type: "browser_frame", worktree, data: MOCK_BROWSER_FRAME },
+  const status = {
+    type: "browser_status" as const,
+    worktree,
+    url: MOCK_BROWSER_URL,
+    title: MOCK_BROWSER_TITLE,
+    error: null,
+  };
+  const frame = { type: "browser_frame" as const, worktree, data: MOCK_BROWSER_FRAME };
+  expect(messages).toEqual([{ ...status, running: true }, frame]);
+
+  // Typed in an agent's terminal: a browser tool call, then its worktree's last agent ending.
+  const id = await transport.openTerminal(worktree, 80, 24, () => {});
+  await transport.writeTerminal(id, "browser-call clicked 'A'\r");
+  await transport.writeTerminal(id, "browser-stop\r");
+  await tick();
+  // No agent there yet: nothing.
+  expect(messages.filter((m) => m.type.startsWith("browser_"))).toHaveLength(2);
+  await transport.writeTerminal(id, "claude\r");
+  await tick();
+  messages.length = 0;
+  await transport.writeTerminal(id, "browser-call clicked 'A'\r");
+  await tick();
+  const browsing = messages.filter((m) => m.type === "agent_state" && m.browsing);
+  expect(browsing).toHaveLength(1);
+  const told = messages.filter((m) => m.type.startsWith("browser_"));
+  expect(told).toEqual([
+    { ...status, running: true },
+    {
+      type: "browser_action",
+      worktree,
+      agent: (browsing[0] as { id: string }).id,
+      agent_title: null,
+      action: "clicked 'A'",
+    },
   ]);
+  messages.length = 0;
+  await transport.writeTerminal(id, "browser-stop\r");
+  await tick();
+  expect(messages.filter((m) => m.type.startsWith("browser_"))).toEqual([
+    { ...status, running: false },
+  ]);
+  // Watched now: what it last showed.
+  messages.length = 0;
+  await transport.watchBrowser(worktree);
+  await tick();
+  expect(messages).toEqual([{ ...status, running: false }, frame]);
+  // Called again: it runs again.
+  await transport.writeTerminal(id, "browser-call clicked 'B'\r");
+  await tick();
+  messages.length = 0;
+  await transport.watchBrowser(worktree);
+  await tick();
+  expect(messages).toEqual([{ ...status, running: true }, frame]);
 });
 
 test("a worktree's scripts: the settings' first, shop's repository's, a port each (23.4)", async () => {

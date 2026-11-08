@@ -16,7 +16,16 @@ import {
   within,
   withNotice,
 } from "./store";
-import { dropFile, editFor, fileKey, fileTabState, opened, tabsPlace } from "./tabs";
+import {
+  browserKey,
+  dropFile,
+  editFor,
+  fileKey,
+  fileTabState,
+  opened,
+  tabsPlace,
+  withKey,
+} from "./tabs";
 import { type EditBuffer, failed, isDirty, isFor, saved } from "./viewer/buffer";
 
 // How service data enters the store: `apply` stores what the service sent without deriving
@@ -87,7 +96,11 @@ function removedProject(s: HiveState, id: string): Partial<HiveState> {
     projects,
     selection: inside(s.selection) || gone.includes(s.selection ?? "") ? null : s.selection,
     collapsed: Object.fromEntries(Object.entries(s.collapsed).filter(([key]) => !own(key))),
-    tabOrder: (files.tabOrder ?? s.tabOrder).filter((key) => !own(key)),
+    tabOrder: (files.tabOrder ?? s.tabOrder).filter(
+      (key) => !own(key) && !places.some((p) => key === browserKey(p)),
+    ),
+    browserTabs: s.browserTabs.filter((t) => !inside(t.browser)),
+    browserShown: inside(s.browserShown) ? null : s.browserShown,
     agentOrder: s.agentOrder.filter((a) => !gone.includes(a)),
     sessions: s.sessions?.filter((x) => x.project !== id) ?? null,
     worktreeFiles: inside(s.worktreeFiles?.path ?? null) ? null : s.worktreeFiles,
@@ -210,7 +223,26 @@ function reduce(s: HiveState, m: ServiceMessage): Partial<HiveState> {
       return { subagentWorktrees: m.worktrees };
     case "browser_status": {
       const { type: _, worktree, ...status } = m;
-      return { browsers: { ...s.browsers, [worktree]: status } };
+      const started = status.running && !s.browsers[worktree]?.running;
+      // Stopped, a closed tab may come back with the next browser; a new one shows no old frame.
+      const { [worktree]: __, ...closed } = s.browserClosed;
+      return {
+        browsers: { ...s.browsers, [worktree]: status },
+        browserClosed: status.running ? s.browserClosed : closed,
+        browserFrame: started && s.browserFrame?.worktree === worktree ? null : s.browserFrame,
+      };
+    }
+    case "browser_action": {
+      const { worktree, agent, agent_title: agentTitle, action } = m;
+      const opens =
+        !s.browserClosed[worktree] && !s.browserTabs.some((t) => t.browser === worktree);
+      return {
+        browserActions: { ...s.browserActions, [worktree]: { agent, agentTitle, action } },
+        browserPulses: { ...s.browserPulses, [agent]: (s.browserPulses[agent] ?? 0) + 1 },
+        // At the bar's end, without the focus.
+        browserTabs: opens ? [...s.browserTabs, { browser: worktree }] : s.browserTabs,
+        tabOrder: opens ? withKey(s.tabOrder, browserKey(worktree)) : s.tabOrder,
+      };
     }
     case "browser_frame":
       return { browserFrame: { worktree: m.worktree, data: m.data } };
@@ -241,7 +273,23 @@ function reduce(s: HiveState, m: ServiceMessage): Partial<HiveState> {
           ([key]) => !key.startsWith("worktree:") || ids.has(key.slice("worktree:".length)),
         ),
       );
-      return { projects, selection, terminals, collapsed };
+      // A browser's tab goes with its worktree.
+      const browserTabs = s.browserTabs.filter((t) => ids.has(t.browser));
+      const tabsGone = s.browserTabs.length > browserTabs.length;
+      return {
+        projects,
+        selection,
+        terminals,
+        collapsed,
+        browserTabs,
+        browserShown: ids.has(s.browserShown as string) ? s.browserShown : null,
+        // The same order when nothing went: it is kept in the app's storage on each change.
+        tabOrder: tabsGone
+          ? s.tabOrder.filter(
+              (k) => !k.startsWith("browser:") || ids.has(k.slice("browser:".length)),
+            )
+          : s.tabOrder,
+      };
     }
     case "project_added":
       // Only the add-project dialog asks for this, so it has done its job.
@@ -530,6 +578,7 @@ function reduce(s: HiveState, m: ServiceMessage): Partial<HiveState> {
         agentStates: {},
         subagentWorktrees: [],
         worktreeFiles: null,
+        browsers: {},
       };
     case "error":
     case "session_located":

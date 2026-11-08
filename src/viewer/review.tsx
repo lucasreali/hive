@@ -65,6 +65,7 @@ export function sendReview(): void {
   if ("why" in target || !terminal(target.terminal)) return;
   useHive.setState((s) => ({
     fileShown: false,
+    browserShown: null,
     comments: { ...s.comments, [target.worktree]: [] },
   }));
   showTerminal(target.terminal);

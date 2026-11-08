@@ -1,6 +1,13 @@
 // Keep the service following what the files panel shows: the worktree it lists and the open file.
 
-import { diffBase, type HiveState, panelWorktree, tableShown, useHive } from "./store";
+import {
+  diffBase,
+  type HiveState,
+  panelWorktree,
+  tableShown,
+  terminalShown,
+  useHive,
+} from "./store";
 import type { Transport } from "./transport";
 
 /**
@@ -47,7 +54,12 @@ export function followPanel(transport: Transport): () => void {
 export function followView(transport: Transport): () => void {
   let sent: unknown[] = [];
   const sync = (s: HiveState) => {
-    const view = [s.connection, s.fileShown ? null : s.activeTab, s.focused, s.visible] as const;
+    const view = [
+      s.connection,
+      terminalShown(s) ? s.activeTab : null,
+      s.focused,
+      s.visible,
+    ] as const;
     if (s.connection.status !== "connected" || view.every((v, i) => v === sent[i])) return;
     sent = [...view];
     void transport.setView(view[1], view[2], view[3]);

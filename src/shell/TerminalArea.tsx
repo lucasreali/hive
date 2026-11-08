@@ -5,6 +5,7 @@ import {
   CopyIcon,
   EraserIcon,
   FilePlusIcon,
+  GlobeIcon,
   SquareSplitHorizontalIcon,
   TerminalWindowIcon,
   XIcon,
@@ -25,6 +26,7 @@ import { draggedFrom, useReorder } from "../reorder";
 import {
   accountLine,
   activateTab,
+  closeBrowserTab,
   dropOnPane,
   type FileTab as FileTabData,
   type HiveState,
@@ -37,8 +39,10 @@ import {
   selectedPlace,
   setOpenFile,
   setRightPanel,
+  showBrowserTab,
   swapSides,
   type Tab,
+  terminalShown,
   useHive,
   useTerminal,
 } from "../store";
@@ -50,6 +54,7 @@ import {
   fileKey,
   fileTabState,
   fileVisible,
+  shownBrowser,
   shownSplit,
   shownTerminals,
   splitOf,
@@ -68,6 +73,7 @@ import {
 } from "../terminals";
 import { isDirty, isFor } from "../viewer/buffer";
 import { isMac, keyText } from "../window";
+import { BrowserView } from "./BrowserView";
 import {
   AddFolderIcon,
   CloseIcon,
@@ -190,7 +196,7 @@ function TabItem(props: {
  */
 function TerminalTab(props: { tab: Tab; onMenu: (menu: TabMenu) => void; drag: Drag }) {
   const { tab, onMenu } = props;
-  const active = useHive((s) => s.activeTab === tab.id && !s.fileShown);
+  const active = useHive((s) => s.activeTab === tab.id && terminalShown(s));
   // Its pair (20.5): its side, its partner's label, and whether the pair is shown.
   const pair = useHive(
     useShallow((s) => {
@@ -202,7 +208,7 @@ function TerminalTab(props: { tab: Tab; onMenu: (menu: TabMenu) => void; drag: D
       return {
         side: split.left === tab.id ? ("left" as const) : ("right" as const),
         partner: partner ? tabLabel(s, partner) : "",
-        shown: !s.fileShown && shownSplit(s) === split,
+        shown: terminalShown(s) && shownSplit(s) === split,
       };
     }),
   );
@@ -305,6 +311,29 @@ function FileTab({ file, drag }: { file: FileTabData; drag: Drag }) {
       <span className="tab-name" data-preview={preview || undefined}>
         {name}
       </span>
+    </TabItem>
+  );
+}
+
+/**
+ * A worktree's agent's browser's tab (25.2): a globe, its page's title (else its URL) as its
+ * label, its URL as its tooltip.
+ */
+function BrowserTab({ worktree, drag }: { worktree: string; drag: Drag }) {
+  const active = useHive((s) => shownBrowser(s) === worktree);
+  const url = useHive((s) => s.browsers[worktree]?.url ?? null);
+  const label = useHive((s) => s.browsers[worktree]?.title) || url || "Browser";
+  return (
+    <TabItem
+      drag={drag}
+      active={active}
+      title={url ?? label}
+      onShow={() => showBrowserTab(worktree)}
+      close={`Close browser ${label}`}
+      onClose={() => closeBrowserTab(worktree)}
+    >
+      <GlobeIcon {...ICON} />
+      <span className="tab-name">{label}</span>
     </TabItem>
   );
 }
@@ -671,6 +700,7 @@ export function TerminalArea() {
   const keys = bar.filter((x): x is string => typeof x === "string");
   const drag = useReorder("tabs", moveTab, true);
   const file = useHive((s) => (s.fileShown && fileVisible(s) ? s.openFile : null));
+  const browser = useHive(shownBrowser);
   const selected = useHive(selectedPlace);
   const percent = useHive((s) => s.splitPercent);
   const [menu, setMenu] = useState<TabMenu | null>(null);
@@ -688,6 +718,8 @@ export function TerminalArea() {
             const key = keys[i] as string;
             return "path" in item ? (
               <FileTab key={fileKey(item)} file={item} drag={drag(key)} />
+            ) : "browser" in item ? (
+              <BrowserTab key={key} worktree={item.browser} drag={drag(key)} />
             ) : (
               <TerminalTab key={item.id} tab={item} onMenu={setMenu} drag={drag(key)} />
             );
@@ -709,11 +741,12 @@ export function TerminalArea() {
       {menu && <TerminalTabMenu menu={menu} onClose={closeMenu} />}
       <div className="terminal-body" style={{ "--split": percent / 100 } as CSSProperties}>
         {empty && tabs.length === 0 && !file && <EmptyState />}
-        {!empty && selected !== null && tabs.length === 0 && !file && (
+        {!empty && selected !== null && tabs.length === 0 && !file && !browser && (
           <NoTerminals worktree={selected} />
         )}
-        <TerminalHost hidden={tabs.length === 0 || !!file} />
+        <TerminalHost hidden={tabs.length === 0 || !!file || browser !== null} />
         {file && <FileView worktree={file.worktree} />}
+        {browser !== null && <BrowserView worktree={browser} />}
       </div>
     </section>
   );
