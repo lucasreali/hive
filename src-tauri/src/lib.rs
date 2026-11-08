@@ -325,8 +325,15 @@ pub fn dev_server_url(url: &tauri::Url) -> bool {
 /// go to `to`, asked by the frame at `source` (24.4, macOS: `macos::guard_frames`, before
 /// the navigation guard). A file of the `hive-file:` scheme, or what it asks for, stays in the
 /// scheme: a page that reached a dev server would run there without the scheme's CSP. A dev
-/// server loads only in a frame on its first load or already at one: the Scripts tab's.
-pub fn frame_navigation(main: bool, current: &str, source: &str, to: &str) -> bool {
+/// server loads only in a frame already at one, or on its first load asked by the app (at
+/// [`app_url`], `dev_url` its dev server): the Scripts tab's frame.
+pub fn frame_navigation(
+    main: bool,
+    current: &str,
+    source: &str,
+    to: &str,
+    dev_url: Option<&tauri::Url>,
+) -> bool {
     let parsed = |text: &str| tauri::Url::parse(text).ok();
     let file = |text: &str| parsed(text).is_some_and(|url| scheme::file_url(&url, true));
     let dev = |text: &str| parsed(text).is_some_and(|url| dev_server_url(&url));
@@ -334,7 +341,8 @@ pub fn frame_navigation(main: bool, current: &str, source: &str, to: &str) -> bo
         return file(to);
     }
     let fresh = current.is_empty() || current == "about:blank";
-    !dev(to) || (!main && (fresh || dev(current)))
+    let by_app = fresh && ipc_from_app(source, true, dev_url);
+    !dev(to) || (!main && (by_app || dev(current)))
 }
 
 /// Whether an IPC call from `text`, its caller's URL or `Origin`, comes from the app (24.14):

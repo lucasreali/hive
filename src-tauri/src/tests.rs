@@ -212,6 +212,10 @@ fn a_file_s_frame_stays_in_the_scheme_and_only_the_scripts_frame_reaches_a_dev_s
         // The Scripts tab's frame: its first load, then within the dev servers.
         (false, "", app, dev, true),
         (false, "about:blank", app, dev, true),
+        // A fresh frame a page made (an `about:blank` child, its script run there): not the app's.
+        (false, "about:blank", "about:blank", dev, false),
+        (false, "", "", dev, false),
+        (false, "", "https://evil.com/", dev, false),
         (false, dev, dev, "http://localhost:20003/", true),
         (false, "http://localhost:5173/", app, dev, false),
         (false, app, app, dev, false),
@@ -224,11 +228,16 @@ fn a_file_s_frame_stays_in_the_scheme_and_only_the_scripts_frame_reaches_a_dev_s
         (false, "not a url", "", "also not", true),
     ] {
         assert_eq!(
-            frame_navigation(main, current, source, to),
+            frame_navigation(main, current, source, to, None),
             admitted,
             "{main} {current:?} {source:?} → {to}"
         );
     }
+    // A development build's app is at its dev server.
+    let vite = tauri::Url::parse("http://localhost:1420").unwrap();
+    let from_vite = "http://localhost:1420/index.html";
+    assert!(frame_navigation(false, "", from_vite, dev, Some(&vite)));
+    assert!(!frame_navigation(false, "", from_vite, dev, None));
 }
 
 #[test]

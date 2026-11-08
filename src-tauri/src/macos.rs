@@ -1026,13 +1026,10 @@ pub unsafe fn guard_frames(
 unsafe extern "C" fn decide_policy(this: Id, name: Sel, webview: Id, action: Id, handler: Id) {
     // SAFETY: WebKit calls this with a `WKNavigationAction`.
     let admitted = catch_unwind(AssertUnwindSafe(|| unsafe { frame_admits(action) }));
-    if admitted.unwrap_or(false) {
-        if let Some(&own) = NAVIGATION.get() {
-            // SAFETY: the method `guard_frames` replaced, with its own arguments.
-            unsafe {
-                std::mem::transmute::<usize, Decide>(own)(this, name, webview, action, handler)
-            };
-        }
+    // Without wry's method (never: `replace` keeps it first) the block is still called once.
+    if let Some(&own) = NAVIGATION.get().filter(|_| admitted.unwrap_or(false)) {
+        // SAFETY: the method `guard_frames` replaced, with its own arguments.
+        unsafe { std::mem::transmute::<usize, Decide>(own)(this, name, webview, action, handler) };
         return;
     }
     // SAFETY: WebKit's decision block, `void (^)(WKNavigationActionPolicy)`, called once.
@@ -1040,7 +1037,8 @@ unsafe extern "C" fn decide_policy(this: Id, name: Sel, webview: Id, action: Id,
 }
 
 /// Whether [`guard_frames`]'s check admits `action` (a `WKNavigationAction`); one without a
-/// target frame (a new window) is left to wry, which refuses it.
+/// target frame (a new window) is left to wry, which asks `on_navigation`: what stops a new
+/// window is `on_new_window` (denied) and the frames' sandbox without `allow-popups`.
 ///
 /// # Safety
 /// `action` is a `WKNavigationAction` or nil.
@@ -2479,7 +2477,7 @@ mod tests {
         );
         let check = |main: bool, current: &str, source: &str, to: &str| {
             assert_ne!(to, "tauri://panic", "a broken check");
-            crate::frame_navigation(main, current, source, to)
+            crate::frame_navigation(main, current, source, to, None)
         };
         // A webview without a navigation delegate: not guarded.
         assert!(!unsafe { guard_frames(webview, check) });

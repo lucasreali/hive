@@ -129,6 +129,8 @@ fn main() {
                 .flatten();
             #[cfg(target_os = "macos")]
             let ipc_dev = dev.clone();
+            #[cfg(target_os = "macos")]
+            let frame_dev = dev.clone();
             let _window = tauri::WebviewWindowBuilder::from_config(app.handle(), &window)?
                 // A frame may also load the files' scheme (a PDF, 24.3) and a worktree's dev
                 // server (24.4).
@@ -164,9 +166,10 @@ fn main() {
                     }
                     // A previewed page stays in its scheme, and has no WebRTC (24.4).
                     // SAFETY: as above.
-                    let frames = unsafe {
-                        hive_lib::macos::guard_frames(webview.inner(), hive_lib::frame_navigation)
+                    let check = move |main: bool, current: &str, source: &str, to: &str| {
+                        hive_lib::frame_navigation(main, current, source, to, frame_dev.as_ref())
                     };
+                    let frames = unsafe { hive_lib::macos::guard_frames(webview.inner(), check) };
                     if !frames {
                         eprintln!("hive-app: frames' navigations are not guarded");
                     }
