@@ -35,6 +35,7 @@ fn status(worktree: &str, running: bool, url: Option<&str>, error: Option<&str>)
         worktree: worktree.into(),
         running,
         url: url.map(Into::into),
+        title: None,
         error: error.map(Into::into),
     }
 }
@@ -249,6 +250,11 @@ async fn an_agents_browser_starts_on_its_mcps_ask_streams_while_watched_and_stop
         first_profile.ends_with("run/hive/browsers/1"),
         "{first_profile:?}"
     );
+    // Any worktree's browser is told, watched or not (25.2).
+    let fix_a_id = fix_a.display().to_string();
+    let full = "No more browsers: browser.max is 1, and all are open";
+    let refused = status(&fix_a_id, false, None, Some(full));
+    assert_eq!(browser(&mut app).await, refused);
     assert_eq!(browser(&mut app).await, status(&root, true, None, None));
     let shown = status(&root, true, Some("http://localhost:5173/"), None);
     assert_eq!(browser(&mut app).await, shown);
@@ -275,6 +281,7 @@ async fn an_agents_browser_starts_on_its_mcps_ask_streams_while_watched_and_stop
         most.contains("No more browsers: browser.max is 1"),
         "{most}"
     );
+    assert_eq!(browser(&mut app).await, refused);
 
     // Its agent is detected after its MCP asked; the worktree's last agent ends: it stops.
     app.open_terminal(1, &repo.root).await;
@@ -282,10 +289,9 @@ async fn an_agents_browser_starts_on_its_mcps_ask_streams_while_watched_and_stop
     hook(&repo, &mut app, "1", "SessionStart", start).await;
     let end = json!({"session_id": "s1", "reason": "prompt_input_exit"});
     let seen = hook(&repo, &mut app, "1", "SessionEnd", end).await;
-    assert!(
-        seen.contains(&(0, status(&root, false, None, None))),
-        "{seen:?}"
-    );
+    // Its last page is kept for the tab.
+    let stopped = status(&root, false, Some("http://localhost:5173/"), None);
+    assert!(seen.contains(&(0, stopped)), "{seen:?}");
     cast.await.unwrap();
     ended(&pid);
     wait_until(|| !first_profile.exists());
@@ -298,7 +304,7 @@ async fn an_agents_browser_starts_on_its_mcps_ask_streams_while_watched_and_stop
     assert!(why.contains(not), "{why}");
     assert_eq!(
         browser(&mut app).await,
-        status(&root, false, None, Some(not))
+        status(&root, false, Some("http://localhost:5173/"), Some(not))
     );
 
     // Unwatched, a browser whose connection closes is stopped.
@@ -349,6 +355,172 @@ async fn an_agents_browser_starts_on_its_mcps_ask_streams_while_watched_and_stop
     held.await.unwrap();
     ended(&pid);
     wait_until(|| !config.exists());
+    drop(app);
+    assert!(daemon.wait_exit().success());
+}
+
+/// Plays the browser until the service asks for its last picture: one page, `Shop`, not watched.
+async fn plays_a_page(ws: &mut WebSocketStream<TcpStream>) {
+    assert_eq!(read(ws).await["method"], "Target.setDiscoverTargets");
+    let page = json!({ "method": "Target.targetCreated", "params": { "targetInfo": {
+        "targetId": "p1", "type": "page", "url": "http://localhost:5173/", "title": "Shop" } } });
+    write(ws, page).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn an_agents_browser_calls_reach_the_app_and_what_it_showed_outlives_it() {
+    let repo = Repo::new();
+    let root = repo.root.display().to_string();
+    let listener = Arc::new(TcpListener::bind("127.0.0.1:0").await.unwrap());
+    let port = listener.local_addr().unwrap().port();
+    let pid = repo.env.path("browser.pid");
+    let args = repo.env.path("browser.args");
+    let fake = repo.env.path("fake-browser");
+    let script = format!(
+        "#!/bin/sh\nfor a; do case $a in --user-data-dir=*) d=${{a#--user-data-dir=}};; esac; done\n[ -n \"$d\" ] || exit 0\necho $$ > '{}'\nprintf '%s\\n' \"$@\" > '{}'\nprintf '{port}\\n/devtools/browser/x\\n' > \"$d/DevToolsActivePort\"\nexec sleep 30\n",
+        pid.display(),
+        args.display()
+    );
+    exe(&fake, &script);
+    assert!(
+        std::process::Command::new(&fake)
+            .status()
+            .unwrap()
+            .success()
+    );
+    let bin = repo.env.path("mcp-bin");
+    std::fs::create_dir(&bin).unwrap();
+    exe(&bin.join("bunx"), "#!/bin/sh\nexit 0\n");
+
+    let mut daemon = repo.env.daemon();
+    let mut app = repo.env.app().await;
+    app.send(0, Control::AddProject { path: root.clone() })
+        .await;
+    assert!(matches!(
+        app.control().await,
+        (0, Control::ProjectAdded { .. })
+    ));
+    let settings = on(&fake);
+    set(&mut app, settings.clone()).await;
+    assert_eq!(app.control().await, (0, Control::Settings { settings }));
+
+    // An agent with no browser yet: its browser tool calls say nothing.
+    app.open_terminal(1, &repo.root).await;
+    let session = |extra: Value| {
+        let mut payload = json!({"session_id": "s1", "cwd": root});
+        payload
+            .as_object_mut()
+            .unwrap()
+            .extend(extra.as_object().unwrap().clone());
+        payload
+    };
+    let start = session(json!({"source": "startup"}));
+    hook(&repo, &mut app, "1", "SessionStart", start).await;
+    let click = session(json!({
+        "tool_name": "mcp__hive-browser__browser_click",
+        "tool_input": {"element": "Learn more", "target": "e1"},
+    }));
+    let seen = hook(&repo, &mut app, "1", "PreToolUse", click.clone()).await;
+    let action = (
+        0,
+        Control::BrowserAction {
+            worktree: root.clone(),
+            agent: "s1".into(),
+            agent_title: None,
+            action: "clicked 'Learn more'".into(),
+        },
+    );
+    assert!(!seen.contains(&action), "{seen:?}");
+    let stop = session(json!({}));
+    hook(&repo, &mut app, "1", "Stop", stop.clone()).await;
+
+    // The browser runs, not watched: the app hears of it and its page, without frames.
+    let (asked, answered) = tokio::sync::oneshot::channel::<WebSocketStream<TcpStream>>();
+    let cast = tokio::spawn({
+        let listener = listener.clone();
+        async move {
+            let mut ws = cdp(&listener).await;
+            plays_a_page(&mut ws).await;
+            asked.send(ws).unwrap();
+        }
+    });
+    assert!(mcp(&repo, &repo.root, &bin).await.status.success());
+    cast.await.unwrap();
+    let mut ws = answered.await.unwrap();
+    assert_eq!(browser(&mut app).await, status(&root, true, None, None));
+    assert_eq!(
+        browser(&mut app).await,
+        status(&root, true, Some("http://localhost:5173/"), None)
+    );
+    let titled = |running: bool| Control::BrowserStatus {
+        worktree: root.clone(),
+        running,
+        url: Some("http://localhost:5173/".into()),
+        title: Some("Shop".into()),
+        error: None,
+    };
+    assert_eq!(browser(&mut app).await, titled(true));
+
+    // A browser tool call: named, captioned, and the agent browses until it stops.
+    let seen = hook(&repo, &mut app, "1", "PreToolUse", click).await;
+    assert!(seen.contains(&action), "{seen:?}");
+    let browsing = |seen: &[(u32, Control)]| {
+        seen.iter().find_map(|(_, message)| match message {
+            Control::AgentState { browsing, .. } => Some(*browsing),
+            _ => None,
+        })
+    };
+    assert_eq!(browsing(&seen), Some(true));
+    // Another tool is no action.
+    let read_file = session(json!({"tool_name": "Read", "tool_input": {"file_path": "a"}}));
+    let seen = hook(&repo, &mut app, "1", "PreToolUse", read_file).await;
+    assert!(
+        !seen
+            .iter()
+            .any(|(_, m)| matches!(m, Control::BrowserAction { .. })),
+        "{seen:?}"
+    );
+    let seen = hook(&repo, &mut app, "1", "Stop", stop).await;
+    assert_eq!(browsing(&seen), Some(false));
+
+    // A reloaded app hears of the running browser.
+    app.send(0, Control::Resync).await;
+    assert_eq!(browser(&mut app).await, titled(true));
+
+    // Its agent ends: the browser gives its last picture, then stops; the tab has the page.
+    let end = session(json!({"reason": "prompt_input_exit"}));
+    let seen = hook(&repo, &mut app, "1", "SessionEnd", end).await;
+    assert!(seen.contains(&(0, titled(false))), "{seen:?}");
+    let attach = read(&mut ws).await;
+    assert_eq!(attach["method"], "Target.attachToTarget");
+    assert_eq!(attach["params"]["targetId"], "p1");
+    let attached = json!({ "id": attach["id"], "result": { "sessionId": "last" } });
+    write(&mut ws, attached).await;
+    let shot = read(&mut ws).await;
+    assert_eq!(shot["method"], "Page.captureScreenshot");
+    assert_eq!(shot["sessionId"], "last");
+    let picture = json!({ "id": shot["id"], "result": { "data": "CCCC" } });
+    write(&mut ws, picture).await;
+    closed(&mut ws).await;
+    ended(&pid);
+    wait_until(|| !profile(&args).exists());
+
+    // Shown now, though it was never watched: the page and the picture kept.
+    let watch = Control::WatchBrowser {
+        worktree: Some(root.clone()),
+    };
+    app.send(0, watch.clone()).await;
+    assert_eq!(browser(&mut app).await, titled(false));
+    let frame = Control::BrowserFrame {
+        worktree: root.clone(),
+        data: "CCCC".into(),
+    };
+    assert_eq!(browser(&mut app).await, frame);
+
+    // A reloaded app has no tab: nothing is kept for it.
+    app.send(0, Control::Resync).await;
+    app.send(0, watch).await;
+    assert_eq!(browser(&mut app).await, status(&root, false, None, None));
     drop(app);
     assert!(daemon.wait_exit().success());
 }

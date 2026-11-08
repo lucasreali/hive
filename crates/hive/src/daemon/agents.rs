@@ -94,6 +94,7 @@ impl State {
         if let Some(state) = agent.apply(id, event, sent_ns, now, &place) {
             self.to_app(channel, &state).await;
         }
+        self.browser_action(id, agent, event).await;
         // The transcript got a message: its usage is read on the next tick (at most once a
         // second).
         agent.usage.due |= matches!(
@@ -208,6 +209,7 @@ impl State {
                 self.to_app(agent.channel, &usage).await;
             }
         }
+        self.browsers_snapshot().await;
         // The new app has none yet: sent unless still none.
         self.owned
             .lock()
