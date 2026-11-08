@@ -209,6 +209,8 @@ fn a_file_s_frame_stays_in_the_scheme_and_only_the_scripts_frame_reaches_a_dev_s
         (false, page, page, "about:blank", false),
         (false, "", page, dev, false),
         (false, page, app, dev, false),
+        (false, page, app, "https://evil.com/", false),
+        (false, "", page, "https://evil.com/", false),
         // The Scripts tab's frame: its first load, then within the dev servers.
         (false, "", app, dev, true),
         (false, "about:blank", app, dev, true),
