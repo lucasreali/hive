@@ -416,6 +416,9 @@ pub struct Hive {
     /// Whether the OS lets Hive show notifications (17.19); given by `main.rs` on macOS
     /// (`with_permission`).
     permission: Option<Arc<Permissions>>,
+    /// What macOS lets programs in Hive's terminals do (25.5); given by `main.rs` on macOS
+    /// (`with_terminal_permissions`).
+    terminal_permissions: Option<Arc<TerminalChecks>>,
     /// Plays the alert tone (17.19); given by `main.rs` on macOS (`with_tone`).
     tone: Option<Tone>,
     /// Opens a URL with the system (`with_url`).
@@ -452,6 +455,8 @@ type Opener = dyn Fn(&str, bool) -> Result<(), String> + Send + Sync;
 type UrlOpener = dyn Fn(&str) -> Result<(), String> + Send + Sync;
 /// Asks the OS whether Hive may show notifications; it may wait a moment for the answer.
 type Permissions = dyn Fn() -> Permission + Send + Sync;
+/// Reads macOS's privacy permissions without ever asking the user.
+type TerminalChecks = dyn Fn() -> TerminalPermissions + Send + Sync;
 /// Plays a sound file at a volume from 0 to 1.
 type Player = dyn Fn(&Path, f32) -> Result<(), String> + Send + Sync;
 /// What a click on an OS notification does (13.5).
@@ -579,6 +584,29 @@ impl Permission {
             Self::Denied => "denied",
             Self::Unknown => "unknown",
         }
+    }
+}
+
+/// What macOS lets programs in Hive's terminals do (25.5), as `terminal_permissions` tells the
+/// UI: they get these through their responsible app, Hive. Both `unknown` where the app cannot
+/// read them (any other platform).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TerminalPermissions {
+    pub screen_recording: Permission,
+    pub accessibility: Permission,
+}
+
+/// The URL that opens macOS's Privacy & Security settings at the pane the UI names (25.5); no
+/// other opens.
+pub fn privacy_settings_url(pane: &str) -> Option<&'static str> {
+    match pane {
+        "screen_recording" => {
+            Some("x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture")
+        }
+        "accessibility" => {
+            Some("x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility")
+        }
+        _ => None,
     }
 }
 
@@ -922,6 +950,7 @@ impl Hive {
             open: None,
             notify: None,
             permission: None,
+            terminal_permissions: None,
             tone: None,
             url: None,
             defaults: (DEFAULTS.into(), Vec::new()),
@@ -1018,6 +1047,43 @@ impl Hive {
             lock(&link).to_ui(message);
         };
         tauri::async_runtime::spawn_blocking(answer);
+    }
+
+    /// Reads with `check` what macOS lets programs in Hive's terminals do (25.5).
+    pub fn with_terminal_permissions(
+        mut self,
+        check: impl Fn() -> TerminalPermissions + Send + Sync + 'static,
+    ) -> Self {
+        self.terminal_permissions = Some(Arc::new(check));
+        self
+    }
+
+    /// Reads what macOS lets programs in Hive's terminals do (25.5), on Tauri's blocking threads;
+    /// never prompts. The answer goes to the UI as `terminal_permissions {screen_recording,
+    /// accessibility}`, `unknown` where the app cannot read them.
+    pub fn check_terminal_permissions(&self) {
+        let check = self.terminal_permissions.clone();
+        let link = Arc::clone(&self.link);
+        let answer = move || {
+            let unknown = TerminalPermissions {
+                screen_recording: Permission::Unknown,
+                accessibility: Permission::Unknown,
+            };
+            let permissions = check.map_or(unknown, |check| check());
+            lock(&link).to_ui(json!({
+                "type": "terminal_permissions",
+                "screen_recording": permissions.screen_recording.name(),
+                "accessibility": permissions.accessibility.name(),
+            }));
+        };
+        tauri::async_runtime::spawn_blocking(answer);
+    }
+
+    /// Opens macOS's settings at `pane` (25.5), where the user allows Hive.
+    pub fn open_privacy_settings(&self, pane: &str) -> Result<(), String> {
+        let url = privacy_settings_url(pane).ok_or("no such privacy pane")?;
+        let open = self.url.as_ref().ok_or("this app cannot open URLs")?;
+        open(url)
     }
 
     /// Opens URLs with `open` (the system's handler).
@@ -2853,6 +2919,16 @@ pub mod commands {
     #[tauri::command]
     pub fn open_notification_settings(hive: State<'_, Hive>) -> Result<(), String> {
         hive.open_notification_settings()
+    }
+
+    #[tauri::command]
+    pub fn check_terminal_permissions(hive: State<'_, Hive>) {
+        hive.check_terminal_permissions();
+    }
+
+    #[tauri::command]
+    pub fn open_privacy_settings(hive: State<'_, Hive>, pane: String) -> Result<(), String> {
+        hive.open_privacy_settings(&pane)
     }
 
     #[tauri::command]

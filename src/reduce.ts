@@ -170,6 +170,13 @@ function reduce(s: HiveState, m: ServiceMessage): Partial<HiveState> {
       return { uninstallFailed: m.failed };
     case "notification_permission":
       return { notificationPermission: m.permission };
+    case "terminal_permissions":
+      return {
+        terminalPermissions: {
+          screenRecording: m.screen_recording,
+          accessibility: m.accessibility,
+        },
+      };
     case "update_ready":
       return { update: { version: m.version, installing: false } };
     case "translocated":

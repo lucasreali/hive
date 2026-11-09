@@ -1470,6 +1470,52 @@ function NotificationsOff() {
   );
 }
 
+/**
+ * What programs in Hive's terminals get from macOS through Hive (25.5), such as Claude Code's
+ * Computer Use. Read by the app (never prompting) when the section opens and whenever the window
+ * comes back to the front, as from System Settings; nothing shows until the app has an answer,
+ * and none comes where it cannot read them.
+ */
+function TerminalPermissions() {
+  const { screenRecording, accessibility } = useHive((s) => s.terminalPermissions);
+  useEffect(() => {
+    const check = () => void transport.checkTerminalPermissions();
+    check();
+    window.addEventListener("focus", check);
+    return () => window.removeEventListener("focus", check);
+  }, []);
+  if (screenRecording === "unknown" && accessibility === "unknown") return null;
+  const rows = [
+    ["Screen Recording", screenRecording, "screen_recording"],
+    ["Accessibility", accessibility, "accessibility"],
+  ] as const;
+  return (
+    <section className="field settings-group" aria-labelledby="terminal-permissions-title">
+      <h3 id="terminal-permissions-title">macOS permissions</h3>
+      <p className="field-help">
+        Programs you run in Hive's terminals, such as Claude Code's Computer Use, get these through
+        Hive. After granting Screen Recording, restart Hive, which closes its terminals.
+      </p>
+      {rows.map(([label, permission, pane]) => (
+        <div className="terminal-permission" key={pane}>
+          <span>{label}</span>
+          <span className="terminal-permission-state">
+            {permission === "granted" ? "Granted" : "Not granted"}
+          </span>
+          <button
+            type="button"
+            className="link"
+            aria-label={`Open System Settings for ${label}`}
+            onClick={() => void transport.openPrivacySettings(pane)}
+          >
+            Open System Settings
+          </button>
+        </div>
+      ))}
+    </section>
+  );
+}
+
 function Content({ section, query }: { section: Section; query: string }) {
   const modes = useHive((s) => s.appMode?.wsl === true);
   const windows = useHive((s) => s.appMode?.mode === "native");
@@ -1496,6 +1542,14 @@ function Content({ section, query }: { section: Section; query: string }) {
           {shown}
         </section>
         <SharedPlugin />
+      </>
+    );
+  }
+  if (section === "Terminal" && mac) {
+    return (
+      <>
+        {shown}
+        <TerminalPermissions />
       </>
     );
   }

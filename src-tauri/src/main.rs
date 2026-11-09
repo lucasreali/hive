@@ -89,6 +89,8 @@ fn main() {
                     std::env::current_exe().ok().as_deref(),
                     hive_lib::macos::CENTER,
                 ))
+                // Read for the Settings, which show what programs in the terminals get (25.5).
+                .with_terminal_permissions(hive_lib::macos::terminal_permissions)
                 .with_tone(
                     app.path().app_cache_dir()?,
                     hive_lib::afplay("/usr/bin/afplay".into()),
@@ -260,6 +262,8 @@ fn main() {
             commands::show_notification,
             commands::check_notifications,
             commands::open_notification_settings,
+            commands::check_terminal_permissions,
+            commands::open_privacy_settings,
             commands::play_tone,
             commands::set_tray,
             commands::pasted_files,
