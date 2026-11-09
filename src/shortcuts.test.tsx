@@ -1,5 +1,13 @@
 import { afterEach, beforeAll, expect, spyOn, test } from "bun:test";
-import { act, cleanup, createEvent, fireEvent, render, waitFor } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  createEvent,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
 import { asMac } from "../test/mac";
 import { App } from "./App";
 import type { AgentState, Project } from "./protocol";
@@ -121,12 +129,17 @@ test("Ctrl+Shift+N without projects opens the add project dialog", () => {
   expect(useHive.getState().modal).toBe("add-project");
 });
 
-test("Ctrl+Shift+B toggles the files panel and Ctrl+Shift+O opens add project", () => {
+test("Ctrl+Shift+B toggles the side panel's view and Ctrl+Shift+O opens add project", () => {
   app();
   press(ctrlShift("B"));
   expect(useHive.getState().rightPanel).toBeNull();
+  // Only the view: no action hides the rail (26.12).
+  expect(screen.getByRole("tablist", { name: "Panel" })).toBeDefined();
+  expect(screen.queryByTitle("Close (Ctrl+Shift+B)")).toBeNull();
   press(ctrlShift("B"));
   expect(useHive.getState().rightPanel).toBe("files");
+  expect(screen.getByRole("tablist", { name: "Panel" })).toBeDefined();
+  expect(screen.getByTitle("Close (Ctrl+Shift+B)")).toBeDefined();
   press(ctrlShift("O"));
   expect(useHive.getState().modal).toBe("add-project");
 });

@@ -104,10 +104,15 @@ test("dragging sizes a panel; dragging the right one much too narrow closes it",
   move(right, window.innerWidth - 250);
   expect(useHive.getState().panelWidth).toBe(280);
   // ...and far past it, it closes, keeping its last width for next time.
-  move(right, window.innerWidth - 150);
+  act(() => {
+    move(right, window.innerWidth - 150);
+  });
   expect(useHive.getState().rightPanel).toBeNull();
   expect(useHive.getState().panelWidth).toBe(280);
   expect(document.body.dataset.resizing).toBeUndefined();
+  // Only the view closed (26.12): the rail stays, the edge goes with the view.
+  expect(screen.getByRole("tablist", { name: "Panel" })).toBeDefined();
+  expect(screen.queryByRole("separator", { name: "Resize the side panel" })).toBeNull();
   // A cancelled drag ends too.
   fireEvent.pointerDown(left, { pointerId: 3 });
   left.dispatchEvent(new PointerEvent("pointercancel", { bubbles: true }));
