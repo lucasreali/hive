@@ -816,6 +816,9 @@ export const clearAddProjectError = () => useHive.setState({ addProjectError: nu
 export const setRightPanel = (rightPanel: RightPanel) => useHive.setState({ rightPanel });
 export const toggleSidebar = () => useHive.setState((s) => ({ sidebarShown: !s.sidebarShown }));
 export const setPanelView = (panelView: PanelView) => useHive.setState({ panelView });
+/** A rail's icon (26.12): shows `panelView`, opening the panel's view when it is closed. */
+export const showPanelView = (panelView: PanelView) =>
+  useHive.setState({ panelView, rightPanel: "files" });
 /**
  * Opens a file in its own tab (8.21), the preview tab (11.1), and shows it, as editable text
  * when `editing`; a file already open shows its tab as it was left. The file shown before keeps

@@ -13,8 +13,10 @@ test("a version mismatch blocks the workspace", async ({ page }) => {
   await expect(page.getByRole("button", { name: "Reconnect" })).toBeFocused();
   await page.screenshot({ path: "target/e2e/version-mismatch.png" });
   // The workspace under the block takes no clicks: the side panel (open by default) stays open.
-  await page.getByTitle(keyLabel("Files, diff and sessions (Ctrl+Shift+B)")).click({ force: true });
-  await expect(page.getByRole("complementary", { name: "Side panel" })).toBeVisible();
+  const panel = page.getByRole("complementary", { name: "Side panel" });
+  await page.getByTitle(keyLabel("Close (Ctrl+Shift+B)")).click({ force: true });
+  await expect(panel).toBeVisible();
+  await expect(panel.locator(".panel-title")).toBeVisible();
 });
 
 test("a disconnect shows the reason and can reconnect", async ({ page }) => {

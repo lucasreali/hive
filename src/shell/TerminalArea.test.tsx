@@ -422,13 +422,11 @@ test("a tab's menu splits it right, marks both tabs and shows a divider; Unsplit
   close.mockRestore();
 });
 
-test("the right panel's toggle keeps aria-pressed but opts out of the pressed look (8.17)", () => {
+test("the terminal bar has no button for the side panel (26.12)", () => {
   show();
-  const toggle = screen.getByTitle(/^Files, diff and sessions/);
-  expect(toggle.getAttribute("aria-pressed")).toBe("true");
-  expect(toggle.classList.contains("unpressed-look")).toBe(true);
-  fireEvent.click(toggle);
-  expect(toggle.getAttribute("aria-pressed")).toBe("false");
+  expect(screen.queryByTitle(/^Files, diff and sessions/)).toBeNull();
+  const terminals = within(screen.getByRole("region", { name: "Terminals" }));
+  expect(terminals.queryByTitle(/\(Ctrl\+Shift\+B\)/)).toBeNull();
 });
 
 /** Opens a terminal in fix-login from the + menu; returns its id and xterm instance. */

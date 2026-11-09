@@ -90,16 +90,16 @@ for (const panelWidth of [280, 320, 380, 400, 420, 440, 460, 520, 640]) {
       await expect(region).toBeVisible();
       await expect(region.locator(CONTENT[label] as string).first()).toBeVisible();
 
-      // The bar: as wide as the panel leaves it, its title and Collapse inside and apart.
+      // The bar: as wide as the panel leaves it, its title and the X inside and apart.
       const bar = await panel.locator(":scope > .bar").evaluate((b) => {
         const box = b.getBoundingClientRect();
         const title = (b.querySelector(".panel-title") as HTMLElement).getBoundingClientRect();
-        const collapse = (b.querySelector(".ghost") as HTMLElement).getBoundingClientRect();
+        const close = (b.querySelector(".ghost") as HTMLElement).getBoundingClientRect();
         return {
           width: Math.round(box.width),
           unscrolled: b.scrollWidth <= b.clientWidth,
-          title: title.width > 0 && title.left >= box.left && title.right <= collapse.left,
-          collapse: collapse.width > 0 && collapse.right <= box.right,
+          title: title.width > 0 && title.left >= box.left && title.right <= close.left,
+          close: close.width > 0 && close.right <= box.right,
         };
       });
       expect(bar, label).toEqual({
@@ -107,7 +107,7 @@ for (const panelWidth of [280, 320, 380, 400, 420, 440, 460, 520, 640]) {
         width: panelWidth - 1 - RAIL_WIDTH,
         unscrolled: true,
         title: true,
-        collapse: true,
+        close: true,
       });
 
       // Every icon fills the rail, its own 1 px border aside.
@@ -129,6 +129,100 @@ for (const panelWidth of [280, 320, 380, 400, 420, 440, 460, 520, 640]) {
   });
 }
 
+// 26.12: the X and Ctrl+Shift+B close only the view; the terminals take its width, the rail stays
+// where it is, and each icon opens its view at the panel's last width.
+for (const theme of ["one-light", "one-dark"]) {
+  for (const panelWidth of [280, 320, 380, 400, 420, 440, 460, 520, 640]) {
+    test(`the view closes and the rail stays at ${panelWidth} px, ${theme}`, async ({ page }) => {
+      await openAt(page, panelWidth);
+      const panel = rightPanel(page);
+      const rail = panel.getByRole("tablist", { name: "Panel" });
+      const terminals = page.getByRole("region", { name: "Terminals" });
+      const title = panel.locator(".panel-title");
+      const handle = panel.getByRole("separator", { name: "Resize the side panel" });
+      const selected = rail.locator('[aria-selected="true"]');
+      await expect(rail.getByRole("tab", { name: "Files" })).toHaveAttribute(
+        "aria-selected",
+        "true",
+      );
+      await page.evaluate((theme) => {
+        document.documentElement.dataset.theme = theme;
+      }, theme);
+      const look = () =>
+        panel.evaluate((aside) => {
+          const rail = aside.querySelector(".panel-rail") as HTMLElement;
+          return {
+            background: getComputedStyle(aside).backgroundColor,
+            border: getComputedStyle(rail).borderLeftColor,
+            icon: getComputedStyle(rail.querySelector('[aria-selected="false"]') as HTMLElement)
+              .color,
+          };
+        });
+      const openLook = await look();
+      const openRail = await rail.boundingBox();
+      const openTerminals = await terminals.boundingBox();
+      const places = async () => {
+        const boxes = [];
+        for (const label of LABELS) {
+          boxes.push(await rail.getByRole("tab", { name: label }).boundingBox());
+        }
+        return boxes;
+      };
+      const openPlaces = await places();
+
+      const expectClosed = async () => {
+        await expect(title).toHaveCount(0);
+        await expect(handle).toHaveCount(0);
+        await expect(panel.locator(".panel-view")).toHaveCount(0);
+        await expect(selected).toHaveCount(0);
+        await expect(rail.getByRole("tab")).toHaveCount(LABELS.length);
+        const box = await panel.boundingBox();
+        expect(box?.width).toBe(RAIL_WIDTH);
+        // The rail in its place, at its width, each icon where it was.
+        expect(await rail.boundingBox()).toEqual(openRail);
+        expect(await places()).toEqual(openPlaces);
+        // The terminals take the view's width, up to the rail.
+        const area = await terminals.boundingBox();
+        expect((area?.x ?? 0) + (area?.width ?? 0)).toBe(box?.x);
+        expect(Math.round(area?.width ?? 0)).toBe(
+          Math.round((openTerminals?.width ?? 0) + panelWidth - RAIL_WIDTH),
+        );
+        // The same look as beside the open view, in this theme.
+        expect(await look()).toEqual(openLook);
+      };
+      const expectOpen = async (label: string) => {
+        await expect(title).toHaveText(label);
+        await expect(handle).toBeVisible();
+        await expect(rail.getByRole("tab", { name: label })).toHaveAttribute(
+          "aria-selected",
+          "true",
+        );
+        await expect(selected).toHaveCount(1);
+        expect(Math.round((await panel.boundingBox())?.width ?? 0)).toBe(panelWidth);
+        expect(await rail.boundingBox()).toEqual(openRail);
+        expect(await terminals.boundingBox()).toEqual(openTerminals);
+      };
+
+      const close = panel.getByTitle(keyLabel("Close (Ctrl+Shift+B)"));
+      // Each icon opens its own view.
+      for (const label of LABELS) {
+        await close.click();
+        await expectClosed();
+        await rail.getByRole("tab", { name: label }).click();
+        await expectOpen(label);
+      }
+      // The selected icon of an open view does nothing.
+      await rail.getByRole("tab", { name: "Sessions" }).click();
+      await expectOpen("Sessions");
+      // The shortcut does as the X does, and brings back the last view.
+      await page.keyboard.press(`${mod}+Shift+B`);
+      await expectClosed();
+      await page.keyboard.press(`${mod}+Shift+B`);
+      await expectOpen("Sessions");
+    });
+  }
+}
+
 test("the rail: one Tab stop, then ↑/↓, Home and End, on the keyboard", async ({
   page,
   browserName,
@@ -140,12 +234,12 @@ test("the rail: one Tab stop, then ↑/↓, Home and End, on the keyboard", asyn
   await page.keyboard.press("Tab");
   await expect(rail.getByRole("tab", { name: "Files" })).toBeFocused();
   // The next Tab leaves the rail. On macOS, WebKit's Tab skips a button with no tabindex by
-  // default, as Safari's does, so it goes past Collapse to the view's first field.
+  // default, as Safari's does, so it goes past the X to the view's first field.
   await page.keyboard.press("Tab");
   if (browserName === "webkit" && mac) {
     await expect(panel.getByLabel("Find files")).toBeFocused();
   } else {
-    await expect(panel.getByTitle(keyLabel("Collapse (Ctrl+Shift+B)"))).toBeFocused();
+    await expect(panel.getByTitle(keyLabel("Close (Ctrl+Shift+B)"))).toBeFocused();
   }
   await rail.getByRole("tab", { name: "Files" }).focus();
   await page.keyboard.press("ArrowDown");
@@ -162,6 +256,14 @@ test("the rail: one Tab stop, then ↑/↓, Home and End, on the keyboard", asyn
     "aria-selected",
     "true",
   );
+  // With the view closed the rail keeps its Tab stop, and moving along it opens the view.
+  await page.keyboard.press(`${mod}+Shift+B`);
+  await expect(panel.locator(".panel-title")).toHaveCount(0);
+  await expect(rail.locator('[tabindex="0"]')).toHaveAttribute("aria-label", "Sessions");
+  await rail.getByRole("tab", { name: "Sessions" }).focus();
+  await page.keyboard.press("Home");
+  await expect(rail.getByRole("tab", { name: "Files" })).toBeFocused();
+  await expect(panel.locator(".panel-title")).toHaveText("Files");
 });
 
 test("the rail follows the sidebar's badges and the palette's commands", async ({ page }) => {
@@ -173,9 +275,10 @@ test("the rail follows the sidebar's badges and the palette's commands", async (
   await expect(rail.getByRole("tab", { name: "PRs" })).toHaveAttribute("aria-selected", "true");
   await expect(panel.locator(".panel-title")).toHaveText("PRs");
 
-  // The palette shows a view, opening the panel first when it is closed.
-  await panel.getByTitle(keyLabel("Collapse (Ctrl+Shift+B)")).click();
-  await expect(panel).toHaveCount(0);
+  // The palette shows a view, opening it first when it is closed.
+  await panel.getByTitle(keyLabel("Close (Ctrl+Shift+B)")).click();
+  await expect(panel.locator(".panel-title")).toHaveCount(0);
+  await expect(rail.locator('[aria-selected="true"]')).toHaveCount(0);
   await page.keyboard.press(`${mod}+Shift+P`);
   const palette = page.getByRole("dialog", { name: "Command palette" });
   await expect(palette.getByRole("textbox", { name: /Search commands/ })).toBeFocused();
