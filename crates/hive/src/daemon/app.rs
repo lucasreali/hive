@@ -269,7 +269,11 @@ where
     }
     {
         let mut app = state.app.lock().await;
-        if matches!(ended, Ended::Replaced) {
+        // Taken over (also when this connection dropped meanwhile): the new one is the app.
+        if !app
+            .as_ref()
+            .is_some_and(|app| app.same_channel(&control_tx))
+        {
             return None;
         }
         *app = None;
