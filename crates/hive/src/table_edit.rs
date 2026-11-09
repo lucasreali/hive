@@ -6,6 +6,7 @@
 //! by [`scan`], so every other cell keeps its quoting, every line its ending, and the blank lines
 //! stay. A new or changed cell is quoted only when it needs it (RFC 4180, [`encode`]).
 
+use std::io;
 use std::ops::Range;
 
 use hive_protocol::{Control, MAX_PAYLOAD, Sheet, TableEdit};
@@ -33,11 +34,10 @@ pub fn answer(
     content: &str,
     edit: Option<TableEdit>,
 ) -> Control {
-    let done = match projects.worktree(&worktree) {
-        Ok(_) => edited(&worktree, &path, content, edit.as_ref()),
-        Err(err) => Err(err.to_string()),
-    };
-    message(worktree, path, done)
+    let done = projects
+        .worktree(&worktree)
+        .and_then(|_| edited(&worktree, &path, content, edit.as_ref()));
+    message(worktree, path, done.map_err(|err| err.to_string()))
 }
 
 /// The text after `edit` and its table, within one frame.
@@ -46,34 +46,34 @@ fn edited(
     path: &str,
     content: &str,
     edit: Option<&TableEdit>,
-) -> Result<(String, Sheet), String> {
+) -> io::Result<(String, Sheet)> {
     let Some(delimiter) = table::delimiter(path) else {
-        return Err("not a table file".to_owned());
+        return Err(io::Error::other("not a table file"));
     };
     if content.len() as u64 > TEXT_LIMIT {
-        return Err(TOO_LARGE.to_owned());
+        return Err(io::Error::other(TOO_LARGE));
     }
     let next = match edit {
         Some(edit) => {
             if !whole(&parse(content, delimiter, MAX_PAYLOAD)?) {
-                return Err(NOT_WHOLE.to_owned());
+                return Err(io::Error::other(NOT_WHOLE));
             }
-            apply(content, delimiter, edit)?
+            apply(content, delimiter, edit).map_err(io::Error::other)?
         }
         None => content.to_owned(),
     };
     let Some(budget) = budget(worktree, path, &next) else {
-        return Err(TOO_LARGE.to_owned());
+        return Err(io::Error::other(TOO_LARGE));
     };
     let sheet = parse(&next, delimiter, budget)?;
     if edit.is_some() && !whole(&sheet) {
-        return Err(TOO_LARGE.to_owned());
+        return Err(io::Error::other(TOO_LARGE));
     }
     Ok((next, sheet))
 }
 
-fn parse(text: &str, delimiter: u8, budget: usize) -> Result<Sheet, String> {
-    table::parse(text.as_bytes(), delimiter, budget, COUNT_LIMIT).map_err(|err| err.to_string())
+fn parse(text: &str, delimiter: u8, budget: usize) -> io::Result<Sheet> {
+    table::parse(text.as_bytes(), delimiter, budget, COUNT_LIMIT)
 }
 
 /// Every row of the file is in the sheet, so what is written back loses none.
@@ -636,7 +636,7 @@ mod tests {
     }
 
     fn done(content: &str, edit: Option<&TableEdit>) -> Result<(String, Sheet), String> {
-        edited("/w", "a.csv", content, edit)
+        edited("/w", "a.csv", content, edit).map_err(|err| err.to_string())
     }
 
     #[test]
@@ -659,7 +659,7 @@ mod tests {
         assert_eq!(tsv.unwrap().0, "x\tb\n");
         for path in ["a.txt", "a.xlsx", "a"] {
             let err = edited("/w", path, "a\n", None).unwrap_err();
-            assert_eq!(err, "not a table file");
+            assert_eq!(err.to_string(), "not a table file");
         }
     }
 
@@ -738,19 +738,15 @@ mod tests {
         let projects = Projects::load(spaces, &dir.path().join("projects.json"));
         let edit = Some(set(0, 0, "x"));
         let answer = answer(&projects, "/nowhere".into(), "a.csv".into(), "a\n", edit);
-        let Control::TableEdited {
-            worktree,
-            path,
-            content,
-            sheet,
-            error,
-        } = answer
-        else {
-            panic!("expected table_edited, got {answer:?}");
-        };
-        assert_eq!((worktree.as_str(), path.as_str()), ("/nowhere", "a.csv"));
-        assert_eq!((content, sheet), (None, None));
-        let error = error.unwrap();
-        assert!(error.contains("not a worktree"), "{error}");
+        assert_eq!(
+            answer,
+            Control::TableEdited {
+                worktree: "/nowhere".into(),
+                path: "a.csv".into(),
+                content: None,
+                sheet: None,
+                error: Some("/nowhere is not a worktree of a followed project".into()),
+            }
+        );
     }
 }
