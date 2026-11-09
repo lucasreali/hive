@@ -19,6 +19,7 @@ import type {
   Space,
   SpaceEnv,
   Subagent,
+  TableEdit,
   TableText,
   UninstallList,
   Worktree,
@@ -731,6 +732,53 @@ function table(text: FileText): TableText {
     .map((line) => line.split(split));
   const sheet = { name: "", rows: rows.slice(0, TABLE_ROWS), total: rows.length, partial: false };
   return { worktree, path, sheets: [sheet], error: null };
+}
+
+/** A cell as the service writes one: in quotes only when it needs them (`hive::table_edit`). */
+const encoded = (cell: string, split: string) =>
+  cell.includes(split) || /["\r\n]/.test(cell) ? `"${cell.replaceAll('"', '""')}"` : cell;
+
+/** `edit` on `rows`, each row a new array; a stand-in for `hive::table_edit::apply`. */
+function editedRows(rows: string[][], edit: TableEdit): string[][] {
+  const width = Math.max(1, ...rows.map((row) => row.length));
+  const blank = () => Array.from({ length: width }, () => "");
+  switch (edit.op) {
+    case "set_cell":
+      return rows.map((row, r) =>
+        r !== edit.row
+          ? row
+          : Array.from(
+              { length: Math.max(row.length, edit.column + 1) },
+              (_, c) => (c === edit.column ? edit.value : (row[c] ?? "")) as string,
+            ),
+      );
+    case "insert_row":
+      return [...rows.slice(0, edit.at), blank(), ...rows.slice(edit.at)];
+    case "remove_row":
+      return rows.filter((_, r) => r !== edit.at);
+    case "insert_column":
+      return rows.map((row) => [...row.slice(0, edit.at), "", ...row.slice(edit.at)]);
+    case "remove_column":
+      return rows.map((row) => row.filter((_, c) => c !== edit.at));
+  }
+}
+
+/**
+ * A stand-in for `hive::table_edit::answer`: `content` split as `table` does, written back with
+ * the service's quoting, its blank lines and needless quotes lost; the real writer lives in Rust.
+ */
+function tableEdited(worktree: string, path: string, content: string, edit: TableEdit | null) {
+  const split = path.toLowerCase().endsWith(".tsv") ? "\t" : ",";
+  const read = content
+    .split("\n")
+    .filter(Boolean)
+    .map((line) => line.split(split));
+  const rows = edit ? editedRows(read, edit) : read;
+  const lines = rows.map((row) => row.map((cell) => encoded(cell, split)).join(split));
+  const end = content.endsWith("\n") ? "\n" : "";
+  const sheet = { name: "", rows, total: rows.length, partial: false };
+  const text = edit ? lines.join("\n") + end : content;
+  return { type: "table_edited", worktree, path, content: text, sheet, error: null } as const;
 }
 
 /** A 24×16 orange PNG and a one-page PDF, as `data:` URLs (the browser has no `hive-file:`). */
@@ -1683,6 +1731,9 @@ export function createMockTransport(
     },
     async openTable(worktree, path) {
       later({ type: "table", ...table(fileAt(worktree, path)) });
+    },
+    async editTable(worktree, path, content, edit) {
+      later(tableEdited(worktree, path, content, edit));
     },
     async saveFile(worktree, path, content, version) {
       const now = fileAt(worktree, path);

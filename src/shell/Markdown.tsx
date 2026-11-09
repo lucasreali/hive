@@ -154,14 +154,24 @@ function pruneEmptyLinks(tree: Root) {
 
 /**
  * Marks each top-level block of a whole file with its first source line (`data-line`, 21.3), so
- * the rendered view and the text can show the same place. Runs after sanitising, so the schema
- * does not strip it and no `data-line` written in the file survives to be read.
+ * the rendered view and the text can show the same place, and its last one (`data-line-end`), so
+ * the block can be edited as its source (25.4). Runs after sanitising, so the schema does not
+ * strip them and no such attribute written in the file survives to be read.
  */
 export function markLines(tree: Root) {
   for (const child of tree.children)
-    if (child.type === "element" && child.position)
+    if (child.type === "element" && child.position) {
       child.properties.dataLine = child.position.start.line;
+      child.properties.dataLineEnd = child.position.end.line;
+    }
 }
+
+/** A document's block lines (21.3, 25.4), which go on its box, the top-level block. */
+type Lines = { "data-line"?: number; "data-line-end"?: number };
+const linesOf = (props: object) => {
+  const { "data-line": line, "data-line-end": end } = props as Lines;
+  return { "data-line": line, "data-line-end": end };
+};
 
 const PLUGINS = [remarkGfm];
 const REHYPE: Options["rehypePlugins"] = [
@@ -178,7 +188,7 @@ export const COPIED_MS = 1500;
  * on focus): it copies `text`, the block's own text without its last newline, as the worktree
  * menu's "Copy path" does; a refused clipboard says so in the status bar.
  */
-function CodeBlock({ text, line, children }: { text: string; line?: number; children: ReactNode }) {
+function CodeBlock({ text, lines, children }: { text: string; lines: Lines; children: ReactNode }) {
   const [copied, setCopied] = useState(false);
   const timer = useRef<ReturnType<typeof setTimeout>>(undefined);
   useEffect(() => () => clearTimeout(timer.current), []);
@@ -192,7 +202,7 @@ function CodeBlock({ text, line, children }: { text: string; line?: number; chil
       })
       .catch((error) => showNotice("error", `Cannot copy the code: ${error}`));
   return (
-    <div className="md-code" data-line={line}>
+    <div className="md-code" {...lines}>
       <pre>{children}</pre>
       <button
         type="button"
@@ -209,12 +219,8 @@ function CodeBlock({ text, line, children }: { text: string; line?: number; chil
 }
 
 const DOC_COMPONENTS: Components = {
-  // A document's block line (21.3) goes on the box, the top-level block.
   pre: ({ node, children, ...props }) => (
-    <CodeBlock
-      text={(node ? shown(node) : "").replace(/\n$/, "")}
-      line={(props as { "data-line"?: number })["data-line"]}
-    >
+    <CodeBlock text={(node ? shown(node) : "").replace(/\n$/, "")} lines={linesOf(props)}>
       {children}
     </CodeBlock>
   ),
@@ -255,9 +261,8 @@ const COMPONENTS: Components = {
   img: ({ alt }) => (alt ? <span className="md-img">{alt}</span> : null),
   // A table is never wider than the message (13.1): its cells wrap long words, and one that
   // still cannot fit scrolls sideways inside its box (20.1).
-  // A document's block line (21.3) goes on the box, the top-level block.
   table: ({ children, ...props }) => (
-    <div className="md-table" data-line={(props as { "data-line"?: number })["data-line"]}>
+    <div className="md-table" {...linesOf(props)}>
       <table>{children}</table>
     </div>
   ),

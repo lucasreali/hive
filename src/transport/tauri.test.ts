@@ -101,6 +101,7 @@ test("terminal and project actions call their commands", async () => {
   await tauriTransport.searchFiles("/r", "q");
   await tauriTransport.openFile("/r", "a.ts", "head");
   await tauriTransport.openTable("/r", "a.csv");
+  await tauriTransport.editTable("/r", "a.csv", "a\n", { op: "remove_row", at: 0 });
   await tauriTransport.saveFile("/r", "a.ts", "x", "v");
   await tauriTransport.createFile("/r", "src", "b.ts");
   await tauriTransport.renameFile("/r", "a.ts", "c.ts");
@@ -167,6 +168,10 @@ test("terminal and project actions call their commands", async () => {
     ["search_files", { worktree: "/r", query: "q" }],
     ["open_file", { worktree: "/r", path: "a.ts", base: "head" }],
     ["open_table", { worktree: "/r", path: "a.csv" }],
+    [
+      "edit_table",
+      { worktree: "/r", path: "a.csv", content: "a\n", edit: { op: "remove_row", at: 0 } },
+    ],
     ["save_file", { worktree: "/r", path: "a.ts", content: "x", version: "v" }],
     ["create_file", { worktree: "/r", folder: "src", name: "b.ts" }],
     ["rename_file", { worktree: "/r", path: "a.ts", name: "c.ts" }],

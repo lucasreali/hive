@@ -298,6 +298,10 @@ test("a file's top-level blocks carry their first line, a raw `data-line` replac
   expect(view.querySelector("pre")?.hasAttribute("data-line")).toBe(false);
   // Only the top-level blocks: not a list's items, nor the table inside its box.
   expect(view.querySelectorAll("[data-line]")).toHaveLength(6);
+  // And their last one (25.4): none copied from the file, the table's and the code's on their box.
+  expect(
+    [...view.querySelectorAll("[data-line]")].map((el) => el.getAttribute("data-line-end")),
+  ).toEqual(["1", "4", "7", "11", "15", "17"]);
 });
 
 test("a chat's Markdown carries no line, not even one written in its HTML (21.3)", () => {

@@ -16,8 +16,8 @@ import {
   within,
   withNotice,
 } from "./store";
-import { dropFile, editFor, fileKey, fileTabState, opened, tabsPlace } from "./tabs";
-import { type EditBuffer, failed, isDirty, isFor, saved } from "./viewer/buffer";
+import { dropFile, editFor, fileKey, fileTabState, kept, opened, tabsPlace } from "./tabs";
+import { type EditBuffer, failed, isDirty, isFor, saved, toText } from "./viewer/buffer";
 
 // How service data enters the store: `apply` stores what the service sent without deriving
 // anything (#37).
@@ -432,7 +432,38 @@ function reduce(s: HiveState, m: ServiceMessage): Partial<HiveState> {
     }
     case "table": {
       const { type: _, ...table } = m;
-      return { table };
+      // What is on disk: a table with unsaved edits (25.4) shows those.
+      const { edit } = fileTabState(s, table);
+      return edit && isDirty(edit) ? {} : { table };
+    }
+    case "table_edited": {
+      const at = { worktree: m.worktree, path: m.path };
+      const [first, ...rest] = s.tableAsks;
+      const left = first && isFor(first, at) ? rest : s.tableAsks;
+      if (m.content === null || !m.sheet) {
+        const error = m.error;
+        return {
+          // Those after it counted on its text.
+          tableAsks: left.filter((a) => !isFor(a, at)),
+          ...patchEdits(s, at, (b) => ({ ...b, error })),
+        };
+      }
+      const doc = toText(m.content);
+      const edits = patchEdits(s, at, (b) => ({
+        ...b,
+        doc: b.doc.eq(doc) ? b.doc : doc,
+        error: null,
+      }));
+      const shown = s.openFile && isFor(s.openFile, at);
+      return {
+        ...edits,
+        tableAsks: left,
+        table: shown ? { ...at, sheets: [m.sheet], error: null } : s.table,
+        openFiles:
+          edits.edit && shown && isDirty(edits.edit)
+            ? kept(edits.openFiles as typeof s.openFiles, at)
+            : edits.openFiles,
+      };
     }
     case "file_saved":
       return patchEdits(s, m, (b) => saved(b, m.version));

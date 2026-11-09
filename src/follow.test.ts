@@ -1,8 +1,15 @@
 import { beforeEach, expect, mock, test } from "bun:test";
-import { followOpenFile, followOpenTable, followPanel, followView } from "./follow";
+import {
+  followOpenFile,
+  followOpenTable,
+  followPanel,
+  followTableEdits,
+  followView,
+} from "./follow";
 import { apply } from "./reduce";
 import {
   addTab,
+  editOpenTable,
   initialState,
   pinFile,
   select,
@@ -16,6 +23,7 @@ import {
 } from "./store";
 import type { Transport } from "./transport";
 import { MOCK_FOLDER, MOCK_REPOS } from "./transport/mock";
+import { saveOpenFile } from "./viewer/save";
 
 beforeEach(() => useHive.setState(initialState, true));
 
@@ -286,4 +294,185 @@ test("asks for the open table file's table while it shows as one", () => {
   stop();
   welcome();
   expect(openTable).toHaveBeenCalledTimes(4);
+});
+
+// 25.4: a table with unsaved edits is its buffer's.
+
+const CSV = { worktree: "/w", path: "a.csv" };
+const fileAnswer = (content: string) =>
+  apply({
+    type: "file",
+    ...CSV,
+    content,
+    base: content,
+    version: "v",
+    binary: false,
+    too_large: false,
+    error: null,
+  });
+const tableEdited = (content: string) =>
+  apply({
+    type: "table_edited",
+    ...CSV,
+    content,
+    sheet: { name: "", rows: [[content]], total: 1, partial: false },
+    error: null,
+  });
+
+function editedTable() {
+  const openTable = mock(async (_worktree: string, _path: string) => {});
+  const editTable = mock(async (..._args: unknown[]) => {});
+  const fake = { openTable, editTable };
+  const transport = fake as unknown as Transport;
+  setOpenFile(CSV);
+  pinFile(CSV);
+  fileAnswer("a\n");
+  const stops = [followOpenTable(transport), followTableEdits(transport)];
+  const stop = () => {
+    for (const each of stops) each();
+  };
+  return { ...fake, stop };
+}
+
+test("a table's edits go one at a time, each from the text the last one left", () => {
+  const { editTable, stop } = editedTable();
+  welcome();
+  const first = { op: "insert_row", at: 0 } as const;
+  const second = { op: "remove_row", at: 0 } as const;
+  editOpenTable(first);
+  editOpenTable(second);
+  expect(editTable.mock.calls).toEqual([["/w", "a.csv", "a\n", first]]);
+  tableEdited("x\na\n");
+  expect(editTable.mock.calls[1]).toEqual(["/w", "a.csv", "x\na\n", second]);
+  expect(editTable).toHaveBeenCalledTimes(2);
+  tableEdited("a\n");
+  expect(useHive.getState().tableAsks).toEqual([]);
+  expect(editTable).toHaveBeenCalledTimes(2);
+  stop();
+});
+
+test("no buffer to start from: no edit is asked", () => {
+  const { editTable, stop } = editedTable();
+  welcome();
+  apply({
+    type: "file",
+    ...CSV,
+    content: null,
+    base: null,
+    version: null,
+    binary: true,
+    too_large: false,
+    error: null,
+  });
+  editOpenTable({ op: "insert_row", at: 0 });
+  expect(useHive.getState().tableAsks).toEqual([]);
+  expect(useHive.getState().editing).toBe(false);
+  expect(editTable).not.toHaveBeenCalled();
+  stop();
+});
+
+test("a table shown again with unsaved edits is asked from the buffer, not the disk", () => {
+  const { openTable, editTable, stop } = editedTable();
+  welcome();
+  expect(openTable).toHaveBeenCalledTimes(1);
+  editOpenTable({ op: "insert_row", at: 0 });
+  tableEdited("x\na\n");
+  editTable.mockClear();
+  // The answers themselves ask nothing more, nor do new changes while dirty.
+  changes("/w");
+  expect(editTable).not.toHaveBeenCalled();
+  expect(openTable).toHaveBeenCalledTimes(1);
+
+  setTableShown(false);
+  setTableShown(true);
+  expect(editTable.mock.calls).toEqual([["/w", "a.csv", "x\na\n", null]]);
+  // Asked once, however many times it shows before the answer.
+  setTableShown(false);
+  setTableShown(true);
+  expect(useHive.getState().tableAsks).toHaveLength(1);
+  expect(openTable).toHaveBeenCalledTimes(1);
+  // Its answer changes no text, so it asks nothing more.
+  const before = useHive.getState().edit?.doc;
+  tableEdited("x\na\n");
+  expect(useHive.getState().edit?.doc).toBe(before as NonNullable<typeof before>);
+  expect(editTable).toHaveBeenCalledTimes(1);
+
+  // Clean again (saved, or reloaded): the disk's.
+  apply({ type: "file_saved", ...CSV, version: "w" });
+  useHive.setState((s) => ({ edit: s.edit && { ...s.edit, saved: s.edit.doc } }));
+  expect(openTable).toHaveBeenCalledTimes(2);
+  stop();
+});
+
+test("what is asked goes with the connection; a save that waited for it too", () => {
+  const { editTable, stop } = editedTable();
+  welcome();
+  editOpenTable({ op: "insert_row", at: 0 });
+  useHive.setState({ saveAfterAsks: true });
+  expect(editTable).toHaveBeenCalledTimes(1);
+  apply({ type: "connection", status: "disconnected" } as never);
+  useHive.setState({ connection: { status: "disconnected" } as never });
+  expect(useHive.getState().tableAsks).toEqual([]);
+  expect(useHive.getState().saveAfterAsks).toBe(false);
+  // After it comes back, the same edit is sent anew.
+  welcome();
+  editOpenTable({ op: "insert_row", at: 0 });
+  expect(editTable).toHaveBeenCalledTimes(2);
+  stop();
+});
+
+test("an edit that cannot be sent drops those of its file", async () => {
+  const { editTable, stop } = editedTable();
+  welcome();
+  editTable.mockImplementation(async () => {
+    throw new Error("too large");
+  });
+  editOpenTable({ op: "insert_row", at: 0 });
+  await Bun.sleep(0);
+  expect(useHive.getState().tableAsks).toEqual([]);
+  stop();
+});
+
+test("an edit of a file closed meanwhile is dropped", () => {
+  const { editTable, stop } = editedTable();
+  welcome();
+  useHive.setState({ tableAsks: [{ worktree: "/w", path: "gone.csv", edit: null }] });
+  expect(useHive.getState().tableAsks).toEqual([]);
+  expect(editTable).not.toHaveBeenCalled();
+  stop();
+});
+
+test("a save while edits are on their way waits for them", () => {
+  const { stop } = editedTable();
+  welcome();
+  editOpenTable({ op: "insert_row", at: 0 });
+  saveOpenFile();
+  expect(useHive.getState().saveAfterAsks).toBe(true);
+  stop();
+});
+
+test("a table answer for a file not shown keeps the shown table and its buffer's edit", () => {
+  const { stop } = editedTable();
+  welcome();
+  const other = { worktree: "/w", path: "b.csv" };
+  const shown = useHive.getState().table;
+  apply({
+    type: "table_edited",
+    ...other,
+    content: "b\n",
+    sheet: { name: "", rows: [["b"]], total: 1, partial: false },
+    error: null,
+  });
+  expect(useHive.getState().table).toBe(shown);
+  // An answer out of its turn takes no one's place in the line.
+  editOpenTable({ op: "insert_row", at: 0 });
+  apply({
+    type: "table_edited",
+    ...other,
+    content: null,
+    sheet: null,
+    error: "no",
+  });
+  expect(useHive.getState().tableAsks).toHaveLength(1);
+  stop();
 });

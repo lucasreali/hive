@@ -643,6 +643,23 @@
     "error": null
   },
   {
+    "type": "table_edited",
+    "worktree": "/r",
+    "path": "a.csv",
+    "content": "a\n",
+    "sheet": {
+      "name": "",
+      "rows": [
+        [
+          "a"
+        ]
+      ],
+      "total": 1,
+      "partial": false
+    },
+    "error": null
+  },
+  {
     "type": "file_saved",
     "worktree": "/r",
     "path": "a.rs",

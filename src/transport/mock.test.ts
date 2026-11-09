@@ -7,6 +7,7 @@ import type {
   Settings,
   Space,
   SpaceEnv,
+  TableEdit,
 } from "../protocol";
 import { DEFAULT_SETTINGS } from "../store";
 import {
@@ -961,6 +962,45 @@ test("a table file's rows, split on its delimiter, or why not", async () => {
   expect([gone?.sheets, gone?.error]).toEqual([[], "src/legacy/jwt.ts does not exist"]);
   const error = `${dotfiles.path} is not a worktree of a followed project`;
   expect([outside?.sheets, outside?.error]).toEqual([[], error]);
+});
+
+test("a table edit answers the new text and its rows, quoting only what needs it", async () => {
+  const { transport, messages } = await connected();
+  const [shop] = MOCK_REPOS;
+  const asked = async (path: string, content: string, edit: TableEdit | null) => {
+    messages.length = 0;
+    await transport.editTable(shop.path, path, content, edit);
+    await tick();
+    const [answer] = messages;
+    if (answer?.type !== "table_edited") throw new Error("no answer");
+    return [answer.content, answer.sheet?.rows];
+  };
+  const text = "a,b\n1,2\n";
+  expect(await asked("a.csv", text, null)).toEqual([
+    text,
+    [
+      ["a", "b"],
+      ["1", "2"],
+    ],
+  ]);
+  const set = { op: "set_cell", row: 1, column: 1, value: 'x,"y' } as const;
+  expect(await asked("a.csv", text, set)).toEqual([
+    'a,b\n1,"x,""y"\n',
+    [
+      ["a", "b"],
+      ["1", 'x,"y'],
+    ],
+  ]);
+  expect((await asked("a.csv", text, { ...set, value: "l1\nl2" }))[0]).toBe('a,b\n1,"l1\nl2"\n');
+  // Past a short row, it grows; other rows stay.
+  expect((await asked("a.csv", "a,b\n1\n", { ...set, value: "x" }))[0]).toBe("a,b\n1,x\n");
+  expect((await asked("a.tsv", "a\tb\n", { ...set, row: 0, value: "x,y" }))[0]).toBe("a\tx,y\n");
+  expect((await asked("a.csv", "a,b", { ...set, row: 0, value: "x" }))[0]).toBe("a,x");
+  expect((await asked("a.csv", text, { op: "insert_row", at: 1 }))[0]).toBe("a,b\n,\n1,2\n");
+  expect((await asked("a.csv", text, { op: "remove_row", at: 0 }))[0]).toBe("1,2\n");
+  expect((await asked("a.csv", text, { op: "insert_column", at: 1 }))[0]).toBe("a,,b\n1,,2\n");
+  expect((await asked("a.csv", text, { op: "remove_column", at: 0 }))[0]).toBe("b\n2\n");
+  expect((await asked("a.csv", "", { op: "insert_row", at: 0 }))[0]).toBe("");
 });
 
 test("a save checks the version as the service does; write stands in for an agent", async () => {
