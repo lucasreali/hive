@@ -17,16 +17,21 @@ const GROUP_FILE: &str = "hive-browser-group";
 /// from `runtime`. Nothing there is nothing to do.
 pub fn clean(bin: &Path, runtime: &Path) {
     let config = bin.join(MCP_CONFIG);
-    match std::fs::remove_file(&config) {
-        Err(err) if err.kind() != std::io::ErrorKind::NotFound => {
-            eprintln!("hive: warning: cannot remove {}: {err}", config.display());
-        }
-        _ => {}
+    if let Err(err) = remove(&config) {
+        eprintln!("hive: warning: cannot remove {}: {err}", config.display());
     }
     let profiles = runtime.join(PROFILES);
     #[cfg(unix)]
     reap(&profiles, crate::procs::Source::System, &mut kill_group);
     let _ = std::fs::remove_dir_all(&profiles);
+}
+
+/// Removes the file `path`; one already gone is no error.
+fn remove(path: &Path) -> std::io::Result<()> {
+    match std::fs::remove_file(path) {
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        other => other,
+    }
 }
 
 /// Ends the browsers of the profiles in `dir`. A profile's [`GROUP_FILE`] names the group killed,
@@ -99,6 +104,16 @@ mod tests {
         std::fs::create_dir(bin.join(MCP_CONFIG)).unwrap();
         clean(&bin, &runtime);
         assert!(bin.join(MCP_CONFIG).is_dir());
+    }
+
+    #[test]
+    fn a_file_already_gone_is_removed_and_one_that_cannot_go_is_an_error() {
+        let tmp = tempfile::tempdir().unwrap();
+        let file = tmp.path().join(MCP_CONFIG);
+        assert!(remove(&file).is_ok());
+        std::fs::create_dir(&file).unwrap();
+        assert!(remove(&file).is_err());
+        assert!(file.is_dir());
     }
 
     #[test]
