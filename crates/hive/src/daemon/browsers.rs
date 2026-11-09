@@ -717,15 +717,12 @@ mod tests {
             events.send(Event::Title(Some("now".into()))).unwrap();
             tokio::task::yield_now().await;
             tokio::task::yield_now().await;
-            let Control::BrowserStatus { url, error, .. } = last else {
-                unreachable!()
-            };
             let now = Control::BrowserStatus {
                 worktree: "/r".into(),
                 running: true,
-                url,
+                url: Some("u999".into()),
                 title: Some("now".into()),
-                error,
+                error: None,
             };
             assert_eq!(sent(&mut app), [now]);
             // Stopped with a change waiting: nothing more is said of it.
