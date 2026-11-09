@@ -294,11 +294,9 @@ fn insert_row(text: &[u8], records: &[Record], width: usize, at: usize, delimite
     let (place, bytes) = match (records.get(at), records.last()) {
         (Some(record), _) => (record.start(), [row.as_slice(), ending].concat()),
         (None, _) if at > records.len() => return None,
-        // After the last row. A last line with no ending stays so: the new row is the last line.
-        (None, Some(last)) if last.next == last.end => {
-            (last.end, [ending, row.as_slice()].concat())
-        }
-        (None, Some(last)) => (last.next, [row.as_slice(), ending].concat()),
+        // After the last row, whose own ending goes after the new one: a last line with no ending
+        // stays so.
+        (None, Some(last)) => (last.end, [ending, row.as_slice()].concat()),
         (None, None) => (text.len(), [row.as_slice(), ending].concat()),
     };
     Some(vec![(place..place, bytes)])
@@ -416,6 +414,8 @@ mod tests {
             (b"a\"b,c\"d\n", b','),
             (b"\"a\"b,c\n", b','),
             (b"\"a\"\"\"b\",c\n", b','),
+            (b"\"a\"\",b\",c\n", b','),
+            (b"\"a\"\"\nb\",c\n", b','),
             (b"\"open,\nnever closed", b','),
             (b"\"a\"", b','),
             (b"\"\"\n\"\",\"\"\n", b','),
