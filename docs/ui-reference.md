@@ -78,7 +78,7 @@ IBM Plex Sans and IBM Plex Mono, weights 400/500/600, bundled with `@fontsource/
 | `--bar-h` | 34px | Title bar, sidebar header, tab bar, right panel header |
 | `--status-h` | 24px | Status bar |
 | `--sidebar-w` | 264px | Sidebar width (resizable 200–440 in the prototype) |
-| `--right-w` | 380px | Right panel width (resizable 260–720 in the prototype) |
+| `--right-w` | 380px | Right panel width (resizable 280–640), a 36px rail of view icons included (25.3) |
 
 Row heights: project 26px, worktree 24px, subagent line 18px, file row 22px, picker row 30px, branch row 24px. Indents: project 6px, worktree 20px, agent 40px, subagent 56px. Buttons: primary/secondary 28px high (empty-state primary 30px), ghost 24px, icon 26×24, window buttons 46px wide. Text fields 30px. Dialog 520px wide, 120px from the top; picker 560px wide, 44px from the top.
 

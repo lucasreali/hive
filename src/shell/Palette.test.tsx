@@ -70,6 +70,13 @@ test("lists every command with its keys but itself, then agents and worktrees", 
       ...COMMANDS.filter((c) => c.id !== "palette" && !c.when && !c.mac).map((c) => c.label),
       "Remove merged worktrees…",
       "Remove project…",
+      // One per view of the rail (25.3), with no shortcut.
+      "Show Files",
+      "Show Diff",
+      "Show Scripts",
+      "Show PRs",
+      "Show Actions",
+      "Show Sessions",
     ],
   ]);
   expect(places).toEqual([
@@ -152,6 +159,18 @@ test("a folder project is removed from the palette as a project, with no worktre
   expect(labels).toContain("Remove project…");
   expect(labels).not.toContain("Remove group…");
   expect(labels).not.toContain("Remove merged worktrees…");
+  // Only the two views a folder has (25.3).
+  expect(labels.filter((l) => /^Show \w+$/.test(l))).toEqual(["Show Files", "Show Sessions"]);
+});
+
+test("a view's palette command opens the panel on it, with no shortcut (25.3)", () => {
+  render(<App />);
+  act(() => useHive.setState({ rightPanel: null, panelView: "files" }));
+  const diff = paletteCommands(useHive.getState()).find((c) => c.label === "Show Diff");
+  expect(diff?.keys).toBeUndefined();
+  act(() => diff?.run());
+  expect(useHive.getState().rightPanel).toBe("files");
+  expect(useHive.getState().panelView).toBe("changes");
 });
 
 test("a group can be removed from the palette, not its projects; their worktrees open it", () => {

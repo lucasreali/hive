@@ -1,15 +1,16 @@
 import {
   ClockCounterClockwiseIcon,
   FilesIcon,
-  GitDiffIcon,
   GitPullRequestIcon,
   MagnifyingGlassIcon,
   PlayCircleIcon,
+  PlusMinusIcon,
   TerminalIcon as PromptIcon,
 } from "@phosphor-icons/react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import {
   type DragEvent,
+  Fragment,
   type KeyboardEvent,
   lazy,
   type MouseEvent,
@@ -321,19 +322,52 @@ function useShownWorktree() {
 
 const NOTHING_SHOWN = "Select a project or agent to see its files.";
 
-const VIEWS: { view: PanelView; label: string; icon: ReactNode }[] = [
-  { view: "files", label: "Files", icon: <FilesIcon size={14} aria-hidden="true" /> },
-  { view: "changes", label: "Diff", icon: <GitDiffIcon size={14} aria-hidden="true" /> },
+type PanelViewEntry = {
+  view: PanelView;
+  label: string;
+  icon: ReactNode;
+  /** The rail draws a separator between groups (25.3). */
+  group: "worktree" | "repository" | "history";
+};
+
+const VIEWS: PanelViewEntry[] = [
+  {
+    view: "files",
+    label: "Files",
+    group: "worktree",
+    icon: <FilesIcon size={14} aria-hidden="true" />,
+  },
+  {
+    view: "changes",
+    label: "Diff",
+    group: "worktree",
+    icon: <PlusMinusIcon size={14} aria-hidden="true" />,
+  },
+  {
+    view: "scripts",
+    label: "Scripts",
+    group: "worktree",
+    icon: <PromptIcon size={14} aria-hidden="true" />,
+  },
+  // 9.31 and 9.32.
+  {
+    view: "pulls",
+    label: "PRs",
+    group: "repository",
+    icon: <GitPullRequestIcon size={14} aria-hidden="true" />,
+  },
+  {
+    view: "actions",
+    label: "Actions",
+    group: "repository",
+    icon: <PlayCircleIcon size={14} aria-hidden="true" />,
+  },
   {
     view: "sessions",
     label: "Sessions",
+    group: "history",
     icon: <ClockCounterClockwiseIcon size={14} aria-hidden="true" />,
   },
-  // 9.31 and 9.32.
-  { view: "pulls", label: "PRs", icon: <GitPullRequestIcon size={14} aria-hidden="true" /> },
-  { view: "actions", label: "Actions", icon: <PlayCircleIcon size={14} aria-hidden="true" /> },
-  { view: "scripts", label: "Scripts", icon: <PromptIcon size={14} aria-hidden="true" /> },
-  // 24.6, while the setting is on.
 ];
 
 /** The panel's views for `project`: a folder project (23.1) has only its files and sessions. */
@@ -341,9 +375,54 @@ export const panelViews = (project: Project | undefined) =>
   project?.folder ? VIEWS.filter((v) => v.view === "files" || v.view === "sessions") : VIEWS;
 
 /**
+ * The panel's view switcher (25.3): a vertical tablist of icons on the panel's outer edge, the
+ * same at every width. One Tab stop: ↑/↓, Home and End move along it, selecting as they go.
+ */
+function PanelRail({ views, view }: { views: PanelViewEntry[]; view: PanelView }) {
+  const onKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
+    const count = views.length;
+    const at = views.findIndex((v) => v.view === view);
+    const next = { ArrowDown: at + 1, ArrowUp: at + count - 1, Home: 0, End: count - 1 }[event.key];
+    if (next === undefined) return;
+    event.preventDefault();
+    setPanelView((views[next % count] as PanelViewEntry).view);
+    const tabs = event.currentTarget.querySelectorAll<HTMLElement>('[role="tab"]');
+    tabs[next % count]?.focus();
+  };
+  return (
+    <div
+      className="panel-rail"
+      role="tablist"
+      aria-label="Panel"
+      aria-orientation="vertical"
+      onKeyDown={onKeyDown}
+    >
+      {views.map((v, i) => (
+        <Fragment key={v.view}>
+          {i > 0 && views[i - 1]?.group !== v.group && (
+            <span className="panel-rail-separator" aria-hidden="true" />
+          )}
+          <button
+            type="button"
+            role="tab"
+            aria-selected={view === v.view}
+            aria-label={v.label}
+            title={v.label}
+            tabIndex={view === v.view ? 0 : -1}
+            onClick={() => setPanelView(v.view)}
+          >
+            {v.icon}
+          </button>
+        </Fragment>
+      ))}
+    </div>
+  );
+}
+
+/**
  * The right panel (screen 1g, grown), toggled by Ctrl+Shift+B: for the shown worktree, every
- * file with a search ("Files"), the changed files with their totals ("Changes"), or its Claude
- * sessions ("Sessions").
+ * file with a search ("Files"), the changed files with their totals ("Diff"), its scripts, the
+ * repository's pull requests and Actions runs, or its Claude sessions, picked on the rail.
  */
 export function RightPanel() {
   const target = useShownWorktree();
@@ -356,23 +435,9 @@ export function RightPanel() {
   return (
     <aside className="right-panel" aria-label="Side panel" style={{ width }}>
       <ResizeHandle side="panel" />
+      <PanelRail views={views} view={view} />
       <div className="bar">
-        <div className="panel-views" role="tablist" aria-label="Panel">
-          {views.map((v) => (
-            <button
-              key={v.view}
-              type="button"
-              role="tab"
-              aria-selected={view === v.view}
-              aria-label={v.label}
-              title={v.label}
-              onClick={() => setPanelView(v.view)}
-            >
-              {v.icon}
-              <span className="tab-label">{v.label}</span>
-            </button>
-          ))}
-        </div>
+        <span className="panel-title">{shown.label}</span>
         <button
           type="button"
           className="ghost"

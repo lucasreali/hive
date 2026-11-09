@@ -656,15 +656,24 @@ test("the Changes panel's header button closes it", () => {
   expect(useHive.getState().rightPanel).toBeNull();
 });
 
-// 10.4: a narrow panel shows the tabs' icons only (CSS), so each keeps its label as its name.
-test("each panel tab keeps its label as its accessible name and title", () => {
+// 25.3: the rail shows only icons, so each keeps its label as its name and tooltip.
+test("each rail icon keeps its label as its accessible name and tooltip, in its group", () => {
   panel();
   act(() => setRightPanel("files"));
-  const tabs = screen.getByRole("tablist", { name: "Panel" }).querySelectorAll('[role="tab"]');
-  const labels = ["Files", "Diff", "Sessions", "PRs", "Actions", "Scripts"];
+  const rail = screen.getByRole("tablist", { name: "Panel" });
+  expect(rail.getAttribute("aria-orientation")).toBe("vertical");
+  const tabs = rail.querySelectorAll('[role="tab"]');
+  const labels = ["Files", "Diff", "Scripts", "PRs", "Actions", "Sessions"];
   expect([...tabs].map((t) => [t.getAttribute("aria-label"), t.getAttribute("title")])).toEqual(
     labels.map((l) => [l, l]),
   );
+  for (const t of tabs) expect(t.textContent).toBe("");
+  // A separator between the worktree's, the repository's and the history's.
+  expect(
+    [...rail.children].map((c) =>
+      c.classList.contains("panel-rail-separator") ? "|" : c.getAttribute("aria-label"),
+    ),
+  ).toEqual(["Files", "Diff", "Scripts", "|", "PRs", "Actions", "|", "Sessions"]);
   for (const l of labels) expect(screen.getByRole("tab", { name: l })).toBeDefined();
   // The agent's browser has a tab of its own (25.2), whatever its setting.
   act(() => {
@@ -675,6 +684,103 @@ test("each panel tab keeps its label as its accessible name and title", () => {
     });
   });
   expect(screen.queryByRole("tab", { name: "Browser" })).toBeNull();
+});
+
+/** The view the rail, the bar's title and the shown region agree on. */
+const shownView = () => {
+  const selected = screen
+    .getAllByRole("tab")
+    .filter((t) => t.getAttribute("aria-selected") === "true");
+  expect(selected).toHaveLength(1);
+  const label = selected[0]?.getAttribute("aria-label") as string;
+  expect(document.querySelector(".panel-title")?.textContent).toBe(label);
+  expect(screen.getByRole("region", { name: label })).toBeDefined();
+  return label;
+};
+
+/** The panel on the Files view of a shown repository. */
+function panelOnFiles() {
+  panel();
+  act(() => {
+    select(shop.id);
+    setPanelView("files");
+  });
+}
+
+test("the rail and the bar's title follow a view selected from outside (25.3)", () => {
+  panelOnFiles();
+  expect(shownView()).toBe("Files");
+  act(() => setPanelView("pulls"));
+  expect(shownView()).toBe("PRs");
+  act(() => setPanelView("actions"));
+  expect(shownView()).toBe("Actions");
+});
+
+test("the rail is one Tab stop: only the selected icon takes it, and a click moves it", () => {
+  panelOnFiles();
+  const stops = () =>
+    screen
+      .getAllByRole("tab")
+      .filter((t) => t.getAttribute("tabindex") === "0")
+      .map((t) => t.getAttribute("aria-label"));
+  expect(stops()).toEqual(["Files"]);
+  expect(
+    screen
+      .getAllByRole("tab")
+      .filter((t) => t.getAttribute("tabindex") === "-1")
+      .map((t) => t.getAttribute("aria-label")),
+  ).toEqual(["Diff", "Scripts", "PRs", "Actions", "Sessions"]);
+  fireEvent.click(screen.getByRole("tab", { name: "PRs" }));
+  expect(stops()).toEqual(["PRs"]);
+  expect(shownView()).toBe("PRs");
+});
+
+test("↑/↓, Home and End move along the rail, selecting and focusing, and wrap around", () => {
+  panelOnFiles();
+  const press = (key: string) => {
+    const event = new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true });
+    act(() => {
+      (document.activeElement as HTMLElement).dispatchEvent(event);
+    });
+    return event.defaultPrevented;
+  };
+  const on = (label: string) => {
+    expect(shownView()).toBe(label);
+    expect(document.activeElement?.getAttribute("aria-label")).toBe(label);
+  };
+  screen.getByRole("tab", { name: "Files" }).focus();
+  expect(press("ArrowDown")).toBe(true);
+  on("Diff");
+  press("ArrowDown");
+  on("Scripts");
+  press("ArrowUp");
+  on("Diff");
+  press("End");
+  on("Sessions");
+  press("ArrowDown");
+  on("Files");
+  press("ArrowUp");
+  on("Sessions");
+  press("Home");
+  on("Files");
+  // Any other key stays with whoever else wants it, and moves nothing.
+  expect(press("ArrowRight")).toBe(false);
+  on("Files");
+});
+
+test("a folder project's rail moves along its two icons (25.3)", () => {
+  panel();
+  act(() => {
+    apply({ type: "projects", projects: [shop, MOCK_FOLDER] });
+    select(MOCK_FOLDER.id);
+  });
+  expect(document.querySelectorAll(".panel-rail-separator")).toHaveLength(1);
+  const files = screen.getByRole("tab", { name: "Files" });
+  files.focus();
+  fireEvent.keyDown(files, { key: "ArrowDown" });
+  expect(shownView()).toBe("Sessions");
+  fireEvent.keyDown(document.activeElement as HTMLElement, { key: "ArrowDown" });
+  expect(shownView()).toBe("Files");
 });
 
 test("a folder project's panel has its files and sessions only, and asks for no changes", () => {

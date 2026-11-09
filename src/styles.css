@@ -551,40 +551,52 @@ label:has(> input[type="checkbox"]:disabled) {
   min-width: 0;
 }
 
-.panel-views {
-  flex: 1;
+/* The panel's view switcher (25.3): icons on its outer edge, the same at every width. */
+.panel-rail {
+  grid-area: rail;
   display: flex;
-  gap: 2px;
-  height: 100%;
-  align-items: stretch;
+  flex-direction: column;
+  border-left: 1px solid var(--border);
 }
 
-.panel-views [role="tab"] {
+.panel-rail [role="tab"] {
+  flex: none;
   display: flex;
   align-items: center;
-  gap: 5px;
-  padding: 0 8px;
-  font-size: var(--fs-small);
-  border-bottom: 2px solid transparent;
+  justify-content: center;
+  height: var(--bar-h);
+  border-left: 2px solid transparent;
+  border-right: 2px solid transparent;
   color: var(--text-3);
 }
 
-@container (width < 400px) {
-  .panel-views .tab-label {
-    display: none;
-  }
-}
-
-.panel-views [role="tab"]:hover {
+.panel-rail [role="tab"]:hover {
   color: var(--text);
 }
 
-.panel-views [role="tab"][aria-selected="true"] {
+.panel-rail [role="tab"][aria-selected="true"] {
   color: var(--text);
-  border-bottom-color: var(--accent);
+  border-left-color: var(--accent);
+  background: var(--hover);
+}
+
+.panel-rail-separator {
+  flex: none;
+  align-self: center;
+  width: 16px;
+  height: 1px;
+  margin: 3px 0;
+  background: var(--border);
+}
+
+.panel-title {
+  color: var(--text);
+  font-weight: 500;
 }
 
 .panel-view {
+  grid-area: view;
+  min-width: 0;
   flex: 1;
   min-height: 0;
   display: flex;
@@ -882,16 +894,16 @@ label:has(> input[type="checkbox"]:disabled) {
 .right-panel {
   position: relative;
   flex: none;
-  display: flex;
-  flex-direction: column;
+  display: grid;
+  grid-template:
+    "bar rail" var(--bar-h)
+    "view rail" minmax(0, 1fr) / minmax(0, 1fr) 36px;
   background: var(--panel);
   border-left: 1px solid var(--border);
 }
 
 .right-panel > .bar {
-  /* 10.4: the tabs drop their labels when the panel is too narrow for them. On the bar, not the
-     panel: a container is the containing block of fixed descendants (the panel's menus). */
-  container-type: inline-size;
+  grid-area: bar;
   gap: 8px;
   padding: 0 6px 0 12px;
   border-bottom: 1px solid var(--border);
@@ -1439,7 +1451,7 @@ div.media-view {
 }
 
 .right-panel-empty {
-  flex: 1;
+  grid-area: view;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -4071,11 +4083,17 @@ fieldset.new-account {
   max-width: 60%;
 }
 
-.pulls-updated {
-  flex: 1;
+/* The repository's name shortens too (25.3), so "Updated …" reads whole at the panel's narrowest. */
+.pulls-bar > .link,
+.pulls-bar > span:not(.pulls-updated) {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pulls-updated {
+  flex: 1 0 auto;
   white-space: nowrap;
   color: var(--text-3);
   font-size: var(--fs-meta);
@@ -4526,17 +4544,24 @@ button.link:hover {
 }
 
 .scripts-ports {
+  flex: none;
   display: flex;
+  /* At the panel's narrowest (25.3) its items take a second line, each whole. */
+  flex-wrap: wrap;
   align-items: center;
-  gap: 8px;
+  gap: 2px 8px;
   min-height: 28px;
-  padding: 0 12px;
+  padding: 2px 12px;
   border-bottom: 1px solid var(--border-subtle);
   font-size: var(--fs-meta);
   color: var(--text-3);
+  white-space: nowrap;
 }
 
-.scripts-preview-toggle {
+/* Not the right panel's 24 px icon width: "Preview" would spill past its padding. */
+.scripts-ports .scripts-preview-toggle {
+  flex: none;
+  width: auto;
   margin-left: auto;
 }
 

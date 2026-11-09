@@ -8,6 +8,8 @@ import {
   openModal,
   panelWorktree,
   select,
+  setPanelView,
+  setRightPanel,
   showBrowserTab,
   spaceProjects,
   treeAgents,
@@ -19,7 +21,7 @@ import { reviewTarget, sendReview } from "../viewer/review";
 import { composing, isMac, keyText } from "../window";
 import { askRemoveProject } from "./ConfirmDialog";
 import { ICON, SearchIcon, STATE_LABEL } from "./icons";
-import { leaveFile, SEARCH_DELAY_MS } from "./RightPanel";
+import { leaveFile, panelViews, SEARCH_DELAY_MS } from "./RightPanel";
 
 // The command palette (Ctrl+Shift+P, 6.3): one filtered list of commands, agents and worktrees,
 // and the lines of the selected worktree's files holding the typed text.
@@ -105,6 +107,16 @@ export function paletteCommands(s: HiveState): PaletteItem[] {
         run: () => showOpenFailure(runScript(worktree.path, script)),
       });
     }
+  }
+  // As the rail's icons (25.3): the views the shown place has; each opens the panel on it.
+  for (const { view, label } of panelViews(place?.project)) {
+    extra.push({
+      label: `Show ${label}`,
+      run: () => {
+        setPanelView(view);
+        setRightPanel("files");
+      },
+    });
   }
   if (!("why" in reviewTarget(s))) extra.push({ label: "Send review", run: sendReview });
   // As the app menu's item (23.5): only macOS has an app to remove; Windows keeps its own
