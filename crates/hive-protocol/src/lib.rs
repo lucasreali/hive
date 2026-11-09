@@ -152,11 +152,24 @@ pub enum Role {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Control {
-    /// First message from every client.
+    /// First message from every client. `keep_secs` and `app_id` (26.15) are optional, so
+    /// protocol 1 stays compatible, and are left out when absent: the local app sends neither.
+    /// `keep_secs`: how long the service keeps its terminals after this app connection ends
+    /// without `Bye { end: true }` (absent: they end with it, #18). `app_id`: a random id per
+    /// app launch, so a new connection of the same app takes over a stale one.
     Hello {
         protocol: u32,
         version: String,
         role: Role,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        keep_secs: Option<u64>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        app_id: Option<String>,
+    },
+    /// App → service (26.15): the app is going. `end: true` ends every terminal at once, as
+    /// #18; `end: false` keeps them for the connection's `keep_secs`, as a dropped link does.
+    Bye {
+        end: bool,
     },
     /// Handshake accepted. `distro` is the service's WSL distribution (`WSL_DISTRO_NAME`);
     /// optional, so adding it kept protocol 1 compatible. `warning` says why the service still
@@ -1298,6 +1311,8 @@ impl Control {
             protocol: PROTOCOL_VERSION,
             version: version.to_owned(),
             role,
+            keep_secs: None,
+            app_id: None,
         }
     }
 }
@@ -2469,9 +2484,46 @@ mod tests {
             Control::Hello {
                 protocol: PROTOCOL_VERSION,
                 version: "0.1.0".into(),
-                role: Role::App
+                role: Role::App,
+                keep_secs: None,
+                app_id: None,
             }
         );
+    }
+
+    #[test]
+    fn hello_round_trips_with_and_without_the_remote_fields() {
+        let round_trip = |msg: &Control| {
+            let mut buf = encode(Frame::control(0, msg));
+            FrameCodec.decode(&mut buf).unwrap().unwrap().to_control()
+        };
+        // Without them (the local app), the JSON is protocol 1's as before 26.15.
+        let local = Control::hello(Role::App, "0.1.0");
+        assert_eq!(
+            &Frame::control(0, &local).payload[..],
+            br#"{"type":"hello","protocol":1,"version":"0.1.0","role":"app"}"#
+        );
+        assert_eq!(round_trip(&local).unwrap(), local);
+        // With them (a remote link).
+        let remote = Control::Hello {
+            protocol: PROTOCOL_VERSION,
+            version: "0.1.0".into(),
+            role: Role::App,
+            keep_secs: Some(86_400),
+            app_id: Some("a1".into()),
+        };
+        assert_eq!(
+            &Frame::control(0, &remote).payload[..],
+            br#"{"type":"hello","protocol":1,"version":"0.1.0","role":"app","keep_secs":86400,"app_id":"a1"}"#
+        );
+        assert_eq!(round_trip(&remote).unwrap(), remote);
+        // The goodbye, both ways.
+        for end in [true, false] {
+            let bye = Control::Bye { end };
+            assert_eq!(round_trip(&bye).unwrap(), bye);
+        }
+        let bye = Frame::control(0, &Control::Bye { end: true });
+        assert_eq!(&bye.payload[..], br#"{"type":"bye","end":true}"#);
     }
 
     #[test]

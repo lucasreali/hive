@@ -29,6 +29,7 @@ macro_rules! sort {
 sort! {
     sent:
         Hello
+        | Bye
         | OpenTerminal
         | Resize
         | CloseTerminal
