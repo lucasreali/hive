@@ -379,7 +379,7 @@ mod tests {
         let path = std::env::var_os("PATH");
         let shell = crate::terminal::login::user_shell(path.as_deref());
         let default = crate::terminal::login::DEFAULT_SHELL;
-        assert_eq!(login, shell.unwrap_or_else(|| default.into()));
+        assert_eq!(login, shell.unwrap_or(OsString::from(default)));
         #[cfg(target_os = "linux")]
         assert_eq!(
             crate::terminal::login::user_shell(path.as_deref()),

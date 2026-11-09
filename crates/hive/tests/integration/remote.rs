@@ -21,7 +21,7 @@ fn script(dir: &Path, name: &str, body: &str) {
 fn dir_of(name: &str) -> PathBuf {
     std::env::split_paths(&std::env::var_os("PATH").unwrap())
         .find(|dir| dir.join(name).is_file())
-        .unwrap_or_else(|| panic!("no {name} on PATH"))
+        .expect("the program is on PATH")
 }
 
 /// Starts a remote service whose `$SHELL` is `shell` (unset when none), its login file `file`
