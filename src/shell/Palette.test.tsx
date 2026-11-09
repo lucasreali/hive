@@ -173,6 +173,18 @@ test("a view's palette command opens the panel on it, with no shortcut (25.3)", 
   expect(useHive.getState().panelView).toBe("changes");
 });
 
+test("the toggle's palette command says it shows or hides the view (26.12)", () => {
+  render(<App />);
+  const toggle = paletteCommands(useHive.getState()).find(
+    (c) => c.label === "Show or hide the side panel's view",
+  );
+  act(() => toggle?.run());
+  expect(useHive.getState().rightPanel).toBeNull();
+  expect(screen.getByRole("tablist", { name: "Panel" })).toBeDefined();
+  act(() => toggle?.run());
+  expect(useHive.getState().rightPanel).toBe("files");
+});
+
 test("a group can be removed from the palette, not its projects; their worktrees open it", () => {
   const [group, backend] = MOCK_GROUP as [Project, Project];
   render(<App />);

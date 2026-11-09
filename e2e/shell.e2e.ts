@@ -21,11 +21,15 @@ test("app shell renders with bundled fonts and toggles the right panel", async (
   // The side panel starts open (4.21).
   await expect(page.getByRole("complementary", { name: "Side panel" })).toBeVisible();
   await page.screenshot({ path: "target/e2e/shell-right-panel.png" });
-  await page.getByTitle(keyLabel("Collapse (Ctrl+Shift+B)")).click();
-  await expect(page.getByRole("complementary")).toHaveCount(0);
+  // The terminal bar has no button for it (26.12); the X closes the view, the rail stays.
+  await expect(page.getByTitle(/Files, diff and sessions/)).toHaveCount(0);
+  const panel = page.getByRole("complementary", { name: "Side panel" });
+  await page.getByTitle(keyLabel("Close (Ctrl+Shift+B)")).click();
+  await expect(panel.locator(".panel-title")).toHaveCount(0);
+  await expect(panel.getByRole("tablist", { name: "Panel" })).toBeVisible();
   await page.screenshot({ path: "target/e2e/shell.png" });
-  await page.getByTitle(keyLabel("Files, diff and sessions (Ctrl+Shift+B)")).click();
-  await expect(page.getByRole("complementary", { name: "Side panel" })).toBeVisible();
+  await panel.getByRole("tab", { name: "Files" }).click();
+  await expect(panel.locator(".panel-title")).toBeVisible();
 
   expect(external).toEqual([]);
 });

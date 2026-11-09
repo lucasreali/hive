@@ -127,7 +127,7 @@ A program in Hive's terminals, such as Claude Code's Computer Use, gets its macO
 | Worktree picker → new terminal | Ctrl+Shift+T | ⇧⌘T |
 | Split terminal | Ctrl+Shift+D | ⇧⌘D |
 | New worktree | Ctrl+Shift+N | ⇧⌘N |
-| Side panel (files, diff, sessions) | Ctrl+Shift+B | ⇧⌘B |
+| Side panel's view (files, diff, sessions) | Ctrl+Shift+B | ⇧⌘B |
 | Add project | Ctrl+Shift+O | ⇧⌘O |
 | Send the selected lines to the terminal | Ctrl+Shift+L | ⇧⌘L |
 | Copy / paste in the terminal | Ctrl+Shift+C / Ctrl+Shift+V | ⌘C / ⌘V |

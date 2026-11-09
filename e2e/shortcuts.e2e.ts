@@ -52,14 +52,18 @@ test("shortcuts: taken with the focus in a terminal; every other key reaches it"
   const typed = mac ? ["a", "b", "\x0f", "\x14"] : ["a", "b", "\x0f", "\x1bb", "\x14"];
   await expect.poll(writes).toEqual(typed);
 
-  // Ctrl+Shift+B toggles the side panel (open by default), and never reaches the terminal.
+  // Ctrl+Shift+B toggles the side panel's view (open by default), and never reaches the terminal.
   const panel = page.getByRole("complementary", { name: "Side panel" });
-  await expect(panel).toBeVisible();
+  const view = panel.locator(".panel-title");
+  const rail = panel.getByRole("tablist", { name: "Panel" });
+  await expect(view).toBeVisible();
   await page.keyboard.press(`${mod}+Shift+B`);
-  await expect(panel).toBeHidden();
+  await expect(view).toBeHidden();
+  await expect(rail).toBeVisible();
   await input.focus();
   await page.keyboard.press(`${mod}+Shift+B`);
-  await expect(panel).toBeVisible();
+  await expect(view).toBeVisible();
+  await expect(rail).toBeVisible();
 
   // F8: no agent is pending, so nothing happens and nothing reaches the shell.
   await input.focus();

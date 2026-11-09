@@ -22,7 +22,6 @@ import {
   TableIcon as PhosphorTableIcon,
   QuestionIcon,
   ShieldWarningIcon,
-  SidebarSimpleIcon,
   SquareIcon,
   StopCircleIcon,
   TerminalWindowIcon,
@@ -70,7 +69,6 @@ export const PlusIcon = ({ size = 12 }: { size?: number }) => (
 export const CheckIcon = () => <PhosphorCheckIcon size={12} aria-hidden="true" />;
 
 // The right panel's toggle: Phosphor's sidebar, mirrored so the panel is on the right.
-export const PanelIcon = () => <SidebarSimpleIcon {...ICON} mirrored />;
 
 export const ChevronIcon = ({ open }: { open: boolean }) => (
   <CaretRightIcon
