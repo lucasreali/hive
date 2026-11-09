@@ -579,9 +579,9 @@ test("the file tab's and the pane header's menu split, replace and close; Replac
   fireEvent.contextMenu(pane(a).querySelector(".file-view-body") as HTMLElement);
   expect(screen.queryByRole("menu", { name: "File" })).toBeNull();
 
-  // Replace with ▸ lists the worktree's other tabs, files too; the pointer opens it.
+  // Replace with ▸ lists the worktree's other tabs, files too.
   fireEvent.contextMenu(fileTab("b.ts"));
-  fireEvent.pointerEnter(screen.getByRole("menuitem", { name: "Replace with" }));
+  fireEvent.click(screen.getByRole("menuitem", { name: "Replace with" }));
   const sub = within(screen.getByRole("menu", { name: "Replace with" }));
   expect(sub.getAllByRole("menuitem").map((i) => i.textContent)).toEqual([
     `${fixLogin.name} (tab 1)`,

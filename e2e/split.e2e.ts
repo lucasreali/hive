@@ -227,13 +227,13 @@ test("a file in a pair (25.1): dragged onto a pane, through the menu, edited and
   await expect.poll(() => screen(page, 1)).toBe("mock$ left");
   await expect(file.locator(".cm-content")).toContainText("mine ");
 
-  // A terminal replaced by a file through the pane menu, its item opened by the pointer.
+  // A terminal replaced by a file through the pane menu.
   await openFile(page, "notes.txt");
   await expect.poll(() => panes(page)).toEqual(["notes.txt"]);
   await readme.click();
   await expect.poll(() => panes(page)).toEqual([1, "README.md"]);
   await page.locator('.terminal-pane[data-terminal="1"]').click({ button: "right" });
-  await page.getByRole("menuitem", { name: "Replace with" }).hover();
+  await page.getByRole("menuitem", { name: "Replace with" }).click();
   const sub = page.getByRole("menu", { name: "Replace with" });
   await sub.getByRole("menuitem", { name: "notes.txt" }).click();
   await expect.poll(() => panes(page)).toEqual(["notes.txt", "README.md"]);
@@ -254,12 +254,10 @@ test("a file in a pair (25.1): dragged onto a pane, through the menu, edited and
   // Its Save button, in the pane without the focus: a click there saves that one.
   await other.getByRole("button", { name: "Save" }).click();
   await expect(unsaved()).toHaveCount(0);
-  await page.screenshot({ path: test.info().outputPath("two-files.png") });
 
-  // Back to a terminal beside a file, through the file tab's own menu, for the look.
+  // Back to a terminal beside a file, through the file tab's own menu.
   await tabs.getByRole("tab", { name: /^notes\.txt/ }).click({ button: "right" });
   await page.getByRole("menuitem", { name: "Replace with" }).click();
   await page.getByRole("menu", { name: "Replace with" }).getByRole("menuitem").first().click();
   await expect.poll(() => panes(page)).toEqual([1, "README.md"]);
-  await page.screenshot({ path: test.info().outputPath("terminal-file.png") });
 });

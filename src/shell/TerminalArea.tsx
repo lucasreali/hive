@@ -426,8 +426,7 @@ function replacements(s: HiveState, tab: PaneId): (PaneId | string)[] | null {
 
 /**
  * For tab `tab` in a pair (20.5): "Replace with ▸", a submenu of its worktree's other tabs,
- * terminals and files (25.1), one of which takes its pane, opened by a click, ▸ or the pointer;
- * and "Swap sides".
+ * terminals and files (25.1), one of which takes its pane; and "Swap sides".
  */
 function PairItems({ tab, onClose }: { tab: PaneId; onClose: () => void }) {
   const others = useHive(useShallow((s) => replacements(s, tab)));
@@ -443,8 +442,7 @@ function PairItems({ tab, onClose }: { tab: PaneId; onClose: () => void }) {
           aria-expanded={open}
           disabled={others.length === 0}
           title={others.length === 0 ? "No other tab in this worktree" : undefined}
-          onClick={() => setOpen(true)}
-          onPointerEnter={() => setOpen(true)}
+          onClick={() => setOpen(!open)}
           onKeyDown={(e) => {
             if (e.key !== "ArrowRight") return;
             e.preventDefault();
