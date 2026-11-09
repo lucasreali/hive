@@ -260,12 +260,13 @@ Done once. The certificate is Hive's identity for macOS: its designated requirem
    scripts/macos-bundle.sh new-certificate ~/hive-certificate
    ```
 
-   It prints the certificate's SHA-1 and leaves `certificate.p12` and `password` in the folder.
-2. Add three secrets to the repository's `release` environment (GitHub: Settings → Environments → release):
+   It prints the certificate's SHA-1 and leaves `certificate.p12` and `password` in the folder, readable only by you.
+2. Before adding any secret, restrict the `release` environment to release tags (GitHub: Settings → Environments → release → Deployment branches and tags → Selected branches and tags → add the tag rule `v*`). Without this, any pushed branch could add `environment: release` to a workflow, or dispatch its own `release.yml`, and read a key that is valid for twenty years. The rule also protects the updater's signing key, which lives in the same environment.
+3. Add three secrets to the `release` environment:
    - `HIVE_CERTIFICATE`: the `.p12` in base64, `base64 -i ~/hive-certificate/certificate.p12 | pbcopy`
    - `HIVE_CERTIFICATE_PASSWORD`: `pbcopy < ~/hive-certificate/password`
    - `HIVE_CERTIFICATE_SHA1`: the SHA-1 it printed
-3. Move the folder to a safe place, such as a password manager, and delete it here.
+4. Move the folder to a safe place, such as a password manager, and delete it here.
 
 The next release signs with it (its run shows no ad-hoc warning, and `scripts/macos-bundle.sh check --self-signed` verifies the signature is this certificate's) and its notes tell users to allow Hive one last time. To see it on an installed app: `codesign -d -r- /Applications/Hive.app` names `certificate root` or `certificate leaf` with that SHA-1.
 

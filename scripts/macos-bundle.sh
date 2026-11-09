@@ -57,8 +57,13 @@ sign_hive() {
 
 # Twenty years: a new certificate is a new identity, and every macOS grant is asked again.
 new_certificate() {
-  local folder=$1 name="Hive Self-Signed" sha1
-  mkdir -m 700 "$folder" || die "cannot make a new folder: $folder"
+  umask 077
+  local name="Hive Self-Signed" sha1
+  certificate_folder=$1
+  mkdir -m 700 "$certificate_folder" || die "cannot make a new folder: $certificate_folder"
+  local folder=$certificate_folder
+  # Set only now: an existing folder is not ours to clean. A global, as the trap runs at exit.
+  trap 'rm -f "$certificate_folder/key.pem" "$certificate_folder/certificate.pem"' EXIT
   # The system's LibreSSL: a Homebrew OpenSSL 3 writes a .p12 `security import` refuses.
   /usr/bin/openssl req -x509 -newkey rsa:2048 -nodes -days 7300 -subj "/CN=$name" \
     -keyout "$folder/key.pem" -out "$folder/certificate.pem" \
@@ -68,9 +73,7 @@ new_certificate() {
   /usr/bin/openssl pkcs12 -export -inkey "$folder/key.pem" -in "$folder/certificate.pem" \
     -out "$folder/certificate.p12" -name "$name" -passout "file:$folder/password" ||
     die "openssl could not make the .p12"
-  rm -f "$folder/key.pem"
   sha1=$(/usr/bin/openssl x509 -in "$folder/certificate.pem" -noout -fingerprint -sha1)
-  rm -f "$folder/certificate.pem"
   sha1=${sha1#*=}
   echo "${sha1//:/}"
 }

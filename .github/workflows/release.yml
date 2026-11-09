@@ -121,8 +121,8 @@ jobs:
     # hardened runtime, and Tauri notarizes and staples the app (App Store Connect API key); else
     # with Hive's self-signed certificate (the HIVE_CERTIFICATE* secrets), so macOS's grants survive
     # updates; else ad-hoc, with a warning. Each secret reaches only the steps that need it, and only
-    # after every dependency is built (`--no-bundle`), so no build script runs with them or with the
-    # unlocked keychain.
+    # after every dependency is built (`--no-bundle`), so a build script that has exited never saw
+    # them or the unlocked keychain; a process one left running could still reach that keychain.
     outputs:
       signing: ${{ steps.signing.outputs.mode }}
     env:
@@ -152,7 +152,10 @@ jobs:
           HIVE_CERTIFICATE: ${{ secrets.HIVE_CERTIFICATE }}
           HIVE_CERTIFICATE_PASSWORD: ${{ secrets.HIVE_CERTIFICATE_PASSWORD }}
           HIVE_CERTIFICATE_SHA1: ${{ secrets.HIVE_CERTIFICATE_SHA1 }}
-        run: echo "mode=$(scripts/macos-bundle.sh signing-mode)" | tee -a "$GITHUB_OUTPUT"
+        # On its own line: a partial set must stop here, which a pipe's exit status would hide.
+        run: |
+          mode=$(scripts/macos-bundle.sh signing-mode)
+          echo "mode=$mode" | tee -a "$GITHUB_OUTPUT"
       # The release does not stop: it stays as it was, and says what that costs.
       - if: steps.signing.outputs.mode == 'adhoc'
         run: echo "::warning title=Hive is signed ad-hoc::No signing certificate in the release environment, so every update loses what macOS allowed Hive (Screen Recording, Accessibility, folders). README, Signing with Hive's certificate."
@@ -171,7 +174,7 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
       # The certificate in a keychain of this job only.
-      - if: steps.signing.outputs.mode != 'adhoc'
+      - if: steps.signing.outputs.mode == 'developer-id' || steps.signing.outputs.mode == 'self-signed'
         env:
           SIGNING_CERTIFICATE: ${{ steps.signing.outputs.mode == 'developer-id' && secrets.APPLE_CERTIFICATE || secrets.HIVE_CERTIFICATE }}
           SIGNING_CERTIFICATE_PASSWORD: ${{ steps.signing.outputs.mode == 'developer-id' && secrets.APPLE_CERTIFICATE_PASSWORD || secrets.HIVE_CERTIFICATE_PASSWORD }}
@@ -222,7 +225,8 @@ jobs:
           case $MODE in
             developer-id) identity=(--developer-id) ;;
             self-signed) identity=(--self-signed "$HIVE_CERTIFICATE_SHA1") ;;
-            *) identity=() ;;
+            adhoc) identity=() ;;
+            *) echo "unknown signing mode: '$MODE'" >&2; exit 1 ;;
           esac
           scripts/macos-bundle.sh check target/release/bundle/macos/Hive.app "${identity[@]}"
       # Each dSYM's UUID is the shipped binary's (`dwarfdump --uuid`).

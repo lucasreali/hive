@@ -11,6 +11,9 @@
 #   - macos-bundle.sh (macOS only): its bundle check passes a correctly signed bundle and fails
 #     each broken one (TODO 17.11)
 # Never touches the real environment: a temporary HOME, a scratch repository outside this one.
+# The one exception is for a CI runner only, whose keychain search list is disposable: with both
+# GITHUB_ACTIONS and REQUIRE_REAL_CERTIFICATE set (macos.yml), a real certificate signs a bundle in
+# a temporary keychain put on that list. Never set both on a machine of yours.
 set -uo pipefail
 cd "$(dirname "$0")/.." || exit 1
 repo=$PWD
@@ -380,10 +383,12 @@ EOF
     '[[ $(PATH=$tmp/signer:$PATH scripts/macos-bundle.sh check "$app" 2>&1) == *"different signers"* ]]'
 
   # --- macos-bundle.sh new-certificate ------------------------------------------------------------
-  sha1=$(scripts/macos-bundle.sh new-certificate "$tmp/certificate" 2>/dev/null)
+  sha1=$(umask 022; scripts/macos-bundle.sh new-certificate "$tmp/certificate" 2>/dev/null)
   check "certificate: it prints a SHA-1" '[[ $sha1 =~ ^[0-9A-F]{40}$ ]]'
   check "certificate: only the .p12 and its password stay, in a private folder" \
     '[ "$(ls "$tmp/certificate" | xargs)" = "certificate.p12 password" ] && [ "$(stat -f %Lp "$tmp/certificate")" = 700 ]'
+  check "certificate: the .p12 and its password are private, whatever the umask" \
+    '[ "$(stat -f %Lp "$tmp/certificate/certificate.p12")" = 600 ] && [ "$(stat -f %Lp "$tmp/certificate/password")" = 600 ]'
   shown=$(/usr/bin/openssl pkcs12 -in "$tmp/certificate/certificate.p12" -nokeys \
     -passin "file:$tmp/certificate/password" 2>/dev/null |
     /usr/bin/openssl x509 -noout -fingerprint -sha1 -subject -text 2>/dev/null)
@@ -391,6 +396,16 @@ EOF
     'holds "${shown//:/}" "$sha1" "Hive Self-Signed" "Code Signing"'
   check "certificate: an existing folder fails" \
     '! scripts/macos-bundle.sh new-certificate "$tmp/certificate" 2>/dev/null'
+  check "certificate: an existing folder keeps its files" \
+    '[ "$(ls "$tmp/certificate" | xargs)" = "certificate.p12 password" ]'
+  # A failure after openssl wrote the unencrypted key: uuidgen is the next step, and can be replaced.
+  mkdir -p "$tmp/no-uuidgen"
+  printf '#!/bin/sh\nexit 1\n' >"$tmp/no-uuidgen/uuidgen"
+  chmod +x "$tmp/no-uuidgen/uuidgen"
+  check "certificate: a failure fails" \
+    '! PATH=$tmp/no-uuidgen:$PATH scripts/macos-bundle.sh new-certificate "$tmp/failed" >/dev/null 2>&1'
+  check "certificate: a failure leaves no key or certificate" \
+    '[ -d "$tmp/failed" ] && [ ! -e "$tmp/failed/key.pem" ] && [ ! -e "$tmp/failed/certificate.pem" ]'
   check "certificate: importing it outside CI fails, before any keychain" \
     '[[ $(env -u GITHUB_ACTIONS scripts/macos-bundle.sh import-certificate "$tmp/never" 2>&1) == *"CI only"* ]] && [ ! -e "$tmp/never" ]'
 
@@ -464,7 +479,7 @@ EOF
   # new-certificate made, imported as the release does, signs the bundle; unlike the wrapper's, this
   # requirement is what macOS will compare its grants with. The app is signed under the runtime as
   # Tauri does (`codesign --force -s <identity> --options runtime --entitlements`), and it still runs.
-  if [ -n "${GITHUB_ACTIONS:-}" ]; then
+  if [ -n "${GITHUB_ACTIONS:-}" ] && [ -n "${REQUIRE_REAL_CERTIFICATE:-}" ]; then
     saved_home=$HOME
     export HOME=$real_home
     keychain=$tmp/self-signed.keychain-db
@@ -483,6 +498,8 @@ EOF
       '"$app/Contents/MacOS/fake" && "$app/Contents/Resources/hive"'
     security delete-keychain "$keychain"
     export HOME=$saved_home
+  elif [ -n "${REQUIRE_REAL_CERTIFICATE:-}" ]; then
+    check "real certificate: required, but this is no CI runner" 'false'
   else
     echo "skip  real certificate: a CI runner only (it needs the keychain search list)"
   fi
