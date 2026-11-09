@@ -25,10 +25,9 @@ test("a plain folder is a folder project: its files, no diff, then git init make
   await tree.getByRole("button", { name: "notes", exact: true }).click();
   const panel = page.getByRole("complementary", { name: "Side panel" });
   const tabs = panel.getByRole("tablist", { name: "Panel" }).getByRole("tab");
-  expect(await tabs.evaluateAll((all) => all.map((t) => t.getAttribute("aria-label")))).toEqual([
-    "Files",
-    "Sessions",
-  ]);
+  await expect
+    .poll(() => tabs.evaluateAll((all) => all.map((t) => t.getAttribute("aria-label"))))
+    .toEqual(["Files", "Sessions"]);
   await expect(panel.getByRole("treeitem", { name: "todo.md" })).toBeVisible();
   await page.screenshot({ path: "target/e2e/folder-project.png" });
 
