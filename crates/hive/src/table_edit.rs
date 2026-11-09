@@ -136,18 +136,23 @@ impl Record {
 /// and what follows it, up to the delimiter, is plain; a quote elsewhere is plain; `\r`, `\n` or
 /// `\r\n` end a row, a run of them is one row's ending and blank lines; a UTF-8 byte order mark
 /// is left out.
+///
+/// Each loop is bounded by the input, so that no mistake in a step can make it endless: a row
+/// takes a byte at least, and a cell but the last one its delimiter.
 fn scan(text: &[u8], delimiter: u8) -> Vec<Record> {
     let mut at = if text.starts_with(BOM) { BOM.len() } else { 0 };
     let mut records = Vec::new();
-    loop {
-        while matches!(text.get(at), Some(&(CR | LF))) {
-            at += 1;
-        }
+    for _ in 0..text.len() {
+        at += text
+            .iter()
+            .skip(at)
+            .take_while(|&&b| b == CR || b == LF)
+            .count();
         if at == text.len() {
-            return records;
+            break;
         }
         let mut cells = Vec::new();
-        loop {
+        for _ in 0..=text.len() {
             let end = cell_end(text, at, delimiter);
             cells.push(at..end);
             at = end;
@@ -170,30 +175,26 @@ fn scan(text: &[u8], delimiter: u8) -> Vec<Record> {
             next: at,
         });
     }
+    records
 }
 
-/// Past the cell starting at `at`: on the delimiter, a line ending or the end of `text`.
-fn cell_end(text: &[u8], mut at: usize, delimiter: u8) -> usize {
+/// Past the cell starting at `start`: on the delimiter, a line ending or the end of `text`.
+fn cell_end(text: &[u8], start: usize, delimiter: u8) -> usize {
+    let mut at = start;
     if text.get(at) == Some(&QUOTE) {
-        at += 1;
-        // Up to a quote that is not doubled, or the end of the text.
-        while let Some(&byte) = text.get(at) {
+        // Its quotes end at the first byte after an odd run of quotes (doubled ones pair up), or
+        // with the text.
+        let mut odd = false;
+        let closed = text.iter().enumerate().skip(at + 1).find(|&(_, &byte)| {
             if byte == QUOTE {
-                at += 1;
-                if text.get(at) != Some(&QUOTE) {
-                    break;
-                }
+                odd = !odd;
             }
-            at += 1;
-        }
+            byte != QUOTE && odd
+        });
+        at = closed.map_or(text.len(), |(after, _)| after);
     }
-    while let Some(&byte) = text.get(at) {
-        if byte == delimiter || byte == CR || byte == LF {
-            break;
-        }
-        at += 1;
-    }
-    at
+    let plain = |&&byte: &&u8| byte != delimiter && byte != CR && byte != LF;
+    at + text.iter().skip(at).take_while(plain).count()
 }
 
 /// `value` as a cell of the file: in quotes only when it holds the delimiter, a quote or a line
