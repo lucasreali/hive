@@ -123,6 +123,12 @@ impl Browsers {
         })
     }
 
+    /// A new browser of `worktree`: nothing of the last one's is shown any more.
+    fn started_anew(&mut self, worktree: &str) {
+        self.shown.remove(worktree);
+        self.stopped.retain(|w| w != worktree);
+    }
+
     /// `worktree`'s browser stopped: what it showed is kept, within [`MAX_STOPPED`].
     fn stopped(&mut self, worktree: &str) {
         self.stopped.retain(|w| w != worktree);
@@ -218,9 +224,7 @@ impl State {
         };
         browsers.errors.remove(&worktree);
         browsers.running.insert(worktree.clone(), running);
-        // A new browser: nothing of the last one's is shown any more.
-        browsers.shown.remove(&worktree);
-        browsers.stopped.retain(|w| *w != worktree);
+        browsers.started_anew(&worktree);
         if browsers.watched.as_ref() == Some(&worktree) {
             browsers.command(&worktree, Command::Watch(true));
         }
@@ -529,11 +533,17 @@ mod tests {
     use super::super::test_state;
     use super::*;
 
+    /// A program that ends at once.
+    #[cfg(not(windows))]
+    const ENDS: (&str, [&str; 2]) = ("/bin/sh", ["-c", "exit 0"]);
+    #[cfg(windows)]
+    const ENDS: (&str, [&str; 2]) = ("cmd", ["/c", "exit 0"]);
+
     /// A browser `id` of a worktree, for what happens around it: its program has ended.
     async fn running(id: u64) -> (Running, mpsc::UnboundedReceiver<Command>) {
         let (commands, received) = mpsc::unbounded_channel();
-        let mut sh = tokio::process::Command::new("/bin/sh");
-        let child = sh.args(["-c", "exit 0"]).spawn().unwrap();
+        let mut program = tokio::process::Command::new(ENDS.0);
+        let child = program.args(ENDS.1).spawn().unwrap();
         let profile = std::env::temp_dir().join(format!("hive-test-no-profile-{id}"));
         let running = Running {
             id,
@@ -633,6 +643,19 @@ mod tests {
             None
         );
         assert_eq!(browsers.shown["/r"].frame.as_deref(), Some("NEW"));
+    }
+
+    #[test]
+    fn a_new_browser_takes_only_its_own_worktrees_place_among_the_stopped() {
+        let mut browsers = Browsers::default();
+        for worktree in ["/a", "/b"] {
+            browsers.shown(worktree).frame = Some("A".into());
+            browsers.stopped(worktree);
+        }
+        browsers.started_anew("/a");
+        assert_eq!(browsers.stopped, ["/b"]);
+        assert!(!browsers.shown.contains_key("/a"));
+        assert!(browsers.shown.contains_key("/b"));
     }
 
     #[test]
