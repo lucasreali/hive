@@ -2156,6 +2156,9 @@ pub struct AgentEvent {
 pub struct Subagent {
     pub id: String,
     pub agent_type: Option<String>,
+    /// An agent team teammate's name (`teammate_name`), made fit to show and bounded by the
+    /// adapter.
+    pub teammate_name: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -2186,6 +2189,8 @@ pub enum EventKind {
     },
     SubagentStarted,
     SubagentStopped,
+    /// An agent team teammate ended its turn and stays alive (`TeammateIdle`).
+    TeammateIdled,
     /// Compaction of the conversation began (`PreCompact`).
     CompactStarted,
     /// Compaction ended (`PostCompact`).
@@ -2321,6 +2326,9 @@ impl Alert {
 pub struct SubagentState {
     pub id: String,
     pub agent_type: Option<String>,
+    /// An agent team teammate's name, once a hook said it; the line shows it over `agent_type`.
+    #[serde(default)]
+    pub teammate_name: Option<String>,
     pub state: AgentState,
     /// The worktree it works in when that is its own (not its agent's): the worktree's id,
     /// shown nested under the subagent instead of at project level (#22).
@@ -2516,6 +2524,7 @@ mod tests {
             subagents: vec![SubagentState {
                 id: "a".into(),
                 agent_type: None,
+                teammate_name: None,
                 state: AgentState::WithSubagents,
                 worktree: Some("/r/.claude/worktrees/w".into()),
                 activity: Some("Reading a.rs".into()),
@@ -2526,7 +2535,7 @@ mod tests {
         };
         assert_eq!(
             &Frame::control(1, &msg).payload[..],
-            br#"{"type":"agent_state","id":"s","state":"waiting_permission","urgency":8,"pending":true,"interrupted":false,"alert":"action","notify":true,"subagents":[{"id":"a","agent_type":null,"state":"with_subagents","worktree":"/r/.claude/worktrees/w","activity":"Reading a.rs","since_ms":7}],"activity":null,"since_ms":5}"#
+            br#"{"type":"agent_state","id":"s","state":"waiting_permission","urgency":8,"pending":true,"interrupted":false,"alert":"action","notify":true,"subagents":[{"id":"a","agent_type":null,"teammate_name":null,"state":"with_subagents","worktree":"/r/.claude/worktrees/w","activity":"Reading a.rs","since_ms":7}],"activity":null,"since_ms":5}"#
         );
         assert_eq!(Frame::control(1, &msg).to_control().unwrap(), msg);
         // An older service's `writing` (24.11) is an unknown key now, and ignored.

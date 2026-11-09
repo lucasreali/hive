@@ -7,6 +7,9 @@ use std::path::Path;
 /// Longest activity kept, in characters.
 const MAX_ACTIVITY: usize = 120;
 
+/// Longest teammate name kept, in characters (at most 256 bytes, the longest subagent id).
+const MAX_TEAMMATE_NAME: usize = 64;
+
 /// One adapter per agent provider (Claude Code today).
 pub trait Adapter {
     /// Translates one hook call. The raw payload is kept in the event.
@@ -35,6 +38,7 @@ impl Adapter for ClaudeCode {
             },
             "SubagentStart" => EventKind::SubagentStarted,
             "SubagentStop" => EventKind::SubagentStopped,
+            "TeammateIdle" => EventKind::TeammateIdled,
             "PreCompact" => EventKind::CompactStarted,
             "PostCompact" => EventKind::CompactFinished,
             "Elicitation" => EventKind::ElicitationRequested,
@@ -67,6 +71,9 @@ impl Adapter for ClaudeCode {
             subagent: field("agent_id").map(|id| Subagent {
                 id,
                 agent_type: field("agent_type"),
+                teammate_name: field("teammate_name")
+                    .map(|name| clip(&name, MAX_TEAMMATE_NAME))
+                    .filter(|name| !name.is_empty()),
             }),
             cwd: field("cwd"),
             kind,
@@ -206,9 +213,55 @@ mod tests {
             event.subagent,
             Some(Subagent {
                 id: "a1".into(),
-                agent_type: Some("Explore".into())
+                agent_type: Some("Explore".into()),
+                teammate_name: None,
             })
         );
+    }
+
+    #[test]
+    fn a_teammate_going_idle_is_mapped_with_its_agent_id_and_name() {
+        let event = ClaudeCode.translate(
+            "TeammateIdle",
+            None,
+            json!({"session_id": "lead", "agent_id": "t1", "teammate_name": "researcher"}),
+        );
+        assert_eq!(event.kind, EventKind::TeammateIdled);
+        assert_eq!(event.session_id.as_deref(), Some("lead"));
+        assert_eq!(
+            event.subagent,
+            Some(Subagent {
+                id: "t1".into(),
+                agent_type: None,
+                teammate_name: Some("researcher".into()),
+            })
+        );
+        // Without its `agent_id` (the docs say it may be absent) no subagent is named.
+        let bare = json!({"session_id": "lead", "teammate_name": "researcher"});
+        let event = ClaudeCode.translate("TeammateIdle", None, bare);
+        assert_eq!(event.kind, EventKind::TeammateIdled);
+        assert_eq!(event.subagent, None);
+    }
+
+    #[test]
+    fn a_teammate_name_is_untrusted_text() {
+        let name = |value: Value| {
+            let payload = json!({"agent_id": "t1", "teammate_name": value});
+            let event = ClaudeCode.translate("TeammateIdle", None, payload);
+            event.subagent.unwrap().teammate_name
+        };
+        assert_eq!(
+            name(json!(" re\u{1b}[31m\u{202E}search\n ")),
+            Some("re[31msearch".to_owned())
+        );
+        let exact = "x".repeat(MAX_TEAMMATE_NAME);
+        assert_eq!(name(json!(exact.clone())), Some(exact));
+        let cut = name(json!("y".repeat(MAX_TEAMMATE_NAME + 1))).unwrap();
+        assert_eq!(cut.chars().count(), MAX_TEAMMATE_NAME);
+        assert!(cut.ends_with("y…"));
+        // Nothing left to show, or no text at all, is no name.
+        assert_eq!(name(json!("\u{200B}\t ")), None);
+        assert_eq!(name(json!(3)), None);
     }
 
     #[test]

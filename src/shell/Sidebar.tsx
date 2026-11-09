@@ -554,8 +554,8 @@ function AgentRow({
 }
 
 /**
- * A live subagent (9.35): one quiet line under its agent with its state's icon, its type, what
- * it is doing and the time in its state. Nothing to click, select or focus. Its own worktree has
+ * A live subagent (9.35): one quiet line under its agent with its state's icon, its teammate
+ * name or else its type, what it is doing and the time in its state. Nothing to click, select or focus. Its own worktree has
  * no row (the service's `subagent_worktrees`); its path is the line's tooltip.
  */
 function SubagentLine({ sub }: { sub: Subagent }) {
@@ -563,7 +563,7 @@ function SubagentLine({ sub }: { sub: Subagent }) {
   return (
     <li className="subagent-line" title={sub.worktree ?? undefined}>
       <StateIcon state={sub.state} />
-      <span className="subagent-type">{sub.agent_type ?? "subagent"}</span>
+      <span className="subagent-type">{sub.teammate_name ?? sub.agent_type ?? "subagent"}</span>
       {sub.activity && <span className="subagent-activity">{sub.activity}</span>}
       <span className="subagent-time">{time}</span>
     </li>

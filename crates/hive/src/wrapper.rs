@@ -13,7 +13,7 @@ use serde_json::{Map, Value, json};
 use crate::paths::{Paths, canonical};
 
 /// Claude Code events Hive observes; each one runs `hive hook <event>`.
-pub const EVENTS: [&str; 15] = [
+pub const EVENTS: [&str; 16] = [
     "SessionStart",
     "UserPromptSubmit",
     "PreToolUse",
@@ -25,6 +25,7 @@ pub const EVENTS: [&str; 15] = [
     "StopFailure",
     "SubagentStart",
     "SubagentStop",
+    "TeammateIdle",
     "SessionEnd",
     "PreCompact",
     "PostCompact",
@@ -624,7 +625,7 @@ mod tests {
         let statusline =
             json!({ "type": "command", "command": "'/opt/it'\\''s hive/hive' statusline" });
         assert_eq!(settings["statusLine"], statusline);
-        assert_eq!(hooks.len(), 17);
+        assert_eq!(hooks.len(), 18);
         for event in EVENTS {
             let expected = json!([{ "hooks": [{
                 "type": "command",

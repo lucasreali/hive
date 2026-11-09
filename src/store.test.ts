@@ -276,6 +276,7 @@ test("agent states are stored as sent, before or after the agent, and go with it
   const sub = {
     id: "s1",
     agent_type: "Explore",
+    teammate_name: null,
     state: "waiting_permission",
     worktree: null,
     activity: null,

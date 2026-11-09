@@ -96,7 +96,10 @@ impl State {
         // second).
         agent.usage.due |= matches!(
             event.kind,
-            EventKind::ToolFinished { .. } | EventKind::TurnFinished | EventKind::SubagentStopped
+            EventKind::ToolFinished { .. }
+                | EventKind::TurnFinished
+                | EventKind::SubagentStopped
+                | EventKind::TeammateIdled
         );
         // Claude names a session after its first turn; a rename shows at the end of a turn.
         let turn = matches!(event.kind, EventKind::TurnFinished);
