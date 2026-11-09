@@ -39,6 +39,8 @@ import {
   diffBase,
   editOpenTable,
   type FileTarget,
+  focusFilePane,
+  type HiveState,
   isMarkdown,
   isTable,
   isWorkbook,
@@ -59,10 +61,10 @@ import {
   useHive,
   within,
 } from "../store";
-import { dropFile, fileTabState } from "../tabs";
+import { dropFile, fileTabState, paneState } from "../tabs";
 import { transport } from "../transport";
 import { useBlockEdit } from "../viewer/blockEdit";
-import { isDirty } from "../viewer/buffer";
+import { isDirty, isFor } from "../viewer/buffer";
 import { CodeView, notice } from "../viewer/CodeView";
 import { BufferNotes, EditView, saveOpenFile } from "../viewer/EditView";
 import { openInEditor } from "../viewer/external";
@@ -1031,6 +1033,10 @@ export function closeFile(f: OpenFile): void {
   else close();
 }
 
+/** What `read` reads as the pane of file `own` (25.1), or the store's for the open file. */
+const usePane = <T,>(own: OpenFile | undefined, read: (s: HiveState) => T) =>
+  useHive((s) => read(own ? paneState(s, own) : s));
+
 /**
  * The open file's header and, under it, its diff against HEAD when it is among the changes,
  * else its text (CodeMirror, `src/viewer/`), shown in the open file's tab of the terminal area
@@ -1039,31 +1045,65 @@ export function closeFile(f: OpenFile): void {
  * (Ctrl+S in the editor; its tab marks unsaved edits), and
  * "Open in external editor" hands it to Windows.
  */
-export function FileView({ worktree }: { worktree: string }) {
-  const openFile = useHive((s) => s.openFile);
+export function FileView(props: {
+  worktree: string;
+  /**
+   * The file of a pane of a pair (25.1), its side in `pane`: it reads what its tab keeps while
+   * another file is the open one, and takes the focus on a click or a key. Without it, the open
+   * file.
+   */
+  file?: OpenFile;
+  pane?: "left" | "right";
+  /** A right click on its header: the tab's menu (25.1). */
+  onMenu?: (event: MouseEvent) => void;
+}) {
+  const { worktree, file: own, pane } = props;
+  const openFile = usePane(own, (s) => s.openFile);
   const file = useHive((s) => s.changes[worktree]?.files.find((f) => f.path === openFile?.path));
-  const text = useHive((s) =>
+  const text = usePane(own, (s) =>
     s.file?.worktree === worktree && s.file.path === openFile?.path ? s.file : null,
   );
-  const unsendable = useHive((s) => {
+  const unsendable = usePane(own, (s) => {
     const target = referenceTarget(s);
     return "why" in target ? target.why : null;
   });
-  const editing = useHive((s) => s.editing);
-  const edit = useHive((s) => s.edit);
-  const editorNotice = useHive((s) => s.editorNotice);
-  const rendered = useHive(renderedShown);
-  const asTable = useHive(tableShown);
-  const table = useHive((s) =>
+  const editing = usePane(own, (s) => s.editing);
+  const edit = usePane(own, (s) => s.edit);
+  const editorNotice = usePane(own, (s) => s.editorNotice);
+  const rendered = usePane(own, renderedShown);
+  const asTable = usePane(own, tableShown);
+  const table = usePane(own, (s) =>
     s.table?.worktree === worktree && s.table.path === openFile?.path ? s.table : null,
   );
+  const live = useHive((s) => !own || (!!s.openFile && isFor(own, s.openFile)));
+  // The focus in a pair (25.1): a tab clicked in the bar brings it here, from the other pane.
+  const focused = useHive((s) => !!pane && live && s.fileShown);
+  const section = useRef<HTMLElement>(null);
+  useEffect(() => {
+    const el = section.current;
+    if (!focused || !el || el.contains(document.activeElement)) return;
+    (el.querySelector<HTMLElement>(".cm-content") ?? el).focus();
+  }, [focused]);
   if (openFile?.worktree !== worktree) return null;
   const why = text && notice(text);
   const dirty = !!edit && isDirty(edit);
   // An HTML page (24.4) shows as its text, with a Preview as Markdown's.
   const page = text?.media && isPage(text.media) ? text.media : null;
+  // Before the click it ends in: what a button acts on is the open file, this one by then.
+  const take = own && pane ? () => focusFilePane(own) : undefined;
   return (
-    <section className="file-view" aria-label={openFile.path}>
+    <section
+      ref={section}
+      className="file-view"
+      aria-label={openFile.path}
+      data-pane={pane}
+      tabIndex={pane && -1}
+      onPointerDownCapture={take}
+      onFocusCapture={take}
+      onContextMenu={(event) => {
+        if ((event.target as Element).closest(".file-view-bar")) props.onMenu?.(event);
+      }}
+    >
       <div className="file-view-bar">
         <span className="status-letter" data-status={file && STATUS[file.status].letter}>
           {file && STATUS[file.status].letter}
@@ -1147,7 +1187,7 @@ export function FileView({ worktree }: { worktree: string }) {
             <TableIcon />
           </button>
         )}
-        <CommentButton />
+        <CommentButton live={live} />
         <button
           type="button"
           className="ghost"
@@ -1217,21 +1257,24 @@ export function FileView({ worktree }: { worktree: string }) {
           </>
         )}
       </div>
-      <ReviewList worktree={worktree} />
+      {live && <ReviewList worktree={worktree} />}
     </section>
   );
 }
 
-/** ⌘S (Ctrl+S off a Mac) anywhere while a view that has no editor of its own shows. */
-function useSaveKey(save: () => void) {
-  const latest = useRef(save);
-  latest.current = save;
+/** ⌘S (Ctrl+S off a Mac) anywhere while a view with no editor of its own shows, if focused. */
+function useSaveKey(file: OpenFile, save: () => void) {
+  const latest = useRef({ file, save });
+  latest.current = { file, save };
   useEffect(() => {
     const onKeyDown = (event: globalThis.KeyboardEvent) => {
       if (!commandKey(event) || event.shiftKey || event.altKey) return;
       if (event.key.toUpperCase() !== "S") return;
+      // Only the focused pane's (25.1).
+      const s = useHive.getState();
+      if (!s.fileShown || !s.openFile || !isFor(s.openFile, latest.current.file)) return;
       event.preventDefault();
-      latest.current();
+      latest.current.save();
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
@@ -1249,7 +1292,7 @@ function EditableTable(props: {
 }) {
   const { table, text, readOnly } = props;
   const editable = !isWorkbook(table.path) && !readOnly && text?.content != null;
-  useSaveKey(() => {
+  useSaveKey(table, () => {
     const active = document.activeElement;
     if (active?.classList.contains("table-cell-input")) (active as HTMLElement).blur();
     saveOpenFile();
@@ -1272,7 +1315,7 @@ function RenderedView({ file, text }: { file: OpenFile; text: string }) {
   const { shown, used, onClick, editor } = useBlockEdit(text);
   // Its scroll kept per file, and the text's place when switched (21.3).
   const scroller = useRenderedPlace(file, shown);
-  useSaveKey(() => {
+  useSaveKey(file, () => {
     saveOpenFile();
     if (!used()) setRendered(false);
   });

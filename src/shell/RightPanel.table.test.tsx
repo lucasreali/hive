@@ -34,6 +34,7 @@ beforeAll(() => {
 });
 
 afterEach(() => {
+  mock.restore();
   cleanup();
   useHive.setState(initialState, true);
 });

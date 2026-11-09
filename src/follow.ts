@@ -1,18 +1,20 @@
 // Keep the service following what the files panel shows: the worktree it lists and the open file.
 
+import type { DiffBase } from "./protocol";
 import {
   askBufferTable,
   clearTableAsks,
   diffBase,
   dropTableAsks,
   type HiveState,
+  type OpenFile,
   panelWorktree,
   setSaveAfterAsks,
   type TableAsk,
   tableShown,
   useHive,
 } from "./store";
-import { fileTabState } from "./tabs";
+import { asideFile, fileKey, fileTabState, paneState } from "./tabs";
 import type { Transport } from "./transport";
 import { isDirty, isFor } from "./viewer/buffer";
 import { saveOpenFile } from "./viewer/save";
@@ -77,17 +79,27 @@ export function followView(transport: Transport): () => void {
  * unsubscribe.
  */
 export function followOpenFile(transport: Transport): () => void {
-  let asked: unknown[] = [];
-  const sync = (s: HiveState) => {
-    const open = s.connection.status === "connected" ? s.openFile : null;
+  const reasons = (s: HiveState, open: OpenFile | null, recheck: number) => {
     const base = open && diffBase(s, open.worktree);
     // A folder project's folder has no changes (23.1): each new listing of it stands in.
     const folder = open && s.projects?.[open.worktree]?.folder;
     const changes = open && (folder ? s.worktreeFiles : s.changesSeen[open.worktree]);
-    const reasons = [open, changes, base, s.connection, s.edit?.recheck ?? 0];
-    if (reasons.every((reason, i) => reason === asked[i])) return;
-    asked = reasons;
-    if (open && base) void transport.openFile(open.worktree, open.path, base);
+    return [open && fileKey(open), changes, base, s.connection, recheck];
+  };
+  const ask = (open: OpenFile | null, seen: unknown[], before: unknown[]) => {
+    if (seen.every((reason, i) => reason === before[i])) return before;
+    if (open) void transport.openFile(open.worktree, open.path, seen[2] as DiffBase);
+    return seen;
+  };
+  let asked: unknown[] = [];
+  // A pair's other file (25.1), followed as the open one is.
+  let askedAside: unknown[] = [];
+  const sync = (s: HiveState) => {
+    const connected = s.connection.status === "connected";
+    const open = connected ? s.openFile : null;
+    asked = ask(open, reasons(s, open, s.edit?.recheck ?? 0), asked);
+    const aside = connected ? asideFile(s) : null;
+    askedAside = ask(aside, reasons(s, aside, aside?.edit?.recheck ?? 0), askedAside);
   };
   sync(useHive.getState());
   return useHive.subscribe(sync);
@@ -101,17 +113,36 @@ export function followOpenFile(transport: Transport): () => void {
  */
 export function followOpenTable(transport: Transport): () => void {
   let asked: unknown[] = [];
+  let askedAside: unknown[] = [];
   const sync = (s: HiveState) => {
-    const open = s.connection.status === "connected" && tableShown(s) ? s.openFile : null;
+    const connected = s.connection.status === "connected";
+    // A table with unsaved edits is its buffer's (25.4), asked only when it starts showing.
+    const ask = (file: OpenFile, dirty: boolean, shows: boolean) => {
+      if (!dirty) void transport.openTable(file.worktree, file.path);
+      else if (shows) askBufferTable(file);
+    };
+    const open = connected && tableShown(s) ? s.openFile : null;
     const dirty = !!open && !!s.edit && isFor(s.edit, open) && isDirty(s.edit);
-    const seen = open && !dirty && s.changesSeen[open.worktree];
-    const reasons = [open, seen, s.connection, dirty];
-    if (reasons.every((reason, i) => reason === asked[i])) return;
-    const shows = open !== asked[0] || s.connection !== asked[2];
-    asked = reasons;
-    if (!open) return;
-    if (!dirty) void transport.openTable(open.worktree, open.path);
-    else if (shows) askBufferTable(open);
+    const reasons = [open, open && !dirty && s.changesSeen[open.worktree], s.connection, dirty];
+    if (!reasons.every((reason, i) => reason === asked[i])) {
+      const shows = open !== asked[0] || s.connection !== asked[2];
+      asked = reasons;
+      if (open) ask(open, dirty, shows);
+    }
+    // A pair's other file (25.1), shown as its table.
+    const file = connected ? asideFile(s) : null;
+    const aside = file && tableShown(paneState(s, file)) ? file : null;
+    const asideDirty = !!aside?.edit && isDirty(aside.edit);
+    const seen = [
+      aside && fileKey(aside),
+      aside && !asideDirty && s.changesSeen[aside.worktree],
+      s.connection,
+      asideDirty,
+    ];
+    if (seen.every((reason, i) => reason === askedAside[i])) return;
+    const shows = seen[0] !== askedAside[0] || s.connection !== askedAside[2];
+    askedAside = seen;
+    if (aside) ask(aside, asideDirty, shows);
   };
   sync(useHive.getState());
   return useHive.subscribe(sync);

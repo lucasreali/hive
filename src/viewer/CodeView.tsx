@@ -4,6 +4,7 @@ import {
   clearGotoLine,
   leaveView,
   saveFileView,
+  selectIn,
   setSelectedLines,
   takePlace,
   useHive,
@@ -34,7 +35,7 @@ export function CodeView({ text, diff }: { text: FileText; diff: boolean }) {
   const { path, worktree } = text;
   useEffect(() => {
     const file = { worktree, path };
-    const created = createViewer(parent.current as HTMLDivElement, path, setSelectedLines);
+    const created = createViewer(parent.current as HTMLDivElement, path, selectIn(file));
     viewer.current = created;
     saved.current = useHive.getState().openFiles.find((f) => isFor(f, file))?.view;
     place.current = takePlace(file);

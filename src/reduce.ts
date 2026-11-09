@@ -1,4 +1,4 @@
-import type { ChangedFile, Changes, ServiceMessage, WorktreeFiles } from "./protocol";
+import type { ChangedFile, Changes, FileText, ServiceMessage, WorktreeFiles } from "./protocol";
 import {
   type FileTab,
   type HiveState,
@@ -16,8 +16,17 @@ import {
   within,
   withNotice,
 } from "./store";
-import { dropFile, editFor, fileKey, fileTabState, kept, opened, tabsPlace } from "./tabs";
-import { type EditBuffer, failed, isDirty, isFor, saved, toText } from "./viewer/buffer";
+import { dropFile, editFor, fileKey, fileTabState, kept, opened, splitOf, tabsPlace } from "./tabs";
+import {
+  type EditBuffer,
+  failed,
+  fromDisk,
+  isDirty,
+  isFor,
+  saved,
+  startEdit,
+  toText,
+} from "./viewer/buffer";
 
 // How service data enters the store: `apply` stores what the service sent without deriving
 // anything (#37).
@@ -427,6 +436,10 @@ function reduce(s: HiveState, m: ServiceMessage): Partial<HiveState> {
     case "file": {
       // An equal answer keeps its object, so the view is not rebuilt (19.12).
       const { type: _, ...file } = m;
+      // A pair's file that is not the open one (25.1): its tab keeps it, as its pane shows it.
+      if (aside(s, file)) {
+        return { openFiles: s.openFiles.map((t) => (isFor(t, file) ? withText(t, file) : t)) };
+      }
       const kept = s.file && sameFields(s.file, file) ? s.file : file;
       return { file: kept, edit: editFor(s, file) };
     }
@@ -434,7 +447,11 @@ function reduce(s: HiveState, m: ServiceMessage): Partial<HiveState> {
       const { type: _, ...table } = m;
       // What is on disk: a table with unsaved edits (25.4) shows those.
       const { edit } = fileTabState(s, table);
-      return edit && isDirty(edit) ? {} : { table };
+      if (edit && isDirty(edit)) return {};
+      if (aside(s, table)) {
+        return { openFiles: s.openFiles.map((t) => (isFor(t, table) ? { ...t, table } : t)) };
+      }
+      return { table };
     }
     case "table_edited": {
       const at = { worktree: m.worktree, path: m.path };
@@ -454,15 +471,22 @@ function reduce(s: HiveState, m: ServiceMessage): Partial<HiveState> {
         doc: b.doc.eq(doc) ? b.doc : doc,
         error: null,
       }));
+      const table = { ...at, sheets: [m.sheet], error: null };
+      const tabs = edits.openFiles as typeof s.openFiles;
+      // A pair's file that is not the open one (25.1): its tab keeps it, as its pane shows it.
+      if (aside(s, at)) {
+        return {
+          ...edits,
+          tableAsks: left,
+          openFiles: tabs.map((t) => (isFor(t, at) ? { ...t, table } : t)),
+        };
+      }
       const shown = s.openFile && isFor(s.openFile, at);
       return {
         ...edits,
         tableAsks: left,
-        table: shown ? { ...at, sheets: [m.sheet], error: null } : s.table,
-        openFiles:
-          edits.edit && shown && isDirty(edits.edit)
-            ? kept(edits.openFiles as typeof s.openFiles, at)
-            : edits.openFiles,
+        table: shown ? table : s.table,
+        openFiles: edits.edit && shown && isDirty(edits.edit) ? kept(tabs, at) : tabs,
       };
     }
     case "file_saved":
@@ -497,6 +521,10 @@ function reduce(s: HiveState, m: ServiceMessage): Partial<HiveState> {
         openFile: moved(s.openFile),
         openFiles: s.openFiles.map((f) => ({ ...(moved(f) as FileTab), edit: moved(f.edit) })),
         tabOrder: s.tabOrder.map(rekey),
+        splits: s.splits.map(({ left, right }) => ({
+          left: typeof left === "string" ? rekey(left) : left,
+          right: typeof right === "string" ? rekey(right) : right,
+        })),
         file: moved(s.file),
         edit: moved(s.edit),
         collapsed: Object.fromEntries(Object.entries(s.collapsed).map(([k, v]) => [rekey(k), v])),
@@ -590,6 +618,17 @@ function reduce(s: HiveState, m: ServiceMessage): Partial<HiveState> {
       m satisfies never;
       return {};
   }
+}
+
+/** Whether file `f` is a pane of a pair and not the open file (25.1). */
+const aside = (s: HiveState, f: OpenFile) =>
+  !!splitOf(s, fileKey(f)) && !(s.openFile && isFor(f, s.openFile));
+
+/** Tab `t` with the service's answer `file` for its pane; an equal one keeps its object (19.12). */
+function withText(t: FileTab, file: FileText): FileTab {
+  const text = t.text && sameFields(t.text, file) ? t.text : file;
+  if (!t.editing) return { ...t, text };
+  return { ...t, text, edit: t.edit ? fromDisk(t.edit, file) : startEdit(file) };
 }
 
 /** `change` applied to the edit buffers of file `f`: the open one's and its tab's. */

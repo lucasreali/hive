@@ -1,4 +1,4 @@
-import { Chunk } from "@codemirror/merge";
+import { Change, Chunk, diff } from "@codemirror/merge";
 import { type Extension, RangeSet, StateField, type Text } from "@codemirror/state";
 import { EditorView, GutterMarker, gutter } from "@codemirror/view";
 import { toText } from "./buffer";
@@ -8,6 +8,59 @@ import { toText } from "./buffer";
 // service sent is presentation (#37); the chunks follow the buffer as it is typed.
 
 export type MarkerKind = "added" | "modified" | "deleted";
+
+/** The ids of distinct lines: UTF-16 code units below the surrogates, which `diff` keeps paired. */
+const LINE_IDS = 0xd800;
+/** Lines added and removed (a rewritten one is both) it compares exactly; past that, coarser. */
+const LINE_SCAN_LIMIT = 2000;
+/** The limit `@codemirror/merge`'s own views diff characters with. */
+const CHAR_SCAN_LIMIT = 500;
+
+/**
+ * The differences of two texts, whole lines at a time (25.7): each distinct line becomes one
+ * character, so the cost follows the changed lines. The markers only need lines, and a diff of
+ * characters is quadratic in the changed characters: 5 s on the main thread, which stalled the
+ * whole window, for 3 KB added to a 240 KB `TODO.md` of 5 KB lines. A text with more distinct
+ * lines than there are ids falls back to the characters, limited.
+ */
+export function lineDiff(a: string, b: string): readonly Change[] {
+  const ids = new Map<string, string>();
+  const encode = (text: string) => {
+    // Each line with its newline; what follows the last newline is a line only if it has text.
+    const parts = text.split("\n");
+    const tail = parts.pop() as string;
+    const lines = parts.map((part) => `${part}\n`);
+    if (tail) lines.push(tail);
+    const starts = [0];
+    const codes: string[] = [];
+    let at = 0;
+    for (const line of lines) {
+      let id = ids.get(line);
+      if (id === undefined) {
+        id = String.fromCharCode(ids.size % LINE_IDS);
+        ids.set(line, id);
+      }
+      codes.push(id);
+      at += line.length;
+      starts.push(at);
+    }
+    return { starts, codes: codes.join("") };
+  };
+  const [oldLines, newLines] = [encode(a), encode(b)];
+  if (ids.size > LINE_IDS) return diff(a, b, { scanLimit: CHAR_SCAN_LIMIT });
+  return diff(oldLines.codes, newLines.codes, { scanLimit: LINE_SCAN_LIMIT }).map(
+    (c) =>
+      new Change(
+        oldLines.starts[c.fromA] as number,
+        oldLines.starts[c.toA] as number,
+        newLines.starts[c.fromB] as number,
+        newLines.starts[c.toB] as number,
+      ),
+  );
+}
+
+/** How the markers' chunks are diffed: by lines, for `Chunk.build` and `Chunk.updateB`. */
+export const MARKER_DIFF = { override: lineDiff };
 
 /**
  * Each changed line of `doc` (1-based) and how it changed. A deletion marks the line the
@@ -68,8 +121,9 @@ export function changeMarkers(base: string | null): Extension {
   const a = toText(base);
   // A new field per base, so a new base rebuilds the chunks when reconfigured.
   const chunks = StateField.define<readonly Chunk[]>({
-    create: (state) => Chunk.build(a, state.doc),
-    update: (value, tr) => (tr.docChanged ? Chunk.updateB(value, a, tr.newDoc, tr.changes) : value),
+    create: (state) => Chunk.build(a, state.doc, MARKER_DIFF),
+    update: (value, tr) =>
+      tr.docChanged ? Chunk.updateB(value, a, tr.newDoc, tr.changes, MARKER_DIFF) : value,
   });
   return [
     chunks,

@@ -1,4 +1,4 @@
-import { afterEach, expect, spyOn, test } from "bun:test";
+import { afterEach, expect, mock, spyOn, test } from "bun:test";
 import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { asMac } from "../../test/mac";
 import type { ChangedFile, FileText } from "../protocol";
@@ -13,6 +13,7 @@ import { TerminalArea } from "./TerminalArea";
 // 11.2: a Markdown file's tab shows rendered or as text.
 
 afterEach(() => {
+  mock.restore();
   cleanup();
   useHive.setState(initialState, true);
 });
