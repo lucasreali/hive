@@ -44,9 +44,11 @@ export function startEdit(file: FileText): EditBuffer | null {
 /**
  * A new answer for the file: text equal to the buffer's makes it clean at that version, text
  * equal to what it was based on changes nothing, a clean buffer reloads, and a dirty one keeps
- * its edits and shows the conflict. Binary or too large answers carry no text to compare.
+ * its edits and shows the conflict. `pending`: a table's edit of it is on its way to the service
+ * (25.4), so it counts as dirty though it looks clean. Binary or too large answers carry no text
+ * to compare.
  */
-export function fromDisk(b: EditBuffer, file: FileText): EditBuffer {
+export function fromDisk(b: EditBuffer, file: FileText, pending = false): EditBuffer {
   if (file.binary || file.too_large) return b;
   const disk = file.content === null ? null : toText(file.content);
   const at = { saved: disk, version: file.version, conflict: null };
@@ -54,7 +56,7 @@ export function fromDisk(b: EditBuffer, file: FileText): EditBuffer {
   if (disk && b.saved ? disk.eq(b.saved) : disk === b.saved) {
     return { ...b, version: file.version, conflict: null };
   }
-  if (!isDirty(b)) return { ...b, ...at, doc: disk ?? Text.empty };
+  if (!isDirty(b) && !pending) return { ...b, ...at, doc: disk ?? Text.empty };
   return { ...b, conflict: { content: file.content, version: file.version } };
 }
 

@@ -275,7 +275,7 @@ test("a pull request's text is not a document: its code stays plain", () => {
 
 // 21.3: a file's top-level blocks carry their first line, for the text and rendered to agree.
 const BLOCKS =
-  '# Title\n\nA paragraph\nof two lines.\n\n- one\n- two\n\n```ts\nconst a = 1;\n```\n\n| a | b |\n|---|---|\n| 1 | 2 |\n\n<p data-line="99">raw</p>';
+  '# Title\n\nA paragraph\nof two lines.\n\n- one\n- two\n\n```ts\nconst a = 1;\n```\n\n| a | b |\n|---|---|\n| 1 | 2 |\n\n<p data-line="99" data-line-end="99">raw</p>';
 const lines = (view: HTMLElement) =>
   [...(view.querySelector(".markdown") as HTMLElement).children].map((el) => [
     el.tagName.toLowerCase(),

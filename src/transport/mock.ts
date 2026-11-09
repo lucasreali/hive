@@ -772,10 +772,13 @@ function tableEdited(worktree: string, path: string, content: string, edit: Tabl
   const read = content
     .split("\n")
     .filter(Boolean)
-    .map((line) => line.split(split));
+    .map((line) => (line === '""' ? [""] : line.split(split)));
   const rows = edit ? editedRows(read, edit) : read;
-  const lines = rows.map((row) => row.map((cell) => encoded(cell, split)).join(split));
-  const end = content.endsWith("\n") ? "\n" : "";
+  // A row of one empty cell in quotes, as the service writes it: bare, it would be a blank line.
+  const row = (cells: string[]) =>
+    cells.length === 1 && !cells[0] ? '""' : cells.map((cell) => encoded(cell, split)).join(split);
+  const lines = rows.map(row);
+  const end = !content || content.endsWith("\n") ? "\n" : "";
   const sheet = { name: "", rows, total: rows.length, partial: false };
   const text = edit ? lines.join("\n") + end : content;
   return { type: "table_edited", worktree, path, content: text, sheet, error: null } as const;

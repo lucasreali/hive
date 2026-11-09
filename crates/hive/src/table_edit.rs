@@ -25,6 +25,8 @@ const EMPTY_CELL: &[u8] = b"\"\"";
 const NOT_WHOLE: &str = "The whole file was not read: edit it in the text";
 const TOO_LARGE: &str = "The file is too large to edit as a table";
 const NO_CELL: &str = "That cell is not in the table";
+/// A row added after a quote never closed would land inside it.
+const UNCLOSED: &str = "The file's last quote is never closed: edit it in the text";
 
 /// `edit_table`: `edit` on the table of `content`, the text of the table file `path` of `worktree`.
 pub fn answer(
@@ -58,7 +60,12 @@ fn edited(
             if !whole(&parse(content, delimiter, MAX_PAYLOAD)?) {
                 return Err(io::Error::other(NOT_WHOLE));
             }
-            apply(content, delimiter, edit).map_err(io::Error::other)?
+            let next = apply(content, delimiter, edit).map_err(io::Error::other)?;
+            // `save_file` would refuse it, and every later edit too.
+            if next.len() as u64 > TEXT_LIMIT {
+                return Err(io::Error::other(TOO_LARGE));
+            }
+            next
         }
         None => content.to_owned(),
     };
@@ -119,6 +126,8 @@ struct Record {
     end: usize,
     /// Past its line ending; `end` when it has none (the last line).
     next: usize,
+    /// Its last cell's quote is never closed, so `end` is inside that quote.
+    unclosed: bool,
 }
 
 impl Record {
@@ -152,8 +161,10 @@ fn scan(text: &[u8], delimiter: u8) -> Vec<Record> {
             break;
         }
         let mut cells = Vec::new();
+        let mut unclosed = false;
         for _ in 0..=text.len() {
-            let end = cell_end(text, at, delimiter);
+            let (end, open) = cell_end(text, at, delimiter);
+            unclosed = open;
             cells.push(at..end);
             at = end;
             if text.get(at) != Some(&delimiter) {
@@ -173,14 +184,17 @@ fn scan(text: &[u8], delimiter: u8) -> Vec<Record> {
             cells,
             end,
             next: at,
+            unclosed,
         });
     }
     records
 }
 
-/// Past the cell starting at `start`: on the delimiter, a line ending or the end of `text`.
-fn cell_end(text: &[u8], start: usize, delimiter: u8) -> usize {
+/// Past the cell starting at `start`: on the delimiter, a line ending or the end of `text`; and
+/// whether its quote was never closed.
+fn cell_end(text: &[u8], start: usize, delimiter: u8) -> (usize, bool) {
     let mut at = start;
+    let mut open = false;
     if text.get(at) == Some(&QUOTE) {
         // Its quotes end at the first byte after an odd run of quotes (doubled ones pair up), or
         // with the text.
@@ -192,9 +206,10 @@ fn cell_end(text: &[u8], start: usize, delimiter: u8) -> usize {
             byte != QUOTE && odd
         });
         at = closed.map_or(text.len(), |(after, _)| after);
+        open = closed.is_none() && !odd;
     }
     let plain = |&&byte: &&u8| byte != delimiter && byte != CR && byte != LF;
-    at + text.iter().skip(at).take_while(plain).count()
+    (at + text.iter().skip(at).take_while(plain).count(), open)
 }
 
 /// `value` as a cell of the file: in quotes only when it holds the delimiter, a quote or a line
@@ -243,6 +258,14 @@ pub fn apply(content: &str, delimiter: u8, edit: &TableEdit) -> Result<String, S
     let Some(splices) = splices else {
         return Err(NO_CELL.to_owned());
     };
+    let inside = |record: &Record| record.unclosed.then_some(record.end);
+    let open_end = records.last().and_then(inside);
+    if splices
+        .iter()
+        .any(|(range, _)| Some(range.start) == open_end)
+    {
+        return Err(UNCLOSED.to_owned());
+    }
     Ok(spliced(text, splices))
 }
 
@@ -662,6 +685,55 @@ mod tests {
             let err = edited("/w", path, "a\n", None).unwrap_err();
             assert_eq!(err.to_string(), "not a table file");
         }
+    }
+
+    #[test]
+    fn nothing_lands_inside_a_quote_never_closed() {
+        let file = "a,b\n\"open";
+        let refused = |edit: TableEdit| apply(file, b',', &edit).unwrap_err();
+        // After its end, which is inside the quote: the row, the short row's cell, the column.
+        assert_eq!(refused(TableEdit::InsertRow { at: 2 }), UNCLOSED);
+        assert_eq!(refused(set(1, 1, "x")), UNCLOSED);
+        // A row too short for the new column is left alone, so its end is not touched.
+        assert_eq!(
+            csv(file, &TableEdit::InsertColumn { at: 2 }),
+            "a,b,\n\"open"
+        );
+        let closes = "\"open";
+        let column = TableEdit::InsertColumn { at: 1 };
+        assert_eq!(apply(closes, b',', &column).unwrap_err(), UNCLOSED);
+        let doubled = "\"open\"\"";
+        assert_eq!(apply(doubled, b',', &column).unwrap_err(), UNCLOSED);
+        // Whatever does not touch its end is fine: its own cell closes it, or it goes.
+        assert_eq!(csv(file, &set(1, 0, "x")), "a,b\nx");
+        assert_eq!(csv(file, &set(0, 1, "x")), "a,x\n\"open");
+        assert_eq!(csv(file, &TableEdit::RemoveRow { at: 1 }), "a,b");
+        assert_eq!(csv(file, &TableEdit::InsertRow { at: 1 }), "a,b\n,\n\"open");
+        assert_eq!(
+            csv(file, &TableEdit::InsertColumn { at: 0 }),
+            ",a,b\n,\"open"
+        );
+        // A quote that is closed, at the very end of the text, is no such thing.
+        let closed = "a,b\n\"c\"";
+        assert_eq!(
+            csv(closed, &TableEdit::InsertRow { at: 2 }),
+            "a,b\n\"c\"\n,"
+        );
+        assert_eq!(csv(closed, &set(1, 1, "x")), "a,b\n\"c\",x");
+        let earlier = "\"a\"\"\"";
+        assert_eq!(csv(earlier, &column), "\"a\"\"\",");
+    }
+
+    #[test]
+    fn an_edit_past_the_text_limit_is_refused() {
+        let limit = TEXT_LIMIT as usize;
+        // A cell that brings the text to the limit, line break included; one byte more.
+        let fits = set(0, 0, &"x".repeat(limit - 1));
+        let (text, _) = done("a\n", Some(&fits)).unwrap();
+        assert_eq!(text.len(), limit);
+        let over = set(0, 0, &"x".repeat(limit));
+        let refused = done("a\n", Some(&over)).err();
+        assert_eq!(refused.as_deref(), Some(TOO_LARGE));
     }
 
     #[test]

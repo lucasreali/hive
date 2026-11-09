@@ -1,3 +1,4 @@
+import type { Text } from "@codemirror/state";
 import { create } from "zustand";
 import {
   clampWidth,
@@ -64,6 +65,7 @@ import {
   opened,
   paneFile,
   paneKey,
+  patchEdits,
   shownPane,
   shownSplit,
   splitOf,
@@ -494,8 +496,10 @@ export type HiveState = {
    * applied to the text the last one left, the first is on its way (`followTableEdits`).
    */
   tableAsks: TableAsk[];
-  /** A save waits for `tableAsks` to be answered, so it holds their edits. */
-  saveAfterAsks: boolean;
+  /** The text `tableAsks`' first was sent from: its answer applies to that text only. */
+  tableSentFrom: Text | null;
+  /** The file whose save waits for its `tableAsks` to be answered, so it holds their edits. */
+  saveAfterAsks: OpenFile | null;
   /** The open file shows as editable text (UI state), not as its read-only diff. */
   editing: boolean;
   /** The open file's edit buffer while editing (UI state, kept when the panel closes). */
@@ -620,7 +624,8 @@ export const initialState: HiveState = {
   file: null,
   table: null,
   tableAsks: [],
-  saveAfterAsks: false,
+  tableSentFrom: null,
+  saveAfterAsks: null,
   editing: false,
   edit: null,
   editorNotice: null,
@@ -887,15 +892,28 @@ export const askBufferTable = (f: OpenFile) =>
       : { tableAsks: [...s.tableAsks, { worktree: f.worktree, path: f.path, edit: null }] },
   );
 
-/** Drops what is asked of `f`'s table: its text is not what they were based on. */
-export const dropTableAsks = (f: OpenFile) =>
-  useHive.setState((s) => ({ tableAsks: s.tableAsks.filter((a) => !isFor(a, f)) }));
+/**
+ * Drops what is asked of `f`'s table, which nothing will answer, and a save waiting on it: it
+ * would write the text without them. `error` says why, under the header, until the next save.
+ */
+export const dropTableAsks = (f: OpenFile, error?: string) =>
+  useHive.setState((s) => ({
+    tableAsks: s.tableAsks.filter((a) => !isFor(a, f)),
+    tableSentFrom: s.tableAsks[0] && isFor(s.tableAsks[0], f) ? null : s.tableSentFrom,
+    saveAfterAsks: s.saveAfterAsks && isFor(s.saveAfterAsks, f) ? null : s.saveAfterAsks,
+    ...(error ? patchEdits(s, f, (b) => ({ ...b, error })) : {}),
+  }));
 
 /** Nothing more will answer: the connection is gone. */
-export const clearTableAsks = () => useHive.setState({ tableAsks: [], saveAfterAsks: false });
+export const clearTableAsks = () =>
+  useHive.setState({ tableAsks: [], tableSentFrom: null, saveAfterAsks: null });
 
-/** A save waits for the table's edits (`tableAsks`), or stops waiting. */
-export const setSaveAfterAsks = (saveAfterAsks: boolean) => useHive.setState({ saveAfterAsks });
+/** The first of `tableAsks` goes to the service with the text `from`. */
+export const setTableSentFrom = (tableSentFrom: Text) => useHive.setState({ tableSentFrom });
+
+/** File `f`'s save waits for its table's edits (`tableAsks`), or none does. */
+export const setSaveAfterAsks = (saveAfterAsks: OpenFile | null) =>
+  useHive.setState({ saveAfterAsks });
 
 /**
  * An edit of the open file's table (25.4), starting its buffer on the first one: the buffer

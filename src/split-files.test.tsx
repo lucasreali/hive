@@ -458,9 +458,10 @@ test("a pair's other table with unsaved edits (25.4) is its buffer's, in its tab
   expect(openTable.mock.calls.map((call) => call[1])).toEqual([d.path]);
   useHive.setState((state) => ({
     openFiles: state.openFiles.map((t) =>
-      t.path === c.path && t.edit ? { ...t, edit: { ...t.edit, saved: t.edit.doc } } : t,
+      t.path === c.path && t.edit ? { ...t, edit: { ...t.edit, saving: t.edit.doc } } : t,
     ),
   }));
+  apply({ type: "file_saved", ...c, version: "w" });
   expect(openTable.mock.calls.at(-1)).toEqual([W, c.path]);
   for (const stop of stops) stop();
 });

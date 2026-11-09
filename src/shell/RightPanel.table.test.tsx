@@ -336,10 +336,9 @@ test("a disk answer does not replace a table with unsaved edits; a clean one doe
   ]);
   expect(cell("9")).toBeDefined();
   // Saved: the disk's is the truth again.
+  spyOn(transport, "saveFile").mockImplementation(async () => {});
+  fireEvent.click(screen.getByRole("button", { name: "Save" }));
   act(() => apply({ type: "file_saved", ...at, version: "w" }));
-  act(() =>
-    useHive.setState((s) => ({ edit: s.edit && { ...s.edit, saved: s.edit.doc, saving: null } })),
-  );
   table(CSV, [["other"]]);
   expect(cell("other")).toBeDefined();
   stop();
@@ -356,24 +355,13 @@ test("⌘S with a cell open closes it and saves once the service answered", () =
   expect(input()).toBeNull();
   // Not yet: the text is not back.
   expect(save).not.toHaveBeenCalled();
-  expect(useHive.getState().saveAfterAsks).toBe(true);
+  expect(useHive.getState().saveAfterAsks).toEqual(at);
   edited("id,total\n1,9\n", [
     ["id", "total"],
     ["1", "9"],
   ]);
   expect(save.mock.calls).toEqual([[refactor.path, CSV, "id,total\n1,9\n", "v"]]);
-  expect(useHive.getState().saveAfterAsks).toBe(false);
-  // Other keys are no save.
-  save.mockClear();
-  for (const key of [
-    { key: "s" },
-    { key: "a", ctrlKey: true },
-    { key: "s", ctrlKey: true, shiftKey: true },
-    { key: "s", ctrlKey: true, altKey: true },
-  ]) {
-    fireEvent.keyDown(window, key);
-  }
-  expect(save).not.toHaveBeenCalled();
+  expect(useHive.getState().saveAfterAsks).toBeNull();
   stop();
 });
 

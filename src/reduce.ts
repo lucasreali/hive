@@ -16,17 +16,19 @@ import {
   within,
   withNotice,
 } from "./store";
-import { dropFile, editFor, fileKey, fileTabState, kept, opened, splitOf, tabsPlace } from "./tabs";
 import {
-  type EditBuffer,
-  failed,
-  fromDisk,
-  isDirty,
-  isFor,
-  saved,
-  startEdit,
-  toText,
-} from "./viewer/buffer";
+  asksPending,
+  dropFile,
+  editFor,
+  fileKey,
+  fileTabState,
+  kept,
+  opened,
+  patchEdits,
+  splitOf,
+  tabsPlace,
+} from "./tabs";
+import { failed, fromDisk, isDirty, isFor, saved, startEdit, toText } from "./viewer/buffer";
 
 // How service data enters the store: `apply` stores what the service sent without deriving
 // anything (#37).
@@ -445,7 +447,7 @@ function reduce(s: HiveState, m: ServiceMessage): Partial<HiveState> {
       const { type: _, ...file } = m;
       // A pair's file that is not the open one (25.1): its tab keeps it, as its pane shows it.
       if (aside(s, file)) {
-        return { openFiles: s.openFiles.map((t) => (isFor(t, file) ? withText(t, file) : t)) };
+        return { openFiles: s.openFiles.map((t) => (isFor(t, file) ? withText(s, t, file) : t)) };
       }
       const kept = s.file && sameFields(s.file, file) ? s.file : file;
       return { file: kept, edit: editFor(s, file) };
@@ -460,42 +462,8 @@ function reduce(s: HiveState, m: ServiceMessage): Partial<HiveState> {
       }
       return { table };
     }
-    case "table_edited": {
-      const at = { worktree: m.worktree, path: m.path };
-      const [first, ...rest] = s.tableAsks;
-      const left = first && isFor(first, at) ? rest : s.tableAsks;
-      if (m.content === null || !m.sheet) {
-        const error = m.error;
-        return {
-          // Those after it counted on its text.
-          tableAsks: left.filter((a) => !isFor(a, at)),
-          ...patchEdits(s, at, (b) => ({ ...b, error })),
-        };
-      }
-      const doc = toText(m.content);
-      const edits = patchEdits(s, at, (b) => ({
-        ...b,
-        doc: b.doc.eq(doc) ? b.doc : doc,
-        error: null,
-      }));
-      const table = { ...at, sheets: [m.sheet], error: null };
-      const tabs = edits.openFiles as typeof s.openFiles;
-      // A pair's file that is not the open one (25.1): its tab keeps it, as its pane shows it.
-      if (aside(s, at)) {
-        return {
-          ...edits,
-          tableAsks: left,
-          openFiles: tabs.map((t) => (isFor(t, at) ? { ...t, table } : t)),
-        };
-      }
-      const shown = s.openFile && isFor(s.openFile, at);
-      return {
-        ...edits,
-        tableAsks: left,
-        table: shown ? table : s.table,
-        openFiles: edits.edit && shown && isDirty(edits.edit) ? kept(tabs, at) : tabs,
-      };
-    }
+    case "table_edited":
+      return tableEdited(s, m);
     case "file_saved":
       return patchEdits(s, m, (b) => saved(b, m.version));
     case "save_failed":
@@ -632,23 +600,63 @@ const aside = (s: HiveState, f: OpenFile) =>
   !!splitOf(s, fileKey(f)) && !(s.openFile && isFor(f, s.openFile));
 
 /** Tab `t` with the service's answer `file` for its pane; an equal one keeps its object (19.12). */
-function withText(t: FileTab, file: FileText): FileTab {
+function withText(s: HiveState, t: FileTab, file: FileText): FileTab {
   const text = t.text && sameFields(t.text, file) ? t.text : file;
   if (!t.editing) return { ...t, text };
-  return { ...t, text, edit: t.edit ? fromDisk(t.edit, file) : startEdit(file) };
+  return {
+    ...t,
+    text,
+    edit: t.edit ? fromDisk(t.edit, file, asksPending(s, file)) : startEdit(file),
+  };
 }
 
-/** `change` applied to the edit buffers of file `f`: the open one's and its tab's. */
-function patchEdits(
+/**
+ * The service's answer to the table edit on its way (25.4). It is applied only to the text it was
+ * sent from: a buffer changed meanwhile (a reload, a keystroke) keeps what it has, since the answer
+ * holds the old text, and the file's other edits go, their rows being the old table's. An answer
+ * for nothing on its way is ignored. A refused or dropped edit takes the save waiting on it along.
+ */
+function tableEdited(
   s: HiveState,
-  f: OpenFile,
-  change: (b: EditBuffer) => EditBuffer,
+  m: Extract<ServiceMessage, { type: "table_edited" }>,
 ): Partial<HiveState> {
-  const mine = (b: EditBuffer | null): b is EditBuffer => !!b && isFor(b, f);
-  return {
-    edit: mine(s.edit) ? change(s.edit) : s.edit,
-    openFiles: s.openFiles.map((t) => (mine(t.edit) ? { ...t, edit: change(t.edit) } : t)),
+  const at = { worktree: m.worktree, path: m.path };
+  const [first, ...rest] = s.tableAsks;
+  if (!first || !isFor(first, at)) return {};
+  const from = s.tableSentFrom;
+  const done = { tableAsks: rest, tableSentFrom: null };
+  const dropped = {
+    tableAsks: rest.filter((a) => !isFor(a, at)),
+    tableSentFrom: null,
+    saveAfterAsks: s.saveAfterAsks && isFor(s.saveAfterAsks, at) ? null : s.saveAfterAsks,
   };
+  if (m.content === null || !m.sheet) {
+    const error = m.error;
+    return { ...dropped, ...patchEdits(s, at, (b) => ({ ...b, error })) };
+  }
+  const { edit } = fileTabState(s, at);
+  // Its tab was closed meanwhile.
+  if (!edit) return dropped;
+  if (!from || !edit.doc.eq(from)) {
+    return {
+      ...dropped,
+      ...withNotice(s, "error", `${m.path} changed: the table edit was dropped`),
+    };
+  }
+  const doc = toText(m.content);
+  const edits = patchEdits(s, at, (b) => ({
+    ...b,
+    doc: b.doc.eq(doc) ? b.doc : doc,
+    error: null,
+  }));
+  const table = { ...at, sheets: [m.sheet], error: null };
+  // A pair's file that is not the open one (25.1): its tab keeps it, as its pane shows it.
+  if (aside(s, at)) {
+    const openFiles = edits.openFiles.map((t) => (isFor(t, at) ? { ...t, table } : t));
+    return { ...edits, ...done, openFiles };
+  }
+  const openFiles = edits.edit && isDirty(edits.edit) ? kept(edits.openFiles, at) : edits.openFiles;
+  return { ...edits, ...done, table, openFiles };
 }
 
 /**

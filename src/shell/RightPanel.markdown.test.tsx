@@ -241,3 +241,38 @@ test("Ctrl+S with no block edited still shows the text (11.2)", () => {
   fireEvent.keyDown(window, { key: "s", ctrlKey: true });
   expect(pressed()).toBe("false");
 });
+
+test("Ctrl+S with a block opened but not typed in still shows the text (25.4)", () => {
+  spyOn(transport, "saveFile").mockImplementation(async () => {});
+  preview();
+  fireEvent.click(screen.getByText("Title"));
+  expect(blockBox()).not.toBeNull();
+  fireEvent.keyDown(window, { key: "s", ctrlKey: true });
+  expect(pressed()).toBe("false");
+});
+
+test("Diff from a preview being edited shows the diff", () => {
+  panel();
+  act(() =>
+    apply({
+      type: "changes",
+      path: refactor.path,
+      base: "head",
+      branch: null,
+      base_error: null,
+      files: [{ path: "README.md", status: "modified", old_path: null, added: 1, removed: 0 }],
+      added: 1,
+      removed: 0,
+      error: null,
+    }),
+  );
+  open("README.md");
+  answer("README.md", DOC);
+  fireEvent.click(eye() as HTMLElement);
+  fireEvent.click(screen.getByText("Title"));
+  fireEvent.keyDown(blockBox() as HTMLElement, { key: "Escape" });
+  expect(pressed()).toBe("true");
+  fireEvent.click(screen.getByRole("button", { name: "Diff" }));
+  expect(pressed()).toBe("false");
+  expect(useHive.getState().editing).toBe(false);
+});

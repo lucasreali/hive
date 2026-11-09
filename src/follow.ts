@@ -10,14 +10,15 @@ import {
   type OpenFile,
   panelWorktree,
   setSaveAfterAsks,
+  setTableSentFrom,
   type TableAsk,
   tableShown,
   useHive,
 } from "./store";
-import { asideFile, fileKey, fileTabState, paneState } from "./tabs";
+import { asideFile, asksPending, fileKey, fileTabState, paneState } from "./tabs";
 import type { Transport } from "./transport";
 import { isDirty, isFor } from "./viewer/buffer";
-import { saveOpenFile } from "./viewer/save";
+import { saveBuffer } from "./viewer/save";
 
 /**
  * Keeps the service watching the worktree the right panel shows (`panelWorktree`), none while it
@@ -150,33 +151,34 @@ export function followOpenTable(transport: Transport): () => void {
 
 /**
  * Sends what is asked of a table being edited (25.4), one at a time, each with the text the last
- * answer left; a save that waited for them then goes. A connection lost answers nothing, so they
- * are dropped; one that cannot be sent (too large for a frame) says so through `transport`, and
- * those of its file go with it.
+ * answer left, noted so its answer applies to that text only; a save that waited for its file's
+ * then goes. A connection lost answers nothing, so they are dropped; one that cannot be sent (too
+ * large for a frame) says so through `transport` and under the header, and those of its file and
+ * a save waiting on them go with it.
  */
 export function followTableEdits(transport: Transport): () => void {
   let sent: TableAsk | null = null;
   const sync = (s: HiveState) => {
     if (s.connection.status !== "connected") {
-      sent = null;
       if (s.tableAsks.length > 0 || s.saveAfterAsks) clearTableAsks();
       return;
     }
-    const next = s.tableAsks[0] ?? null;
-    if (!next && s.saveAfterAsks) {
-      setSaveAfterAsks(false);
-      saveOpenFile();
+    const waiting = s.saveAfterAsks;
+    if (waiting && !asksPending(s, waiting)) {
+      setSaveAfterAsks(null);
+      saveBuffer(waiting);
     }
+    const next = s.tableAsks[0] ?? null;
     if (next === sent) return;
     sent = next;
     if (!next) return;
     const { edit } = fileTabState(s, next);
     // The file was closed meanwhile.
     if (!edit) return void dropTableAsks(next);
-    const content = edit.doc.toString();
+    setTableSentFrom(edit.doc);
     transport
-      .editTable(next.worktree, next.path, content, next.edit)
-      .catch(() => dropTableAsks(next));
+      .editTable(next.worktree, next.path, edit.doc.toString(), next.edit)
+      .catch((error: unknown) => dropTableAsks(next, String(error)));
   };
   sync(useHive.getState());
   return useHive.subscribe(sync);

@@ -1000,7 +1000,9 @@ test("a table edit answers the new text and its rows, quoting only what needs it
   expect((await asked("a.csv", text, { op: "remove_row", at: 0 }))[0]).toBe("1,2\n");
   expect((await asked("a.csv", text, { op: "insert_column", at: 1 }))[0]).toBe("a,,b\n1,,2\n");
   expect((await asked("a.csv", text, { op: "remove_column", at: 0 }))[0]).toBe("b\n2\n");
-  expect((await asked("a.csv", "", { op: "insert_row", at: 0 }))[0]).toBe("");
+  // An empty file starts its first row, as the service does.
+  expect((await asked("a.csv", "", { op: "insert_row", at: 0 }))[0]).toBe('""\n');
+  expect((await asked("a.csv", '""\n', null))[1]).toEqual([[""]]);
 });
 
 test("a save checks the version as the service does; write stands in for an agent", async () => {

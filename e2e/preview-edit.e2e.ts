@@ -44,8 +44,10 @@ test("preview edit: a Markdown block opens as its source, alone, and saves (25.4
   // A click outside renders it too; on a block, that one opens with the next click.
   await heading.click();
   await expect(box).toHaveValue("# Title");
+  await box.fill("# Renamed");
   await rendered.locator("strong").click();
   await expect(box).toBeHidden();
+  await expect(rendered.getByRole("heading", { name: "Renamed" })).toBeVisible();
 
   await page.keyboard.press(`${mod}+s`);
   await expect(unsaved).toBeHidden();
@@ -55,7 +57,7 @@ test("preview edit: a Markdown block opens as its source, alone, and saves (25.4
   await view.getByRole("button", { name: "Show rendered Markdown" }).click();
   const text = view.locator(".cm-content");
   await expect(text).toContainText("**Bold** now.");
-  await expect(text).toContainText("# Title");
+  await expect(text).toContainText("# Renamed");
   await expect(text).toContainText("export const value = 1;");
   await expect(text).not.toContainText("One paragraph");
 });

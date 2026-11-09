@@ -8,7 +8,7 @@ import {
   useState,
 } from "react";
 import { createPortal } from "react-dom";
-import { setEdit, setEditing, useHive } from "../store";
+import { setEdit, setEditing, showNotice, useHive } from "../store";
 
 // A Markdown preview's block edited as its source (25.4): clicking a top-level block (21.3's
 // `data-line`, with its `data-line-end`) swaps that block alone for its lines in a small editor.
@@ -27,12 +27,19 @@ export type BlockSource = {
 
 const ended = (line: string) => line.endsWith("\r");
 
-/** The source of the block on lines `first` to `last` of `doc`. */
-export function blockSource(doc: Text, first: number, last: number): BlockSource {
+/** A "\r" alone: a line ending to the Markdown parser, none to the buffer (`toText`). */
+export const hasLoneCr = (text: string) => /\r(?!\n)/.test(text);
+
+/** The source of the block on lines `first` to `last` of `doc`; null when `doc` has no such lines. */
+export function blockSource(doc: Text, first: number, last: number): BlockSource | null {
+  if (!(first >= 1 && first <= doc.lines && last >= first)) return null;
   const end = Math.min(last, doc.lines);
   const raw = doc.sliceString(doc.line(first).from, doc.line(end).to).split("\n");
   const closed = ended(raw[raw.length - 1] as string);
-  const crlf = raw.slice(0, -1).every(ended) && (raw.length > 1 || closed);
+  // A single line says it itself, unless it is the file's last, with no line ending: then the
+  // line before it does.
+  const before = end === doc.lines && first > 1 && ended(doc.line(first - 1).text);
+  const crlf = raw.slice(0, -1).every(ended) && (raw.length > 1 || closed || before);
   const source = (crlf ? raw.map((line) => line.replace(/\r$/, "")) : raw).join("\n");
   return { first, last: end, source, crlf, closed };
 }
@@ -64,6 +71,12 @@ type Opened = BlockSource & {
   host: HTMLElement;
 };
 
+/** `el` as tall as its text. */
+function fit(el: HTMLTextAreaElement) {
+  el.style.height = "auto";
+  el.style.height = `${el.scrollHeight + 2}px`;
+}
+
 /** The small editor, as tall as its text: the browser's own undo, Escape closes it. */
 function BlockEditor(props: {
   source: string;
@@ -72,15 +85,10 @@ function BlockEditor(props: {
   onClose: () => void;
 }) {
   const box = useRef<HTMLTextAreaElement>(null);
-  const fit = () => {
-    const el = box.current as HTMLTextAreaElement;
-    el.style.height = "auto";
-    el.style.height = `${el.scrollHeight + 2}px`;
-  };
-  // biome-ignore lint/correctness/useExhaustiveDependencies: `fit` only reads the ref
   useLayoutEffect(() => {
-    fit();
-    box.current?.focus();
+    const el = box.current as HTMLTextAreaElement;
+    fit(el);
+    el.focus();
   }, []);
   return (
     <textarea
@@ -92,7 +100,7 @@ function BlockEditor(props: {
       autoCapitalize="off"
       autoCorrect="off"
       onInput={(e) => {
-        fit();
+        fit(e.currentTarget);
         props.onChange(e.currentTarget.value);
       }}
       onKeyDown={(e) => {
@@ -153,24 +161,30 @@ export function useBlockEdit(text: string): {
     if (open || closedBy.current === event.nativeEvent) return;
     const block = clickedBlock(event.target as Element);
     if (!block) return;
+    // The rendered blocks' line numbers would not be the buffer's.
+    if (hasLoneCr(text)) {
+      showNotice("error", "This file has a line ending in \\r alone: edit it in the text");
+      return;
+    }
     if (!useHive.getState().edit) setEditing(true);
     const base = useHive.getState().edit?.doc;
     if (!base) return;
-    const first = Number(block.dataset.line);
+    const lines = blockSource(base, Number(block.dataset.line), Number(block.dataset.lineEnd));
+    if (!lines) return;
     const host = document.createElement("div");
     block.after(host);
     block.style.display = "none";
     written.current = base;
-    used.current = true;
-    const lines = blockSource(base, first, Number(block.dataset.lineEnd));
     setOpen({ ...lines, shown: text, base, block, host });
   };
 
   const change = (draft: string) => {
     const { edit } = useHive.getState();
-    if (!open || !edit) return;
+    // Not the buffer this editor wrote: gone, or another text the next render closes it for.
+    if (!open || edit?.doc !== written.current) return;
     const next = withBlock(open.base, open, draft);
     written.current = next;
+    used.current = true;
     setEdit({ ...edit, doc: next });
   };
 
