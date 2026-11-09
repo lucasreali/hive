@@ -7,7 +7,6 @@
 
 mod agents;
 mod app;
-mod browsers;
 #[cfg(unix)]
 mod claim;
 mod terminals;
@@ -150,21 +149,13 @@ pub async fn run(paths: &Paths) -> io::Result<()> {
     let places = crate::uninstall::Places::from_env(paths);
     #[cfg(windows)]
     let places = None;
-    // Before any browser of this run: the ones an earlier run left (24.6).
-    #[cfg(unix)]
-    {
-        let browsers = paths.runtime.join("browsers");
-        let kill = &mut crate::browser::kill_group;
-        crate::browser::reap(&browsers, procs::Source::System, kill);
-    }
+    // What a service before 26.11 left, gone before this one's first terminal.
+    crate::browser_cleanup::clean(&paths.bin_dir(), &paths.runtime);
     let state = Arc::new(State {
         warning,
         places,
-        browsers_dir: paths.runtime.join("browsers"),
         ..state
     });
-    // The MCP server the wrapper passes while the agent's browser is on (24.6).
-    state.browser_settings_changed().await;
     serve(listener, hold, terminated, state).await
 }
 
@@ -265,7 +256,6 @@ async fn serve(
         .map(|t| t.session)
         .collect();
     terminal::end_sessions(&sessions).await;
-    state.stop_browsers().await;
     if let Some(choice) = uninstall {
         // Once the terminals ended and the socket is gone, so nothing puts back the runtime
         // folder; then the service waits for the app to quit.
@@ -294,7 +284,7 @@ struct Watching {
 }
 
 /// The service's state. Lock order, when one task holds several: `terminals` → `agents` →
-/// `browsers` → `app`, and `usage` → `app`. `agents` is held across slow work (placing an agent runs git, reading a session
+/// `app`, and `usage` → `app`. `agents` is held across slow work (placing an agent runs git, reading a session
 /// log or a transcript), so a terminal's input and output never take an async lock (9.13):
 /// they go through `inputs` and [`terminal::LastOutput`]. The std locks (`inputs`, `sent`)
 /// are never held across an await.
@@ -375,10 +365,6 @@ struct State {
     uninstalling: std::sync::Mutex<Option<uninstall::Choice>>,
     /// Woken to end the service (an `uninstall`).
     ending: tokio::sync::Notify,
-    /// The agents' browsers (24.6).
-    browsers: Mutex<browsers::Browsers>,
-    /// Where the browsers' temporary profiles go: the private runtime folder.
-    browsers_dir: PathBuf,
 }
 
 /// The sessions running in Hive's terminals when the app last closed.
@@ -435,8 +421,6 @@ impl State {
             places: None,
             uninstalling: Default::default(),
             ending: Default::default(),
-            browsers: Default::default(),
-            browsers_dir: std::env::temp_dir().join("hive-browsers"),
         }
     }
 
@@ -570,7 +554,6 @@ impl State {
         if let Some(reply) = reply {
             self.to_app(0, &reply).await;
         }
-        self.browsers_unfollowed().await;
     }
 
     /// Gives the worktrees of the projects in a reply their status (git, so on a blocking
@@ -1045,7 +1028,6 @@ impl State {
             }
         };
         self.refollow.notify_one();
-        self.browsers_unfollowed().await;
         self.to_app(0, &self.projects.spaces_message()).await;
         if let Err(err) = tokio::task::block_in_place(|| self.ports.forget(&worktrees)) {
             eprintln!("hive: warning: cannot free the ports of {id}: {err}");
@@ -1387,10 +1369,7 @@ fn test_state_with(dir: &Path, power: Option<Box<dyn power::Power>>) -> Arc<Stat
         restore,
     )
     .with_power(power);
-    Arc::new(State {
-        browsers_dir: dir.join("browsers"),
-        ..state
-    })
+    Arc::new(state)
 }
 
 #[cfg(test)]

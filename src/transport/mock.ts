@@ -115,7 +115,6 @@ export const agentStatus = (
     notify,
     activity,
     since_ms,
-    browsing: false,
   };
 };
 
@@ -265,14 +264,6 @@ const project = (path: string, name: string, worktrees: string[]): Project => ({
 });
 
 /** The fake service's git repositories; the first two are followed from the start. */
-/** The page the agent's browser shows in the mock (24.6). */
-export const MOCK_BROWSER_URL = "http://localhost:5173/";
-/** Its title. */
-export const MOCK_BROWSER_TITLE = "Mock shop";
-/** Its one frame: a 16×10 JPEG in base64. */
-export const MOCK_BROWSER_FRAME =
-  "/9j/4AAQSkZJRgABAQAASABIAAD/4QBMRXhpZgAATU0AKgAAAAgAAYdpAAQAAAABAAAAGgAAAAAAA6ABAAMAAAABAAEAAKACAAQAAAABAAAAEKADAAQAAAABAAAACgAAAAD/7QA4UGhvdG9zaG9wIDMuMAA4QklNBAQAAAAAAAA4QklNBCUAAAAAABDUHYzZjwCyBOmACZjs+EJ+/8AAEQgACgAQAwEiAAIRAQMRAf/EAB8AAAEFAQEBAQEBAAAAAAAAAAABAgMEBQYHCAkKC//EALUQAAIBAwMCBAMFBQQEAAABfQECAwAEEQUSITFBBhNRYQcicRQygZGhCCNCscEVUtHwJDNicoIJChYXGBkaJSYnKCkqNDU2Nzg5OkNERUZHSElKU1RVVldYWVpjZGVmZ2hpanN0dXZ3eHl6g4SFhoeIiYqSk5SVlpeYmZqio6Slpqeoqaqys7S1tre4ubrCw8TFxsfIycrS09TV1tfY2drh4uPk5ebn6Onq8fLz9PX29/j5+v/EAB8BAAMBAQEBAQEBAQEAAAAAAAABAgMEBQYHCAkKC//EALURAAIBAgQEAwQHBQQEAAECdwABAgMRBAUhMQYSQVEHYXETIjKBCBRCkaGxwQkjM1LwFWJy0QoWJDThJfEXGBkaJicoKSo1Njc4OTpDREVGR0hJSlNUVVZXWFlaY2RlZmdoaWpzdHV2d3h5eoKDhIWGh4iJipKTlJWWl5iZmqKjpKWmp6ipqrKztLW2t7i5usLDxMXGx8jJytLT1NXW19jZ2uLj5OXm5+jp6vLz9PX29/j5+v/bAEMABAQEBAQEBgQEBgkGBgYJDAkJCQkMDwwMDAwMDxIPDw8PDw8SEhISEhISEhUVFRUVFRkZGRkZHBwcHBwcHBwcHP/bAEMBBAUFBwcHDAcHDB0UEBQdHR0dHR0dHR0dHR0dHR0dHR0dHR0dHR0dHR0dHR0dHR0dHR0dHR0dHR0dHR0dHR0dHf/dAAQAAf/aAAwDAQACEQMRAD8A+V6KKK6jE//Z";
-
 export const MOCK_REPOS = [
   project("/home/user/projects/shop", "shop", ["fix-login", "feat-checkout"]),
   project("/home/user/projects/api", "api", ["refactor-auth"]),
@@ -1092,28 +1083,12 @@ export function createMockTransport(
   let settings: Settings = DEFAULT_SETTINGS;
   // The typed line stands in for the tool call it is doing.
   const states = new Map<string, AgentState>();
-  const setState = (
-    id: string,
-    state: AgentState,
-    activity: string | null = null,
-    browsing = false,
-  ) => {
+  const setState = (id: string, state: AgentState, activity: string | null = null) => {
     const alert = mockAlert(states.get(id), state);
     states.set(id, state);
-    const status = { ...agentStatus(state, activity, Date.now(), alert), browsing };
+    const status = agentStatus(state, activity, Date.now(), alert);
     later({ type: "agent_state", id, ...status, subagents: [] });
   };
-  // The worktrees whose browser `browser-stop` stopped; `browser-call` starts it again.
-  const stoppedBrowsers = new Set<string>();
-  const browserStatus = (worktree: string, running: boolean) =>
-    later({
-      type: "browser_status",
-      worktree,
-      running,
-      url: MOCK_BROWSER_URL,
-      title: MOCK_BROWSER_TITLE,
-      error: null,
-    });
   // A stand-in for `projects::place` (without resolving links): the deepest worktree holding it.
   const place = (cwd: string) =>
     projects
@@ -1682,23 +1657,6 @@ export function createMockTransport(
       scriptsAsked = holder(path) ? path : null;
       later(scriptsOfWorktree(path));
     },
-    async watchBrowser(worktree) {
-      // Each watched worktree's agent has a browser while the setting is on: one frame each time.
-      if (worktree === null) return;
-      if (!settings.browser.enabled) {
-        return void later({
-          type: "browser_status",
-          worktree,
-          running: false,
-          url: null,
-          title: null,
-          error: null,
-        });
-      }
-      browserStatus(worktree, !stoppedBrowsers.has(worktree));
-      later({ type: "browser_frame", worktree, data: MOCK_BROWSER_FRAME });
-    },
-    async browserDrawn() {},
     async listSessions() {
       listSessions();
     },
@@ -1861,25 +1819,6 @@ export function createMockTransport(
         // A stand-in for `UserPromptSubmit`: any line typed to a running agent sets it working.
         if (terminal.agent && line) setState(terminal.agent, "working", line);
         if (line === "claude") detect(id, terminal);
-        // `browser-call <caption>` stands in for a `PreToolUse` of a browser tool and
-        // `browser-stop` for its worktree's last agent ending (25.2).
-        const worktree = place(terminal.cwd);
-        if (terminal.agent && worktree && line.startsWith("browser-call ")) {
-          stoppedBrowsers.delete(worktree);
-          browserStatus(worktree, true);
-          setState(terminal.agent, "working", line, true);
-          later({
-            type: "browser_action",
-            worktree,
-            agent: terminal.agent,
-            agent_title: null,
-            action: line.slice(13),
-          });
-        }
-        if (terminal.agent && worktree && line === "browser-stop") {
-          stoppedBrowsers.add(worktree);
-          browserStatus(worktree, false);
-        }
         // `/clear` (20.3): Claude ends its session (`SessionEnd` "clear"), clears the screen and
         // its scrollback, and starts a new session in the same process (`SessionStart` "clear").
         if (terminal.agent && line === "/clear") {

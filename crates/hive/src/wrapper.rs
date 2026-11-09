@@ -114,8 +114,7 @@ fn script(bin: &Path, settings: &Path, shared: &Path) -> Vec<u8> {
 }
 
 /// Finds the first executable `claude` on `PATH` that is not this wrapper, then runs it with
-/// the hooks settings and, while they are there, the shared plugin (21.9) and the agent's
-/// browser ([`crate::browser::MCP_CONFIG`]).
+/// the hooks settings and, while it is there, the shared plugin (21.9).
 /// Empty `PATH` entries (the current directory) are skipped on purpose.
 #[cfg(unix)]
 const SCRIPT_BODY: &str = r#"
@@ -141,11 +140,6 @@ if [ "${HIVE_WRAPPED-}" = 1 ]; then
     exec "$real" "$@"
 fi
 export HIVE_WRAPPED=1
-# The agent's browser (24.6), while the service has it on. With `=`: the option takes several
-# values, so a separate one would take the user's prompt too.
-if [ -f "$hive_bin/hive-browser.json" ]; then
-    set -- "--mcp-config=$hive_bin/hive-browser.json" "$@"
-fi
 if [ -d "$hive_shared" ]; then
     set -- --plugin-dir "$hive_shared" "$@"
 fi
@@ -545,25 +539,6 @@ mod tests {
         let hooks = format!("[--settings]\n[{}]\n", s.paths.hooks_settings().display());
         let out = run(&s.wrapper(), &path, &[], &[]);
         assert_eq!(stdout(&out), format!("wrapped=1\n{hooks}"));
-    }
-
-    #[test]
-    fn the_browser_mcp_is_passed_only_while_it_is_on() {
-        let s = Setup::new();
-        let bin = s.paths.bin_dir();
-        let path = path_var(&[&bin, &s.fake()]);
-        crate::browser::configure(&bin, Path::new("/opt/hive"), true).unwrap();
-        let config = bin.join(crate::browser::MCP_CONFIG);
-        let mcp = format!("[--mcp-config={}]\n", config.display());
-        let out = run(&s.wrapper(), &path, &[], &["a b"]);
-        let expected = format!("wrapped=1\n{}{mcp}[a b]\n", s.settings_arg());
-        assert_eq!(stdout(&out), expected);
-        crate::browser::configure(&bin, Path::new("/opt/hive"), false).unwrap();
-        let out = run(&s.wrapper(), &path, &[], &["a b"]);
-        assert_eq!(
-            stdout(&out),
-            format!("wrapped=1\n{}[a b]\n", s.settings_arg())
-        );
     }
 
     #[test]

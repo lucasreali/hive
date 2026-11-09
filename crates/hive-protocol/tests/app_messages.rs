@@ -96,11 +96,7 @@ sort! {
         | GetShared
         | OpenShared
         | ListUninstall
-        | Uninstall
-        | BrowserEndpoint
-        | BrowserReady
-        | WatchBrowser
-        | BrowserDrawn;
+        | Uninstall;
     received:
         Welcome
         | VersionMismatch
@@ -183,9 +179,6 @@ sort! {
         | Shared
         | UninstallList
         | Uninstalled
-        | BrowserStatus
-        | BrowserFrame
-        | BrowserAction
         | Error;
 }
 
@@ -280,7 +273,6 @@ fn samples() -> Vec<Control> {
             }],
             activity: Some(s("Reading a.rs")),
             since_ms: 1,
-            browsing: true,
         },
         SubagentWorktrees { worktrees: vec![] },
         AgentTitle {
@@ -667,23 +659,6 @@ fn samples() -> Vec<Control> {
                 path: s("/Applications/Hive.app"),
                 error: m(),
             }],
-        },
-        BrowserStatus {
-            worktree: s("/r"),
-            running: true,
-            url: Some(s("http://localhost:5173/")),
-            title: Some(s("Shop")),
-            error: None,
-        },
-        BrowserFrame {
-            worktree: s("/r"),
-            data: s("/9j/4AAQ"),
-        },
-        BrowserAction {
-            worktree: s("/r"),
-            agent: s("s"),
-            agent_title: Some(s("Fix login")),
-            action: s("clicked 'Learn more'"),
         },
         Error { message: m() },
     ]

@@ -69,8 +69,7 @@
       }
     ],
     "activity": "Reading a.rs",
-    "since_ms": 1,
-    "browsing": true
+    "since_ms": 1
   },
   {
     "type": "subagent_worktrees",
@@ -746,11 +745,6 @@
       },
       "gh": {
         "config_dirs": []
-      },
-      "browser": {
-        "enabled": false,
-        "path": null,
-        "max": 3
       }
     }
   },
@@ -805,26 +799,6 @@
         "error": "m"
       }
     ]
-  },
-  {
-    "type": "browser_status",
-    "worktree": "/r",
-    "running": true,
-    "url": "http://localhost:5173/",
-    "title": "Shop",
-    "error": null
-  },
-  {
-    "type": "browser_frame",
-    "worktree": "/r",
-    "data": "/9j/4AAQ"
-  },
-  {
-    "type": "browser_action",
-    "worktree": "/r",
-    "agent": "s",
-    "agent_title": "Fix login",
-    "action": "clicked 'Learn more'"
   },
   {
     "type": "error",

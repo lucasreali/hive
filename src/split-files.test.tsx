@@ -339,8 +339,8 @@ test("a tab dropped: files and terminals of the worktree, onto panes and onto ta
 
 test("a pane that is a tab of no known kind pairs without taking the focus (for later tab kinds)", () => {
   addTab(1, W);
-  setSplit({ left: 1, right: "browser:x" });
-  expect(s().splits).toEqual([{ left: 1, right: "browser:x" }]);
+  setSplit({ left: 1, right: "other:x" });
+  expect(s().splits).toEqual([{ left: 1, right: "other:x" }]);
   expect(s().activeTab).toBe(1);
 });
 

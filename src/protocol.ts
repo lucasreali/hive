@@ -100,27 +100,6 @@ export type ServiceMessage =
   // A window of the current account reached 80% or 95%, once per window (17.23).
   | { type: "usage_alert"; window: UsageWindow; threshold: number; resets_at: number }
   | { type: "subagent_worktrees"; worktrees: string[] }
-  // 24.6, 25.2: a worktree's browser: running or not, the page shown (the last one once it
-  // stopped), why it did not start.
-  | {
-      type: "browser_status";
-      worktree: string;
-      running: boolean;
-      url: string | null;
-      title: string | null;
-      error: string | null;
-    }
-  // 24.6: one frame of the watched browser, a JPEG in base64: of its screencast (the next comes
-  // after `browserDrawn`), or the one kept once it stopped.
-  | { type: "browser_frame"; worktree: string; data: string }
-  // 25.2: an agent called a tool of the worktree's running browser; `action` is plain text.
-  | {
-      type: "browser_action";
-      worktree: string;
-      agent: string;
-      agent_title: string | null;
-      action: string;
-    }
   | { type: "projects"; projects: Project[] }
   | { type: "project_added"; project: Project }
   | { type: "add_project_failed"; path: string; error: ProjectError; message: string }
@@ -577,11 +556,6 @@ export type AgentStatus = {
   /** Show an OS notification for `alert`: the service's call (out of the focused window's view). */
   notify: boolean;
   subagents: Subagent[];
-  /**
-   * It uses the agent's browser (25.2): from its last browser tool call until it stops. Absent
-   * from an older service.
-   */
-  browsing?: boolean;
 } & Doing;
 
 /**
@@ -646,19 +620,6 @@ export type Settings = {
   };
   /** The gh config folders (24.13) besides `gh`'s own, whose accounts a space may pick. */
   gh: { config_dirs: string[] };
-  /**
-   * The agent's browser (24.6): off by default; `path` null finds Chrome, Chromium, Edge or
-   * Brave; `max` browsers open at once, 1–10.
-   */
-  browser: { enabled: boolean; path: string | null; max: number };
-};
-
-/** Mirrors `browser_status` (24.6), without its type and worktree. */
-export type BrowserStatus = {
-  running: boolean;
-  url: string | null;
-  title: string | null;
-  error: string | null;
 };
 
 /**

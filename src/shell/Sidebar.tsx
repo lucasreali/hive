@@ -1,4 +1,4 @@
-import { GlobeIcon, PlusIcon as NewChatIcon } from "@phosphor-icons/react";
+import { PlusIcon as NewChatIcon } from "@phosphor-icons/react";
 import {
   type KeyboardEvent,
   type MouseEvent,
@@ -31,7 +31,6 @@ import {
   openModal,
   openProjectMenu,
   select,
-  showBrowserTab,
   spaceProjects,
   stepAgent,
   toggleCollapsed,
@@ -46,7 +45,6 @@ import {
   ChevronIcon,
   FolderIcon,
   GroupIcon,
-  ICON,
   PlainFolderIcon,
   PlusIcon,
   RefreshIcon,
@@ -500,8 +498,6 @@ function AgentRow({
   const badge = useHive((s) => s.terminals[agent.terminal]?.badge);
   const account = useHive((s) => accountLine(s, agent.terminal));
   const show = () => tab && activateTab(tab);
-  const browsing = useHive((s) => !!s.agentStates[agent.id]?.browsing);
-  const pulses = useHive((s) => s.browserPulses[agent.id] ?? 0);
   const row = useRef<HTMLDivElement>(null);
   // F8 picks an agent that may be out of view.
   useEffect(() => {
@@ -545,18 +541,6 @@ function AgentRow({
             </span>
           )}
         </button>
-        {browsing && agent.worktree && (
-          <button
-            type="button"
-            className="agent-browser"
-            title="Show the agent's browser"
-            aria-label="Show the agent's browser"
-            onClick={() => showBrowserTab(agent.worktree as string)}
-          >
-            {/* A new element at each action, so its pulse plays once more. */}
-            <GlobeIcon key={pulses} className="agent-browser-globe" {...ICON} />
-          </button>
-        )}
       </div>
       {status && status.subagents.length > 0 && (
         <ul>

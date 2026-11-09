@@ -37,7 +37,7 @@ where
         return;
     };
     match role {
-        Role::Hook => hook_connection(reader, writer, &state).await,
+        Role::Hook => hook_connection(reader, &state).await,
         Role::App => {
             if app_connection(reader, writer, &state).await {
                 let _ = app_gone.send(()).await;
@@ -89,11 +89,10 @@ where
     role
 }
 
-/// A hook connection carries exactly one event (or one `hive badge`, or `hive browser-mcp`'s
-/// ask, the only one answered); the connection is closed after it.
-async fn hook_connection<R: AsyncRead + Unpin, W: AsyncWrite + Unpin>(
+/// A hook connection carries exactly one event (or one `hive badge`); the connection is closed
+/// after it.
+async fn hook_connection<R: AsyncRead + Unpin>(
     mut reader: FramedRead<R, FrameCodec>,
-    mut writer: FramedWrite<W, FrameCodec>,
     state: &Arc<State>,
 ) {
     let Some(Ok(frame)) = reader.next().await else {
@@ -123,13 +122,6 @@ async fn hook_connection<R: AsyncRead + Unpin, W: AsyncWrite + Unpin>(
                 eprintln!("hive: warning: cannot keep the session usage: {err}");
             }
             state.send_usage().await;
-        }
-        Ok(Control::BrowserEndpoint { cwd }) => {
-            let reply = match state.browser_endpoint(&cwd).await {
-                Ok(endpoint) => Control::BrowserReady { endpoint },
-                Err(message) => Control::Error { message },
-            };
-            let _ = writer.send(Frame::control(0, &reply)).await;
         }
         Ok(Control::Hook {
             event,
@@ -200,7 +192,6 @@ where
     }
     writer.abort();
     *state.app.lock().await = None;
-    state.watch_browser(None).await;
     true
 }
 
@@ -259,8 +250,6 @@ async fn app_frame(state: &Arc<State>, frame: Frame, output: &mpsc::UnboundedSen
         }
         Ok(Control::GetSettings) => state.send_settings().await,
         Ok(Control::Resync) => resync(state).await,
-        Ok(Control::WatchBrowser { worktree }) => state.watch_browser(worktree).await,
-        Ok(Control::BrowserDrawn) => state.browser_drawn().await,
         Ok(Control::SetSettings { settings }) => {
             let using = |dir: &str| state.projects.using(dir);
             let using_gh = |dir: &str| state.projects.using_gh(dir);
@@ -276,7 +265,6 @@ async fn app_frame(state: &Arc<State>, frame: Frame, output: &mpsc::UnboundedSen
             // A project's run scripts come first in its worktrees' scripts (23.4).
             if saved {
                 state.rescript(None).await;
-                state.browser_settings_changed().await;
             }
         }
         Ok(Control::CreateAccount { name }) => {
@@ -996,7 +984,6 @@ mod tests {
             subagents: vec![],
             activity: None,
             since_ms: 0,
-            browsing: false,
         };
         // Each agent's state; the named one's name too, and only after its state.
         let named = Control::AgentTitle {
