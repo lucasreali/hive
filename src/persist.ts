@@ -89,14 +89,18 @@ const TAB_ORDER_STORAGE = "hive.tabOrder";
 
 /**
  * The tab bar's order remembered from the last run, empty when none or unreadable. A plain
- * terminal's key names a channel of that run only, so only files and sessions are kept.
+ * terminal's key names a channel of that run only, so only files and sessions are kept; nor a
+ * `browser:` key, of the agent's browser's tab an install before 26.11 remembers.
  */
 export function savedTabOrder(storage: Pick<Storage, "getItem"> | null = safeStorage()): string[] {
   try {
     const saved: unknown = JSON.parse(storage?.getItem(TAB_ORDER_STORAGE) ?? "[]");
     return Array.isArray(saved)
       ? saved
-          .filter((k): k is string => typeof k === "string" && !k.startsWith("tab:"))
+          .filter(
+            (k): k is string =>
+              typeof k === "string" && !k.startsWith("tab:") && !k.startsWith("browser:"),
+          )
           .slice(-ORDER_LIMIT)
       : [];
   } catch {

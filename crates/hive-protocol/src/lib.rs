@@ -314,9 +314,6 @@ pub enum Control {
         activity: Option<String>,
         /// Wall clock (ms since the Unix epoch) when the displayed `state` began.
         since_ms: u64,
-        /// It uses the agent's browser (25.2): from its last browser tool call until it stops.
-        #[serde(default)]
-        browsing: bool,
     },
     /// The worktrees a live subagent works in as its own (#22) and no agent runs in: the
     /// sidebar shows each only under its subagent, not in its project's list. Sent when the
@@ -1214,48 +1211,6 @@ pub enum Control {
     Uninstalled {
         failed: Vec<UninstallFailure>,
     },
-    /// `hive browser-mcp` → service (24.6): the CDP endpoint of the agent's browser of the
-    /// worktree holding `cwd`, started first when it is not running. Answered by
-    /// `BrowserReady`, or `Error` with why not; the connection then closes.
-    BrowserEndpoint {
-        cwd: String,
-    },
-    /// Service → `hive browser-mcp`: the browser's CDP endpoint, `http://127.0.0.1:<port>`.
-    BrowserReady {
-        endpoint: String,
-    },
-    /// App → service: the browser tab shows `worktree`'s browser (`None`: none in view).
-    /// Its screencast runs only while watched; answered by `BrowserStatus`, then frames.
-    WatchBrowser {
-        worktree: Option<String>,
-    },
-    /// App → service: the last `BrowserFrame` is drawn, so the browser may send the next.
-    BrowserDrawn,
-    /// Service → app: a worktree's browser: running or not, the page shown (`url`, `title`; the
-    /// last one once it stopped), and why it could not start (`error`). Sent on `WatchBrowser`,
-    /// on each change of any worktree's browser, and for each running one after `Welcome`.
-    BrowserStatus {
-        worktree: String,
-        running: bool,
-        url: Option<String>,
-        title: Option<String>,
-        error: Option<String>,
-    },
-    /// Service → app: one frame of the watched worktree's browser, a JPEG in base64: of its
-    /// screencast (the next comes only after `BrowserDrawn`), or the one kept once it stopped.
-    BrowserFrame {
-        worktree: String,
-        data: String,
-    },
-    /// Service → app (25.2): an agent called a browser tool of `worktree`'s running browser.
-    /// `action` says what it did, plain text from its untrusted `tool_input`, size-capped;
-    /// `agent` is its session, `agent_title` its name so far.
-    BrowserAction {
-        worktree: String,
-        agent: String,
-        agent_title: Option<String>,
-        action: String,
-    },
     Error {
         message: String,
     },
@@ -1316,7 +1271,6 @@ pub struct Settings {
     pub projects: BTreeMap<String, ProjectSettings>,
     pub claude: ClaudeSettings,
     pub gh: GhSettings,
-    pub browser: BrowserSettings,
 }
 
 /// The gh config folders (24.13) besides `gh`'s own, whose accounts a space may pick.
@@ -1325,28 +1279,6 @@ pub struct Settings {
 pub struct GhSettings {
     /// Each a `GH_CONFIG_DIR`.
     pub config_dirs: Vec<String>,
-}
-
-/// The agent's browser (24.6, D22.3): off by default. When on, agents in Hive's terminals get
-/// the `hive-browser` MCP server, driving a browser of their worktree the app can watch.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(default)]
-pub struct BrowserSettings {
-    pub enabled: bool,
-    /// The browser to run; `None`: Chrome, Chromium, Edge or Brave where they install.
-    pub path: Option<String>,
-    /// The most browsers open at once, 1 to 10.
-    pub max: u32,
-}
-
-impl Default for BrowserSettings {
-    fn default() -> Self {
-        Self {
-            enabled: false,
-            path: None,
-            max: 3,
-        }
-    }
 }
 
 /// The Claude accounts (12.2), besides the default one (no `CLAUDE_CONFIG_DIR`: `~/.claude`),
@@ -2600,11 +2532,10 @@ mod tests {
             }],
             activity: None,
             since_ms: 5,
-            browsing: false,
         };
         assert_eq!(
             &Frame::control(1, &msg).payload[..],
-            br#"{"type":"agent_state","id":"s","state":"waiting_permission","urgency":8,"pending":true,"interrupted":false,"alert":"action","notify":true,"subagents":[{"id":"a","agent_type":null,"teammate_name":null,"state":"with_subagents","worktree":"/r/.claude/worktrees/w","activity":"Reading a.rs","since_ms":7}],"activity":null,"since_ms":5,"browsing":false}"#
+            br#"{"type":"agent_state","id":"s","state":"waiting_permission","urgency":8,"pending":true,"interrupted":false,"alert":"action","notify":true,"subagents":[{"id":"a","agent_type":null,"teammate_name":null,"state":"with_subagents","worktree":"/r/.claude/worktrees/w","activity":"Reading a.rs","since_ms":7}],"activity":null,"since_ms":5}"#
         );
         assert_eq!(Frame::control(1, &msg).to_control().unwrap(), msg);
         // An older service's `writing` (24.11) is an unknown key now, and ignored.
@@ -3592,7 +3523,7 @@ mod tests {
         };
         assert_eq!(
             &Frame::control(0, &settings).payload[..],
-            br#"{"type":"settings","settings":{"terminal":{"font_family":"\"Hive Mono\", \"Symbols Nerd Font\", monospace","font_size":13,"scrollback":5000,"cursor_style":"block","cursor_blink":false,"copy_on_select":false,"option_as_meta":"off","screen_reader":false,"shell":"default"},"appearance":{"theme":"one-dark"},"notifications":{"volume":100,"bounce":true,"menu_bar":true,"command_secs":10},"agents":{"silence_secs":5,"confirm_close":true,"keep_awake":true},"worktrees":{"default_base":null},"projects":{},"claude":{"accounts":[],"default_name":"Default","share_sessions":false},"gh":{"config_dirs":[]},"browser":{"enabled":false,"path":null,"max":3}}}"#
+            br#"{"type":"settings","settings":{"terminal":{"font_family":"\"Hive Mono\", \"Symbols Nerd Font\", monospace","font_size":13,"scrollback":5000,"cursor_style":"block","cursor_blink":false,"copy_on_select":false,"option_as_meta":"off","screen_reader":false,"shell":"default"},"appearance":{"theme":"one-dark"},"notifications":{"volume":100,"bounce":true,"menu_bar":true,"command_secs":10},"agents":{"silence_secs":5,"confirm_close":true,"keep_awake":true},"worktrees":{"default_base":null},"projects":{},"claude":{"accounts":[],"default_name":"Default","share_sessions":false},"gh":{"config_dirs":[]}}}"#
         );
         let partial: Control = serde_json::from_str(
             r#"{"type":"set_settings","settings":{"terminal":{"cursor_style":"bar","shell":"git_bash"},"appearance":{"theme":"one-light"},"projects":{"/r":{"later":1}},"claude":{"accounts":[{"name":"Work","config_dir":"/w"}],"account":"/w"},"unknown":1}}"#,

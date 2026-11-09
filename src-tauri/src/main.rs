@@ -210,8 +210,6 @@ fn main() {
             commands::set_view,
             commands::list_changes,
             commands::list_scripts,
-            commands::watch_browser,
-            commands::browser_drawn,
             commands::open_file,
             commands::open_table,
             commands::edit_table,

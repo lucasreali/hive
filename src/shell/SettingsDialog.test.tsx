@@ -173,21 +173,6 @@ test("an empty default base is null: the project's current branch", async () => 
   expect(base.value).toBe("");
 });
 
-test("the agent's browser: on, its program (empty: found) and how many at once (24.6)", async () => {
-  open();
-  section("Agents");
-  fireEvent.click(screen.getByLabelText("Give agents a browser"));
-  await waitFor(() => expect(settings().browser.enabled).toBe(true));
-  const path = input("Browser program");
-  expect(path.placeholder).toBe("Found where it installs");
-  fireEvent.change(path, { target: { value: "/opt/chrome" } });
-  await waitFor(() => expect(settings().browser.path).toBe("/opt/chrome"));
-  fireEvent.change(path, { target: { value: " " } });
-  await waitFor(() => expect(settings().browser.path).toBeNull());
-  fireEvent.change(input("Browsers open at once"), { target: { value: "2" } });
-  await waitFor(() => expect(settings().browser.max).toBe(2));
-});
-
 test("selects save the cursor style and the theme", async () => {
   open();
   const pick = (name: string, option: string) => {
@@ -806,8 +791,8 @@ test("the search lists every matching field across sections", () => {
   // Picking a section clears the search.
   section("Agents");
   expect(screen.getByRole<HTMLInputElement>("searchbox").value).toBe("");
-  // Two agents' settings and the agent's browser's three (24.6).
-  expect(labels()).toHaveLength(5);
+  // Two agents' settings.
+  expect(labels()).toHaveLength(2);
 });
 
 const shortcutRows = () =>

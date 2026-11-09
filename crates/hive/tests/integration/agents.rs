@@ -76,7 +76,6 @@ fn state(id: &str, state: AgentState, subagents: Vec<SubagentState>) -> Control 
         subagents,
         activity: None,
         since_ms: 0,
-        browsing: false,
     }
 }
 
@@ -700,7 +699,6 @@ async fn an_agent_finishing_in_view_of_the_focused_window_is_not_pending() {
             subagents: vec![],
             activity: None,
             since_ms: 0,
-            browsing: false,
         };
         vec![(1, message)]
     };
@@ -760,7 +758,6 @@ async fn looking_at_an_agent_waiting_for_you_makes_it_not_pending_until_its_next
             subagents: vec![],
             activity: None,
             since_ms: 0,
-            browsing: false,
         };
         vec![(1, message)]
     };
