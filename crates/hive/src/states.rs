@@ -2047,19 +2047,14 @@ mod tests {
             for event in ends {
                 agent.feed("s", event, now);
             }
-            agent.message("s")
+            (agent.message("s"), agent.displayed(), agent.subagents)
         };
         let ends = turn_ends("a", "researcher");
         for first in [true, false] {
             let results = ends.clone().map(|ends| team(&ends, first));
             assert_eq!(results[0], results[1], "first turn: {first}");
             assert_eq!(results[1], results[2], "first turn: {first}");
-            let Control::AgentState {
-                state, subagents, ..
-            } = &results[0]
-            else {
-                panic!("not a state")
-            };
+            let (_, state, subagents) = &results[0];
             // The other teammate still works, so the agent is with subagents; the idle one
             // is listed after it, named, with nothing to do.
             assert_eq!(*state, WithSubagents);
