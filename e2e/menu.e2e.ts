@@ -51,7 +51,7 @@ test("menu: copy and paste in a text field and the editor", async ({ page }) => 
   );
 });
 
-test("menu: Toggle Sidebar and Toggle Right Panel", async ({ page }) => {
+test("menu: Toggle Sidebar and Toggle Side Panel View", async ({ page }) => {
   await page.goto("/");
   const tree = page.getByRole("navigation", { name: "Projects" });
   await tree.getByRole("button", { name: "fix-login" }).click();

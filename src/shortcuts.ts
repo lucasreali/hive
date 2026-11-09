@@ -190,7 +190,7 @@ export const COMMANDS: readonly Command[] = [
   },
   {
     id: "toggle-panel",
-    label: "Show or hide files, diff and sessions",
+    label: "Show or hide the side panel's view",
     keys: "Ctrl+Shift+B",
     run: () => setRightPanel(useHive.getState().rightPanel ? null : "files"),
   },

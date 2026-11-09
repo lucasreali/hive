@@ -31,7 +31,6 @@ import { appliedTheme, useHive } from "./store";
 import { guardClose, nativeTheme } from "./window";
 
 export function App() {
-  const rightPanel = useHive((s) => s.rightPanel);
   const sidebarShown = useHive((s) => s.sidebarShown);
   const status = useHive((s) => s.connection.status);
   const modal = useHive((s) => s.modal);
@@ -64,7 +63,7 @@ export function App() {
         <main className="main" inert={blocked}>
           {sidebarShown && <Sidebar />}
           <TerminalArea />
-          {rightPanel === "files" && <RightPanel />}
+          <RightPanel />
         </main>
         {modal === "add-project" && !blocked && <AddProjectDialog />}
         {modal === "new-worktree" && !blocked && hasProjects && <NewWorktreeDialog />}

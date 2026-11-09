@@ -62,7 +62,8 @@ test("files panel: shows the selected worktree's changes; Ctrl+Shift+B toggles i
   await tree.getByRole("button", { name: "fix-login" }).click();
 
   await page.keyboard.press(`${mod}+Shift+B`);
-  await expect(panel).toBeHidden();
+  await expect(panel.locator(".panel-title")).toBeHidden();
+  await expect(panel.getByRole("tablist", { name: "Panel" })).toBeVisible();
 
   // Files: every file of the worktree, unchanged ones without a letter.
   await page.keyboard.press(`${mod}+Shift+B`);
