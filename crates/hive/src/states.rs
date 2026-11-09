@@ -43,8 +43,11 @@ pub struct Agent {
     /// Its terminal's Claude config folder (see `Terminal::claude_dir`).
     pub claude_dir: Option<String>,
     state: AgentState,
-    /// In start order.
+    /// In start order, except that a teammate going idle moves to the end.
     subagents: Vec<SubagentState>,
+    /// Live subagents known to be agent team teammates, from their `TeammateIdle`: they stay
+    /// listed at the end of a turn (their `SubagentStop` makes them idle) until they end.
+    teammates: HashSet<String>,
     /// The last cwd placed per live subagent, so `place` runs once per cwd.
     placed: HashMap<String, String>,
     /// Background task ids each live subagent launched (Bash `run_in_background`, `Monitor`,
@@ -64,6 +67,11 @@ pub struct Agent {
     /// It waited for you while watched (15.6), was interrupted, or its turn ended with
     /// subagents still at work (13.3): not pending until its state changes.
     seen: bool,
+    /// Its turn ended with subagents still at work, so the "finished" alert was held back: the
+    /// next `Stop` with none at work gives it, even with nothing shown changing in between.
+    held: bool,
+    /// A `Stop` of the agent itself was just applied.
+    turn_ended: bool,
     /// It waits for you because the user interrupted it, until its state changes.
     interrupted: bool,
     /// What the agent itself is doing, from its last tool call; cleared when its turn ends.
@@ -95,6 +103,7 @@ impl Agent {
             claude_dir: None,
             state: AgentState::Idle,
             subagents: Vec::new(),
+            teammates: HashSet::new(),
             placed: HashMap::new(),
             launched: HashMap::new(),
             waiting: HashSet::new(),
@@ -102,6 +111,8 @@ impl Agent {
             stamps: HashMap::new(),
             watched: false,
             seen: false,
+            held: false,
+            turn_ended: false,
             interrupted: false,
             activity: None,
             compacting: None,
@@ -154,6 +165,13 @@ impl Agent {
     /// every `Stop`/`SubagentStop`): it waits to be woken by it. A waiting subagent leaves
     /// when a later `background_tasks` no longer has any of its launches, or when its own
     /// worktree is removed.
+    ///
+    /// An agent team teammate does not leave when its turn ends: it stays listed, idle, until
+    /// its own `SessionEnd` or its agent's, and its next `SubagentStart` makes it work again.
+    /// Whether it sends `SubagentStop`, `TeammateIdle` or both, and in which order, is not
+    /// documented (26.10), so each order ends the same: `TeammateIdle` alone makes it idle at
+    /// the end of the list, after a `SubagentStop` that made it leave it joins again there, and
+    /// a `SubagentStop` once it is known as a teammate only makes it idle.
     pub fn apply(
         &mut self,
         id: &str,
@@ -185,16 +203,19 @@ impl Agent {
                 (Some(sub), EventKind::SubagentStopped) => Some(&sub.id),
                 _ => None,
             };
-            if let Some(id) = stopped {
+            if let Some(id) = stopped.filter(|id| !agent.teammates.contains(*id)) {
                 agent.waiting.insert(id.clone());
             }
             if stopped.is_some() || live.is_some() {
                 agent.prune(live.map_or(&[], Vec::as_slice));
             }
             let Some(sub) = &event.subagent else {
-                if stale {
+                // A teammate's `TeammateIdle` without its `agent_id` names no line to change,
+                // and it is not the agent's own: its state and compaction go on.
+                if stale || event.kind == EventKind::TeammateIdled {
                     return;
                 }
+                agent.turn_ended = event.kind == EventKind::TurnFinished;
                 // A compaction shows as working, then gives back what it interrupted.
                 let saved = agent.compacting.take();
                 match event.kind {
@@ -227,7 +248,12 @@ impl Agent {
             }
             let known = agent.subagents.iter().position(|s| s.id == sub.id);
             let current = known.map_or(AgentState::Idle, |i| agent.subagents[i].state);
-            let state = state_of(&event.kind, current);
+            let state =
+                if event.kind == EventKind::SubagentStopped && agent.teammates.contains(&sub.id) {
+                    Some(AgentState::Idle)
+                } else {
+                    state_of(&event.kind, current)
+                };
             if let Some(i) = known
                 && !stale
             {
@@ -249,7 +275,7 @@ impl Agent {
             if !stale {
                 agent.waiting.remove(&sub.id);
             }
-            let i = match known {
+            let mut i = match known {
                 Some(i) => i,
                 None if agent.subagents.len() < MAX_SUBAGENTS
                     && sub.id.len() <= MAX_ID
@@ -258,6 +284,7 @@ impl Agent {
                     agent.subagents.push(SubagentState {
                         id: sub.id.clone(),
                         agent_type: sub.agent_type.clone(),
+                        teammate_name: None,
                         state,
                         worktree: None,
                         activity: event.activity.clone(),
@@ -267,9 +294,19 @@ impl Agent {
                 }
                 None => return,
             };
+            if event.kind == EventKind::TeammateIdled {
+                agent.teammates.insert(sub.id.clone());
+                if !stale {
+                    agent.subagents[i..].rotate_left(1);
+                    i = agent.subagents.len() - 1;
+                }
+            }
             let known = &mut agent.subagents[i];
             if !stale {
                 known.state = state;
+            }
+            if sub.teammate_name.is_some() {
+                known.teammate_name = sub.teammate_name.clone();
             }
             if let Some(task) = launch(&event.raw) {
                 let ids = agent.launched.entry(sub.id.clone()).or_default();
@@ -321,6 +358,7 @@ impl Agent {
     /// Forgets a subagent.
     fn leave(&mut self, id: &str) {
         self.subagents.retain(|s| s.id != id);
+        self.teammates.remove(id);
         self.placed.remove(id);
         self.stamps.remove(&Some(id.to_owned()));
         self.launched.remove(id);
@@ -434,13 +472,18 @@ impl Agent {
 
     /// A subagent is still in its turn (13.3), so a turn of the agent that ends now has not
     /// finished: Claude Code wakes it when they end. One that only waits on its own background
-    /// launch does not count, as a background shell task of the agent's does not.
+    /// launch does not count, as a background shell task of the agent's does not, nor does an
+    /// idle teammate (D20.3).
     fn delegating(&self) -> bool {
-        self.subagents.iter().any(|s| !self.waiting.contains(&s.id))
+        self.subagents
+            .iter()
+            .any(|s| s.state != AgentState::Idle && !self.waiting.contains(&s.id))
     }
 
     fn displayed(&self) -> AgentState {
-        let with = (!self.subagents.is_empty()).then_some(AgentState::WithSubagents);
+        // An idle teammate is listed but not at work (D20.3).
+        let at_work = self.subagents.iter().any(|s| s.state != AgentState::Idle);
+        let with = at_work.then_some(AgentState::WithSubagents);
         self.subagents
             .iter()
             .map(|s| s.state)
@@ -453,7 +496,9 @@ impl Agent {
     /// or was made to wait for you `quiet`ly (an interrupt), or waits for you while a
     /// subagent is still in its turn (13.3: it has not finished; Claude Code wakes it when
     /// they end). That change alerts (2.4): it finished, or it waits for the user (a pending
-    /// state); an interrupt or a turn ended with subagents still at work never does.
+    /// state); an interrupt or a turn ended with subagents still at work never does. A later
+    /// `Stop` with none at work gives the alert held back, even if nothing shown changes (a wake
+    /// that only answers in text sends no other hook).
     /// A state that changed (the displayed one, or a subagent's) begins at `now`.
     fn changed(
         &mut self,
@@ -473,12 +518,14 @@ impl Agent {
         let shown = self.displayed();
         let wall = self.wall(now);
         let mut alert = None;
-        if shown != was {
+        let late = std::mem::take(&mut self.turn_ended) && self.held && !self.delegating();
+        if shown != was || late {
             let busy = matches!(was, AgentState::Working | AgentState::WithSubagents);
             let waits = shown == AgentState::WaitingYou;
-            let finished = busy && waits;
+            let finished = (busy || late) && waits;
             self.interrupted = quiet && waits;
             let early = waits && self.delegating();
+            self.held = early && !quiet;
             self.seen = self.interrupted || early || self.watched && waits;
             self.since_ms = wall;
             // One expression: every instantiation of `changed` runs each of its lines.
@@ -531,7 +578,8 @@ fn follow(activity: &mut Option<String>, event: &AgentEvent) {
         EventKind::PromptSubmitted
         | EventKind::TurnFailed { .. }
         | EventKind::SessionEnded { .. }
-        | EventKind::SubagentStopped => *activity = None,
+        | EventKind::SubagentStopped
+        | EventKind::TeammateIdled => *activity = None,
         _ => {
             if let Some(doing) = &event.activity {
                 *activity = Some(doing.clone());
@@ -585,7 +633,7 @@ fn state_of(kind: &EventKind, current: AgentState) -> Option<AgentState> {
     use AgentState::*;
     use Notification as N;
     Some(match kind {
-        EventKind::SessionStarted => Idle,
+        EventKind::SessionStarted | EventKind::TeammateIdled => Idle,
         EventKind::ToolStarted { tool } => asks(tool).unwrap_or(Working),
         EventKind::PermissionRequested { tool } => asks(tool).unwrap_or(WaitingPermission),
         EventKind::PromptSubmitted
@@ -1396,6 +1444,7 @@ mod tests {
                 subagents: vec![SubagentState {
                     id: "a".into(),
                     agent_type: Some("Explore".into()),
+                    teammate_name: None,
                     state: Working,
                     worktree: None,
                     activity: None,
@@ -1965,6 +2014,252 @@ mod tests {
         assert_eq!(worktrees(&agent), [("c", None), ("d", None)]);
         agent.feed("s", &hook("SessionEnd", Some("d"), json!({})), now);
         assert_eq!(worktrees(&agent), [("c", None)]);
+    }
+
+    /// A teammate's `TeammateIdle`, with its name.
+    fn idle(sub: &str, name: &str) -> AgentEvent {
+        hook("TeammateIdle", Some(sub), json!({"teammate_name": name}))
+    }
+
+    /// Every order the docs allow for a teammate's end of turn.
+    fn turn_ends(sub: &str, name: &str) -> [Vec<AgentEvent>; 3] {
+        let stop = || hook("SubagentStop", Some(sub), json!({}));
+        [
+            vec![stop(), idle(sub, name)],
+            vec![idle(sub, name), stop()],
+            vec![idle(sub, name)],
+        ]
+    }
+
+    #[test]
+    fn a_teammate_ends_its_turn_the_same_in_every_order() {
+        let now = Instant::now();
+        let team = |ends: &[AgentEvent], first: bool| {
+            let mut agent = Agent::new(1, now, 0);
+            agent.feed("s", &hook("UserPromptSubmit", None, json!({})), now);
+            agent.feed("s", &hook("SubagentStart", Some("a"), json!({})), now);
+            agent.feed("s", &hook("SubagentStart", Some("b"), json!({})), now);
+            agent.feed("s", &tool("PreToolUse", Some("a"), "Read"), now);
+            if !first {
+                agent.feed("s", &idle("a", "first"), now);
+                agent.feed("s", &hook("SubagentStart", Some("a"), json!({})), now);
+            }
+            for event in ends {
+                agent.feed("s", event, now);
+            }
+            agent.message("s")
+        };
+        let ends = turn_ends("a", "researcher");
+        for first in [true, false] {
+            let results = ends.clone().map(|ends| team(&ends, first));
+            assert_eq!(results[0], results[1], "first turn: {first}");
+            assert_eq!(results[1], results[2], "first turn: {first}");
+            let Control::AgentState {
+                state, subagents, ..
+            } = &results[0]
+            else {
+                panic!("not a state")
+            };
+            // The other teammate still works, so the agent is with subagents; the idle one
+            // is listed after it, named, with nothing to do.
+            assert_eq!(*state, WithSubagents);
+            assert_eq!(
+                subagents
+                    .iter()
+                    .map(|s| (s.id.as_str(), s.state, s.teammate_name.as_deref()))
+                    .collect::<Vec<_>>(),
+                [("b", Working, None), ("a", Idle, Some("researcher"))]
+            );
+            assert_eq!(subagents[1].activity, None);
+        }
+    }
+
+    #[test]
+    fn an_idle_teammate_is_not_at_work_and_is_woken_by_its_next_start() {
+        let start = Instant::now();
+        for ends in turn_ends("a", "researcher") {
+            let mut agent = Agent::new(1, start, 0);
+            agent.feed("s", &hook("UserPromptSubmit", None, json!({})), start);
+            agent.feed("s", &hook("SubagentStart", Some("a"), json!({})), start);
+            assert_eq!(shown(&agent).0, WithSubagents);
+            for event in &ends {
+                agent.feed("s", event, start);
+            }
+            // Not "with subagents": the agent's own state shows, and silence does not make the
+            // teammate wait for you (nor does an interrupt).
+            assert_eq!(shown(&agent), (Working, vec![("a".into(), Idle)]));
+            agent.reconcile("s", SILENCE, start, start + SILENCE);
+            assert_eq!(shown(&agent), (WaitingYou, vec![("a".into(), Idle)]));
+            agent.feed("s", &hook("UserPromptSubmit", None, json!({})), start);
+            agent.interrupt("s", start);
+            assert_eq!(shown(&agent), (WaitingYou, vec![("a".into(), Idle)]));
+            // Woken by a message: it works again, keeps its name and shows on its agent.
+            agent.feed("s", &hook("SubagentStart", Some("a"), json!({})), start);
+            assert_eq!(shown(&agent).1, [("a".into(), Working)]);
+            assert_eq!(
+                agent.subagents[0].teammate_name.as_deref(),
+                Some("researcher")
+            );
+            agent.feed("s", &hook("UserPromptSubmit", None, json!({})), start);
+            assert_eq!(shown(&agent).0, WithSubagents);
+            // Its own `SessionEnd` takes it off, and it starts over as an unknown subagent.
+            agent.feed("s", &hook("SessionEnd", Some("a"), json!({})), start);
+            assert_eq!(shown(&agent), (Working, vec![]));
+            assert!(agent.teammates.is_empty());
+            agent.feed("s", &hook("SubagentStart", Some("a"), json!({})), start);
+            agent.feed("s", &hook("SubagentStop", Some("a"), json!({})), start);
+            assert_eq!(shown(&agent), (Working, vec![]));
+        }
+    }
+
+    #[test]
+    fn an_idle_teammate_ignores_the_background_task_lists() {
+        let now = Instant::now();
+        let mut agent = Agent::new(1, now, 0);
+        agent.feed("s", &idle("a", "researcher"), now);
+        agent.feed("s", &stop_with("Stop", None, &[]), now);
+        agent.feed("s", &stop_with("SubagentStop", Some("a"), &[]), now);
+        assert_eq!(shown(&agent), (WaitingYou, vec![("a".into(), Idle)]));
+        assert!(agent.waiting.is_empty());
+    }
+
+    #[test]
+    fn a_teammate_that_waited_on_its_launch_goes_idle_and_stops_waiting() {
+        let now = Instant::now();
+        let mut agent = Agent::new(1, now, 0);
+        agent.feed("s", &launched("a", "taskId", "t1"), now);
+        agent.feed("s", &stop_with("SubagentStop", Some("a"), &["t1"]), now);
+        assert!(agent.waiting.contains("a"));
+        agent.feed("s", &idle("a", "researcher"), now);
+        assert!(agent.waiting.is_empty());
+        agent.feed("s", &stop_with("Stop", None, &[]), now);
+        assert_eq!(shown(&agent), (WaitingYou, vec![("a".into(), Idle)]));
+    }
+
+    #[test]
+    fn a_late_teammate_idle_does_not_put_a_woken_teammate_to_rest() {
+        let now = Instant::now();
+        let mut agent = Agent::new(1, now, 0);
+        let at = |agent: &mut Agent, event: &AgentEvent, sent| {
+            agent.apply("s", event, sent, now, &|_| None)
+        };
+        at(&mut agent, &hook("SubagentStart", Some("a"), json!({})), 1);
+        at(&mut agent, &hook("SubagentStart", Some("b"), json!({})), 2);
+        at(&mut agent, &tool("PreToolUse", Some("a"), "Read"), 20);
+        // Sent before the wake, delivered after it: its name and that it is a teammate stay,
+        // its state, its activity and its place in the list do not change.
+        at(&mut agent, &idle("a", "researcher"), 10);
+        let subs = vec![("a".into(), Working), ("b".into(), Working)];
+        assert_eq!(shown(&agent).1, subs);
+        assert_eq!(activities(&agent).1, [Some("Read"), None]);
+        assert_eq!(
+            agent.subagents[0].teammate_name.as_deref(),
+            Some("researcher")
+        );
+        // So its next `SubagentStop` rests it, but a late one does not.
+        at(&mut agent, &hook("SubagentStop", Some("a"), json!({})), 15);
+        assert_eq!(shown(&agent).1, subs);
+        at(&mut agent, &hook("SubagentStop", Some("a"), json!({})), 30);
+        let rest = vec![("a".into(), Idle), ("b".into(), Working)];
+        assert_eq!(shown(&agent).1, rest);
+    }
+
+    #[test]
+    fn a_teammate_idle_without_an_agent_id_changes_nothing_of_the_agent() {
+        let now = Instant::now();
+        let bare = hook("TeammateIdle", None, json!({"teammate_name": "researcher"}));
+        let mut agent = Agent::new(1, now, 0);
+        agent.feed("s", &tool("PreToolUse", None, "Run tests"), now);
+        assert_eq!(agent.feed("s", &bare, now), None);
+        assert_eq!(activities(&agent).0, Some("Run tests"));
+        assert_eq!(shown(&agent), (Working, vec![]));
+        // A compaction under way still gives back what it interrupted.
+        agent.feed("s", &hook("PreCompact", None, json!({})), now);
+        assert_eq!(agent.feed("s", &bare, now), None);
+        agent.feed("s", &hook("PostCompact", None, json!({})), now);
+        assert_eq!(activities(&agent).0, Some("Run tests"));
+    }
+
+    #[test]
+    fn idle_teammates_count_in_the_cap_and_a_nameless_event_keeps_the_name() {
+        let now = Instant::now();
+        let mut agent = Agent::new(1, now, 0);
+        for n in 0..MAX_SUBAGENTS {
+            let sent = agent.feed("s", &idle(&n.to_string(), "t"), now);
+            assert!(sent.is_some());
+        }
+        assert_eq!(agent.feed("s", &idle("last", "t"), now), None);
+        assert_eq!(shown(&agent).1.len(), MAX_SUBAGENTS);
+        assert_eq!(agent.teammates.len(), MAX_SUBAGENTS);
+        assert!(!agent.teammates.contains("last"));
+        // An event without a name keeps the one known.
+        agent.feed("s", &hook("SubagentStart", Some("0"), json!({})), now);
+        assert_eq!(agent.subagents[MAX_SUBAGENTS - 1].id, "31");
+        assert_eq!(agent.subagents[0].teammate_name.as_deref(), Some("t"));
+        // Going idle moves only that one to the end of the list.
+        agent.feed("s", &idle("1", "t"), now);
+        let ids: Vec<&str> = agent.subagents.iter().map(|s| s.id.as_str()).collect();
+        assert_eq!((ids[0], ids[1], ids[MAX_SUBAGENTS - 1]), ("0", "2", "1"));
+    }
+
+    #[test]
+    fn the_agent_finishes_when_it_waits_with_no_teammate_working() {
+        use Alert::*;
+        let now = Instant::now();
+        // Its turn ends with one idle already: it finished, in every order.
+        for ends in turn_ends("a", "researcher") {
+            let mut agent = Agent::new(1, now, 0);
+            agent.feed("s", &hook("UserPromptSubmit", None, json!({})), now);
+            agent.feed("s", &hook("SubagentStart", Some("a"), json!({})), now);
+            for event in &ends {
+                agent.feed("s", event, now);
+            }
+            let done = alerts(agent.feed("s", &hook("Stop", None, json!({})), now));
+            assert_eq!(done, Some((Some(Finished), false)));
+            assert!(pending(&agent));
+        }
+        // Its turn ends with a teammate at work: quiet. The teammate rests, which alerts
+        // nothing; the next `Stop` does, though a wake that only answers in text shows no change.
+        for ends in turn_ends("a", "researcher") {
+            let mut agent = Agent::new(1, now, 0);
+            agent.feed("s", &hook("UserPromptSubmit", None, json!({})), now);
+            agent.feed("s", &hook("SubagentStart", Some("a"), json!({})), now);
+            let quiet = alerts(agent.feed("s", &hook("Stop", None, json!({})), now));
+            assert_eq!(quiet, Some((None, false)));
+            assert!(!pending(&agent));
+            for event in &ends {
+                let sent = alerts(agent.feed("s", event, now));
+                assert!(sent.is_none_or(|(alert, _)| alert.is_none()));
+            }
+            assert!(!pending(&agent));
+            let done = alerts(agent.feed("s", &hook("Stop", None, json!({})), now));
+            assert_eq!(done, Some((Some(Finished), false)));
+            assert!(pending(&agent));
+            // Once: another `Stop` says nothing.
+            assert_eq!(agent.feed("s", &hook("Stop", None, json!({})), now), None);
+        }
+        // With another teammate still at work, that `Stop` stays quiet.
+        let mut agent = Agent::new(1, now, 0);
+        agent.feed("s", &hook("SubagentStart", Some("a"), json!({})), now);
+        agent.feed("s", &hook("SubagentStart", Some("b"), json!({})), now);
+        agent.feed("s", &hook("Stop", None, json!({})), now);
+        agent.feed("s", &idle("a", "researcher"), now);
+        assert_eq!(agent.feed("s", &hook("Stop", None, json!({})), now), None);
+        assert!(!pending(&agent));
+        // Only a `Stop` of the agent gives it: another event of the agent does not.
+        agent.feed("s", &idle("b", "tester"), now);
+        assert!(!pending(&agent));
+        let other = notification("auth_success");
+        assert_eq!(agent.feed("s", &other, now), None);
+        assert!(!pending(&agent));
+        // An interrupt holds nothing back: the `Stop` after it stays quiet.
+        let mut agent = Agent::new(1, now, 0);
+        agent.feed("s", &hook("UserPromptSubmit", None, json!({})), now);
+        agent.feed("s", &hook("SubagentStart", Some("a"), json!({})), now);
+        agent.interrupt("s", now);
+        agent.feed("s", &idle("a", "researcher"), now);
+        assert_eq!(agent.feed("s", &hook("Stop", None, json!({})), now), None);
+        assert!(!pending(&agent));
     }
 
     #[test]

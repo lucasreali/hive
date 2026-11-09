@@ -27,6 +27,7 @@ test("states: every agent and subagent shows the state icon the service sent", a
     ["subagent-line", "waiting for permission", "general-purpose", "11px", "11px"],
     ["subagent-line", "waiting for your answer", "Explore", "11px", "11px"],
     ["tree-row agent", "waiting for you", "Claude", "14px", "14px"],
+    ["subagent-line", "idle", "researcher", "11px", "11px"],
     ["tree-row agent", "error", "Claude", "14px", "14px"],
     ["tree-row agent", "ended", "Claude", "14px", "14px"],
     ["tree-row agent", "working", "Claude", "14px", "14px"],

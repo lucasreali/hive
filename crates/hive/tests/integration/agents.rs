@@ -93,6 +93,7 @@ fn sub(id: &str, state: AgentState) -> SubagentState {
     SubagentState {
         id: id.into(),
         agent_type: Some("Explore".into()),
+        teammate_name: None,
         state,
         worktree: None,
         activity: None,
@@ -368,6 +369,97 @@ async fn printed(app: &mut Conn, channel: u32, text: &str) {
             seen.push_str(&String::from_utf8_lossy(&frame.payload));
         }
     }
+}
+
+/// The last `agent_state` of `seen` as its state and its subagents' (name, type, state) lines.
+fn team_lines(seen: &[(u32, Control)]) -> (AgentState, Vec<(Option<String>, AgentState)>) {
+    let last = seen.iter().rev().find_map(|(_, message)| match message {
+        Control::AgentState {
+            state, subagents, ..
+        } => Some((*state, subagents)),
+        _ => None,
+    });
+    let (state, subagents) = last.expect("an agent_state");
+    let lines = subagents.iter();
+    let lines = lines.map(|s| (s.teammate_name.clone(), s.state));
+    (state, lines.collect())
+}
+
+#[tokio::test]
+async fn an_agent_team_shows_its_teammates_under_its_lead() {
+    // Replays `fixtures/agent_team_synthetic.json`: synthetic until the human's recording
+    // (TODO 26.10) replaces that file.
+    let fixture: Value =
+        serde_json::from_str(include_str!("../fixtures/agent_team_synthetic.json")).unwrap();
+    assert!(fixture["note"].as_str().unwrap().starts_with("SYNTHETIC"));
+    let repo = Repo::new();
+    let root = repo.root.display().to_string();
+    let fake = repo.env.fake_claude("home/claude");
+    let mut daemon = repo.env.daemon();
+    let mut app = repo.env.connect(Role::App).await;
+    app.open_terminal(1, &repo.root).await;
+    app.input(1, &format!("echo stand-''in; '{}'\r", fake.display()))
+        .await;
+    printed(&mut app, 1, "stand-in").await;
+    let mut steps = Vec::new();
+    for call in fixture["calls"].as_array().unwrap() {
+        let event = call[0].as_str().unwrap();
+        let payload = merged(call[1].clone(), json!({"cwd": root}));
+        steps.push(hook(&repo, &mut app, "1", event, payload).await);
+    }
+    let name = |n: &str| Some(n.to_owned());
+    // All three at work under the lead, the lead's turn ends meanwhile, quietly.
+    assert_eq!(
+        team_lines(&steps[4]),
+        (
+            WithSubagents,
+            vec![(None, Working), (None, Working), (None, Working)]
+        )
+    );
+    assert_eq!(team_lines(&steps[6]).0, WaitingYou);
+    let quiet = |step: &[(u32, Control)]| {
+        !step
+            .iter()
+            .any(|(_, m)| matches!(m, Control::AgentState { alert: Some(_), .. }))
+    };
+    assert!(steps[..12].iter().all(|step| quiet(step)));
+    // Each order ends with the teammate listed, idle and named, the idle ones in the order they
+    // went idle. The lead's next `Stop` finishes, with no teammate working.
+    let rested = vec![
+        (name("researcher"), Idle),
+        (name("tester"), Idle),
+        (name("writer"), Idle),
+    ];
+    assert_eq!(team_lines(&steps[11]), (WaitingYou, rested.clone()));
+    assert_eq!(team_lines(&steps[12]), (WaitingYou, rested.clone()));
+    assert!(matches!(
+        steps[12].as_slice(),
+        [(
+            1,
+            Control::AgentState {
+                alert: Some(Alert::Finished),
+                pending: true,
+                ..
+            }
+        )]
+    ));
+    // A message wakes one, which goes idle again; the list goes with the lead.
+    let woken = vec![
+        (name("researcher"), Idle),
+        (name("tester"), Working),
+        (name("writer"), Idle),
+    ];
+    assert_eq!(team_lines(&steps[13]), (WaitingYou, woken));
+    let again = vec![
+        (name("researcher"), Idle),
+        (name("writer"), Idle),
+        (name("tester"), Idle),
+    ];
+    assert_eq!(team_lines(&steps[14]), (WaitingYou, again));
+    let removed = Control::AgentRemoved { id: "lead".into() };
+    assert_eq!(steps[15].last(), Some(&(1, removed)));
+    drop(app);
+    assert!(daemon.wait_exit().success());
 }
 
 #[tokio::test]
