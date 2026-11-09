@@ -3378,6 +3378,8 @@ button.result-file:hover,
 
 .sessions-search .files-search-field {
   flex: 1;
+  /* It gives way at the panel's narrowest (25.3), not the count and Refresh beside it. */
+  min-width: 0;
 }
 
 .sessions-count {

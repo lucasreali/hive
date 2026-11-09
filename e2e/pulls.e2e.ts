@@ -76,7 +76,8 @@ for (const panelWidth of [280, 640]) {
         whole: button.scrollWidth <= button.clientWidth,
       };
     });
-    expect(Math.round(fit.width)).toBe(panelWidth - 1);
+    // The panel's border and the rail's 36 px (25.3).
+    expect(Math.round(fit.width)).toBe(panelWidth - 1 - 36);
     expect(fit).toMatchObject({ inside: true, icon: true, whole: true });
     await expect(back).toHaveText("Pull requests");
   });

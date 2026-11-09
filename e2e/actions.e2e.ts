@@ -94,7 +94,8 @@ for (const panelWidth of [280, 640]) {
         };
       }, label);
       expect(fit).toEqual({
-        width: panelWidth - 1,
+        // The panel's border and the rail's 36 px (25.3).
+        width: panelWidth - 1 - 36,
         height: true,
         inside: true,
         aligned: true,
