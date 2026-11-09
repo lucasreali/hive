@@ -83,20 +83,6 @@ mod tests {
             .unwrap()
     }
 
-    /// How `child` ended, waiting a few seconds; killed first when it had not.
-    fn ended(child: &mut Child) -> Option<i32> {
-        let start = Instant::now();
-        while start.elapsed() < Duration::from_secs(10) {
-            if let Some(status) = child.try_wait().unwrap() {
-                return status.signal();
-            }
-            std::thread::sleep(Duration::from_millis(10));
-        }
-        let _ = child.kill();
-        let _ = child.wait();
-        None
-    }
-
     #[test]
     fn the_mcp_config_goes_and_is_not_missed() {
         let tmp = tempfile::tempdir().unwrap();
@@ -142,12 +128,16 @@ mod tests {
         let source = crate::procs::Source::System;
         let args = |pid: u32| crate::procs::args(source, pid as i32);
         let start = Instant::now();
-        while !args(left.id()).is_some_and(|args| args.iter().any(|a| a.starts_with("--user"))) {
-            assert!(start.elapsed() < Duration::from_secs(10));
+        let flagged = (0..1000).any(|_| {
             std::thread::sleep(Duration::from_millis(10));
-        }
+            args(left.id()).is_some_and(|a| a.iter().any(|a| a.starts_with("--user")))
+        });
+        assert!(flagged);
         clean(tmp.path(), &runtime);
-        assert_eq!(ended(&mut left), Some(nix::libc::SIGKILL));
+        // Killed at once: not left to its 30 s.
+        let ended = left.wait().unwrap();
+        assert_eq!(ended.signal(), Some(nix::libc::SIGKILL));
+        assert!(start.elapsed() < Duration::from_secs(20));
         assert!(!dir.exists());
         assert!(runtime.join("hive.sock").exists());
         assert_eq!(
