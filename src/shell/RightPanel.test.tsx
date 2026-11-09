@@ -652,8 +652,116 @@ test("the Changes panel's header button closes it", () => {
   panel();
   act(() => setRightPanel("files"));
   expect(screen.getByRole("complementary", { name: "Side panel" })).toBeDefined();
-  fireEvent.click(screen.getByTitle("Collapse (Ctrl+Shift+B)"));
+  fireEvent.click(screen.getByTitle("Close (Ctrl+Shift+B)"));
   expect(useHive.getState().rightPanel).toBeNull();
+});
+
+// 26.12: what goes with the view and what stays.
+const sidePanel = () => screen.getByRole("complementary", { name: "Side panel" });
+const selectedIcons = () =>
+  screen
+    .getAllByRole("tab")
+    .filter((t) => t.closest(".panel-rail") && t.getAttribute("aria-selected") === "true")
+    .map((t) => t.getAttribute("aria-label"));
+const railIcon = (name: string) => screen.getByRole("tab", { name });
+const closeView = () => fireEvent.click(screen.getByTitle("Close (Ctrl+Shift+B)"));
+
+test("the X closes only the view: its bar, content and resize handle go, the rail stays", () => {
+  panelOnFiles();
+  expect(sidePanel().style.width).toBe("380px");
+  expect(sidePanel().classList.contains("view-closed")).toBe(false);
+  expect(screen.getByRole("region", { name: "Files" })).toBeDefined();
+  expect(screen.getByRole("separator", { name: "Resize the side panel" })).toBeDefined();
+  closeView();
+  expect(useHive.getState().rightPanel).toBeNull();
+  expect(screen.queryByRole("region", { name: "Files" })).toBeNull();
+  expect(screen.queryByTitle("Close (Ctrl+Shift+B)")).toBeNull();
+  expect(sidePanel().querySelector(".bar")).toBeNull();
+  expect(screen.queryByRole("separator", { name: "Resize the side panel" })).toBeNull();
+  // The rail's own width, from the stylesheet.
+  expect(sidePanel().style.width).toBe("");
+  expect(sidePanel().classList.contains("view-closed")).toBe(true);
+  const icons = screen.getByRole("tablist", { name: "Panel" }).querySelectorAll('[role="tab"]');
+  expect([...icons].map((t) => t.getAttribute("aria-label"))).toEqual([
+    "Files",
+    "Diff",
+    "Scripts",
+    "PRs",
+    "Actions",
+    "Sessions",
+  ]);
+  expect(selectedIcons()).toEqual([]);
+});
+
+test("with the view closed, each icon opens its view at the panel's last width", () => {
+  panelOnFiles();
+  act(() => useHive.setState({ panelWidth: 512 }));
+  for (const label of ["Files", "Diff", "Scripts", "PRs", "Actions", "Sessions"]) {
+    closeView();
+    expect(selectedIcons()).toEqual([]);
+    fireEvent.click(railIcon(label));
+    expect(useHive.getState().rightPanel).toBe("files");
+    expect(selectedIcons()).toEqual([label]);
+    expect(shownView()).toBe(label);
+    expect(sidePanel().style.width).toBe("512px");
+    expect(screen.getByRole("separator", { name: "Resize the side panel" })).toBeDefined();
+  }
+});
+
+test("clicking the selected icon of an open view does nothing", () => {
+  panelOnFiles();
+  const before = useHive.getState();
+  fireEvent.click(railIcon("Files"));
+  expect(useHive.getState().rightPanel).toBe(before.rightPanel);
+  expect(useHive.getState().panelView).toBe(before.panelView);
+  expect(shownView()).toBe("Files");
+});
+
+test("with the view closed the last view keeps the Tab stop, and a move opens the next", () => {
+  panelOnFiles();
+  closeView();
+  const stops = screen.getAllByRole("tab").filter((t) => t.getAttribute("tabindex") === "0");
+  expect(stops.map((t) => t.getAttribute("aria-label"))).toEqual(["Files"]);
+  (stops[0] as HTMLElement).focus();
+  fireEvent.keyDown(stops[0] as HTMLElement, { key: "ArrowDown" });
+  expect(useHive.getState().rightPanel).toBe("files");
+  expect(selectedIcons()).toEqual(["Diff"]);
+  expect(document.activeElement?.getAttribute("aria-label")).toBe("Diff");
+});
+
+test("a closed view asks the service for nothing; opening it asks again", () => {
+  const asked = panel();
+  act(() => select(shop.id));
+  expect(asked).toHaveBeenCalled();
+  closeView();
+  asked.mockClear();
+  act(() => select(api.id));
+  expect(asked).not.toHaveBeenCalled();
+  fireEvent.click(railIcon("Diff"));
+  expect(asked).toHaveBeenCalledTimes(1);
+});
+
+test("a folder project's rail keeps only its two views with the view closed", () => {
+  panel();
+  act(() => {
+    apply({ type: "projects", projects: [MOCK_FOLDER] });
+    useHive.setState({ selection: MOCK_FOLDER.id });
+  });
+  closeView();
+  expect(screen.getAllByRole("tab").filter((t) => t.closest(".panel-rail")).length).toBe(2);
+  fireEvent.click(railIcon("Sessions"));
+  expect(shownView()).toBe("Sessions");
+});
+
+test("with nothing selected the rail lists every view; each says to select a place", () => {
+  panel();
+  closeView();
+  expect(screen.getAllByRole("tab").filter((t) => t.closest(".panel-rail")).length).toBe(6);
+  for (const label of ["Files", "Actions"]) {
+    fireEvent.click(railIcon(label));
+    expect(selectedIcons()).toEqual([label]);
+    expect(sidePanel().textContent).toContain(`${label}Select a project or agent`);
+  }
 });
 
 // 25.3: the rail shows only icons, so each keeps its label as its name and tooltip.

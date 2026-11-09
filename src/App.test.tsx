@@ -66,7 +66,7 @@ test("on macOS the shell leaves room for the traffic lights and speaks macOS", (
   const status = screen.getByTitle("Service connection");
   act(() => apply({ type: "welcome", version: "0.1.0", distro: null }));
   expect(status.textContent).toBe("macOSconnected");
-  for (const title of ["Add project (⇧⌘O)", "Files, diff and sessions (⇧⌘B)", "Collapse (⇧⌘B)"]) {
+  for (const title of ["Add project (⇧⌘O)", "Close (⇧⌘B)"]) {
     expect(screen.getByTitle(title)).toBeDefined();
   }
   act(() => apply({ type: "projects", projects: [] }));
@@ -75,27 +75,24 @@ test("on macOS the shell leaves room for the traffic lights and speaks macOS", (
   );
 });
 
-test("the files button toggles the right panel", () => {
+test("the view's X closes it and a rail icon opens it, the panel's rail always there", () => {
   render(<App />);
-  const toggle = screen.getByTitle("Files, diff and sessions (Ctrl+Shift+B)");
-  expect(toggle.getAttribute("aria-pressed")).toBe("true");
-  fireEvent.click(toggle);
-  expect(toggle.getAttribute("aria-pressed")).toBe("false");
-
-  fireEvent.click(toggle);
-  expect(useHive.getState().rightPanel).toBe("files");
-  expect(toggle.getAttribute("aria-pressed")).toBe("true");
-  expect(screen.getByRole("complementary", { name: "Side panel" }).textContent).toContain(
-    "Select a project or agent to see its files.",
-  );
-
-  fireEvent.click(toggle);
-  expect(screen.queryByRole("complementary")).toBeNull();
-
-  fireEvent.click(toggle);
-  fireEvent.click(screen.getByTitle("Collapse (Ctrl+Shift+B)"));
+  const close = () => screen.getByTitle("Close (Ctrl+Shift+B)");
+  const panel = () => screen.getByRole("complementary", { name: "Side panel" });
+  const open = () => fireEvent.click(screen.getByRole("tab", { name: "Files" }));
+  expect(panel().textContent).toContain("Select a project or agent to see its files.");
+  fireEvent.click(close());
   expect(useHive.getState().rightPanel).toBeNull();
-  expect(screen.queryByRole("complementary")).toBeNull();
+  expect(panel().textContent).toBe("");
+
+  open();
+  expect(useHive.getState().rightPanel).toBe("files");
+  expect(panel().textContent).toContain("Select a project or agent to see its files.");
+
+  fireEvent.click(close());
+  expect(useHive.getState().rightPanel).toBeNull();
+  expect(screen.queryByTitle("Close (Ctrl+Shift+B)")).toBeNull();
+  expect(screen.getByRole("tablist", { name: "Panel" })).toBeDefined();
 });
 
 test("the project button opens the add-project dialog", () => {

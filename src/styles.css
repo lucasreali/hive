@@ -525,12 +525,12 @@ label:has(> input[type="checkbox"]:disabled) {
 }
 
 .ghost:hover:not(:disabled),
-.ghost[aria-pressed="true"]:not(.unpressed-look) {
+.ghost[aria-pressed="true"] {
   background: var(--hover);
   color: var(--text);
 }
 
-.ghost[aria-pressed="true"]:not(.unpressed-look) {
+.ghost[aria-pressed="true"] {
   background: var(--selected);
 }
 
@@ -759,14 +759,6 @@ label:has(> input[type="checkbox"]:disabled) {
   color: var(--text);
 }
 
-.tabs-actions {
-  padding: 0 6px;
-}
-
-.tabs-actions .ghost {
-  width: 26px;
-}
-
 .terminal-body {
   flex: 1;
   min-height: 0;
@@ -900,6 +892,13 @@ label:has(> input[type="checkbox"]:disabled) {
     "view rail" minmax(0, 1fr) / minmax(0, 1fr) 36px;
   background: var(--panel);
   border-left: 1px solid var(--border);
+}
+
+/* The view closed (26.12): only the rail, whose own border is the panel's edge. */
+.right-panel.view-closed {
+  width: 36px;
+  border-left: 0;
+  grid-template: "rail" minmax(0, 1fr) / 36px;
 }
 
 .right-panel > .bar {

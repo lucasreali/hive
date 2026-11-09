@@ -3689,7 +3689,7 @@ fn the_menu_bar_has_hives_menus_and_the_native_editing_items() {
             ("toggle-sidebar", "Toggle Sidebar", None),
             (
                 "toggle-panel",
-                "Toggle Right Panel",
+                "Toggle Side Panel View",
                 Some("CmdOrCtrl+Shift+B")
             ),
         ]

@@ -53,10 +53,10 @@ import {
   setDiffBase,
   setEditing,
   setOpenFile,
-  setPanelView,
   setRendered,
   setRightPanel,
   setTableShown,
+  showPanelView,
   tableShown,
   useHive,
   within,
@@ -380,16 +380,19 @@ export const panelViews = (project: Project | undefined) =>
 
 /**
  * The panel's view switcher (25.3): a vertical tablist of icons on the panel's outer edge, the
- * same at every width. One Tab stop: ↑/↓, Home and End move along it, selecting as they go.
+ * same at every width and with the view closed, when no icon shows as selected and the last
+ * view keeps the Tab stop (26.12). One Tab stop: ↑/↓, Home and End move along it, selecting as
+ * they go; a click or a move opens the view it lands on.
  */
-function PanelRail({ views, view }: { views: PanelViewEntry[]; view: PanelView }) {
+function PanelRail(props: { views: PanelViewEntry[]; view: PanelView; open: boolean }) {
+  const { views, view, open } = props;
   const onKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
     const count = views.length;
     const at = views.findIndex((v) => v.view === view);
     const next = { ArrowDown: at + 1, ArrowUp: at + count - 1, Home: 0, End: count - 1 }[event.key];
     if (next === undefined) return;
     event.preventDefault();
-    setPanelView((views[next % count] as PanelViewEntry).view);
+    showPanelView((views[next % count] as PanelViewEntry).view);
     const tabs = event.currentTarget.querySelectorAll<HTMLElement>('[role="tab"]');
     tabs[next % count]?.focus();
   };
@@ -409,11 +412,11 @@ function PanelRail({ views, view }: { views: PanelViewEntry[]; view: PanelView }
           <button
             type="button"
             role="tab"
-            aria-selected={view === v.view}
+            aria-selected={open && view === v.view}
             aria-label={v.label}
             title={v.label}
             tabIndex={view === v.view ? 0 : -1}
-            onClick={() => setPanelView(v.view)}
+            onClick={() => showPanelView(v.view)}
           >
             {v.icon}
           </button>
@@ -424,28 +427,20 @@ function PanelRail({ views, view }: { views: PanelViewEntry[]; view: PanelView }
 }
 
 /**
- * The right panel (screen 1g, grown), toggled by Ctrl+Shift+B: for the shown worktree, every
- * file with a search ("Files"), the changed files with their totals ("Diff"), its scripts, the
- * repository's pull requests and Actions runs, or its Claude sessions, picked on the rail.
+ * The open view: its bar, whose X closes it, and its content. Mounted only while it is open, so a
+ * closed view asks the service for nothing.
  */
-export function RightPanel() {
+function OpenView({ shown }: { shown: PanelViewEntry }) {
   const target = useShownWorktree();
-  const selected = useHive((s) => s.panelView);
-  const views = panelViews(target?.project);
-  // A view the shown place lacks shows its files.
-  const shown = (views.find((v) => v.view === selected) ?? views[0]) as (typeof VIEWS)[number];
   const view = shown.view;
-  const width = useHive((s) => s.panelWidth);
   return (
-    <aside className="right-panel" aria-label="Side panel" style={{ width }}>
-      <ResizeHandle side="panel" />
-      <PanelRail views={views} view={view} />
+    <>
       <div className="bar">
         <span className="panel-title">{shown.label}</span>
         <button
           type="button"
           className="ghost"
-          title={keyText("Collapse (Ctrl+Shift+B)")}
+          title={keyText("Close (Ctrl+Shift+B)")}
           onClick={() => setRightPanel(null)}
         >
           <CloseIcon />
@@ -474,6 +469,33 @@ export function RightPanel() {
       ) : (
         <div className="right-panel-empty">{NOTHING_SHOWN}</div>
       )}
+    </>
+  );
+}
+
+/**
+ * The right panel (screen 1g, grown): the rail, always there, and the view it picks, for the
+ * shown worktree: every file with a search ("Files"), the changed files with their totals
+ * ("Diff"), its scripts, the repository's pull requests and Actions runs, or its Claude sessions.
+ * Ctrl+Shift+B or the view's X closes the view only, and the rail keeps its width (26.12).
+ */
+export function RightPanel() {
+  const project = useHive((s) => panelWorktree(s)?.project);
+  const selected = useHive((s) => s.panelView);
+  const open = useHive((s) => s.rightPanel === "files");
+  const views = panelViews(project);
+  // A view the shown place lacks shows its files.
+  const shown = (views.find((v) => v.view === selected) ?? views[0]) as PanelViewEntry;
+  const width = useHive((s) => s.panelWidth);
+  return (
+    <aside
+      className={open ? "right-panel" : "right-panel view-closed"}
+      aria-label="Side panel"
+      style={open ? { width } : undefined}
+    >
+      {open && <ResizeHandle side="panel" />}
+      <PanelRail views={views} view={shown.view} open={open} />
+      {open && <OpenView shown={shown} />}
     </aside>
   );
 }

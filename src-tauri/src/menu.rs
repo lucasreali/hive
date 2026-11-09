@@ -126,7 +126,7 @@ pub const MENUS: &[Menu] = &[
             },
             Item::Own {
                 id: "toggle-panel",
-                text: "Toggle Right Panel",
+                text: "Toggle Side Panel View",
                 keys: Some("CmdOrCtrl+Shift+B"),
             },
             Item::Separator,

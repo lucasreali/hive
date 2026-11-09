@@ -40,7 +40,6 @@ import {
   replacePane,
   selectedPlace,
   setOpenFile,
-  setRightPanel,
   showBesideAgent,
   showBrowserTab,
   swapSides,
@@ -87,7 +86,6 @@ import {
   CloseIcon,
   FileIcon,
   ICON,
-  PanelIcon,
   PlusIcon,
   StateIcon,
   TerminalIcon,
@@ -848,7 +846,6 @@ function FilePane(props: { id: string; side?: "left" | "right"; onMenu: (menu: T
 // "+" opens a terminal or a new file in the selected worktree; Ctrl+Shift+T opens the worktree picker. Only
 // the selected worktree's tabs show (a project's are its main worktree's).
 export function TerminalArea() {
-  const open = useHive((s) => s.rightPanel === "files");
   const empty = useHive((s) => s.projects !== null && Object.keys(s.projects).length === 0);
   const tabs = useHive(useShallow(visibleTabs));
   // One selector, so the bar is built once per store update: each item, then its key.
@@ -883,17 +880,6 @@ export function TerminalArea() {
             );
           })}
           <NewTabButton worktree={selected} />
-        </div>
-        <div className="tabs-actions">
-          <button
-            type="button"
-            className="ghost unpressed-look"
-            title={keyText("Files, diff and sessions (Ctrl+Shift+B)")}
-            aria-pressed={open}
-            onClick={() => setRightPanel(open ? null : "files")}
-          >
-            <PanelIcon />
-          </button>
         </div>
       </div>
       {menu &&

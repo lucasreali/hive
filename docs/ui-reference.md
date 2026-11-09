@@ -78,7 +78,7 @@ IBM Plex Sans and IBM Plex Mono, weights 400/500/600, bundled with `@fontsource/
 | `--bar-h` | 34px | Title bar, sidebar header, tab bar, right panel header |
 | `--status-h` | 24px | Status bar |
 | `--sidebar-w` | 264px | Sidebar width (resizable 200–440 in the prototype) |
-| `--right-w` | 380px | Right panel width (resizable 280–640), a 36px rail of view icons included (25.3) |
+| `--right-w` | 380px | Right panel width (resizable 280–640), a 36px rail of view icons included (25.3). With the view closed only the rail shows, 36px wide, no icon selected (26.12). Tab order: the rail, then the X, then the view; closed, the rail alone |
 
 Row heights: project 26px, worktree 24px, subagent line 18px, file row 22px, picker row 30px, branch row 24px. Indents: project 6px, worktree 20px, agent 40px, subagent 56px. Buttons: primary/secondary 28px high (empty-state primary 30px), ghost 24px, icon 26×24, window buttons 46px wide. Text fields 30px. Dialog 520px wide, 120px from the top; picker 560px wide, 44px from the top.
 
@@ -160,7 +160,6 @@ Labels are lowercase in rows (as in the prototype), sentence case in headings an
 |---|---|
 | Novo terminal (Alt+T) | New terminal (Ctrl+Shift+T) |
 | Fechar terminal | Close terminal |
-| Arquivos e diff (Alt+B) | Files and diff (Ctrl+Shift+B) |
 
 ### Worktree picker (Ctrl+Shift+T)
 
@@ -204,7 +203,7 @@ Refusals are the service's `message`, shown as is (e.g. "cannot open /x: No such
 | Mostrar todos os arquivos | Show all files |
 | Alterados | Changed |
 | Mostrar só arquivos alterados | Show only changed files |
-| Recolher (Alt+B) | Collapse (Ctrl+Shift+B) |
+| Recolher (Alt+B) | Close (Ctrl+Shift+B): closes the view, the rail stays (26.12) |
 | N arquivo alterado / N arquivos alterados | 1 file changed / N files changed |
 | Sem alterações | No changes |
 | Nenhuma alteração nesta worktree. | No changes in this worktree. |
@@ -258,7 +257,7 @@ Terminal content in the prototype (Claude Code output, sample code) is sample da
 | Split terminal | Ctrl+Shift+D | — |
 | Search the focused terminal (17.21) | Ctrl+Shift+F (macOS: ⌘F or ⇧⌘F) | — |
 | New worktree | Ctrl+Shift+N | Alt+N |
-| Files and diff panel | Ctrl+Shift+B | Alt+B |
+| Show or hide the side panel's view | Ctrl+Shift+B | Alt+B |
 | Add project | Ctrl+Shift+O | Ctrl+O |
 | Copy / paste in the terminal | Ctrl+Shift+C / Ctrl+Shift+V (macOS: ⌘C / ⌘V) | — |
 | Move in the tree | ↑ ↓ ← → Enter | same |
@@ -281,4 +280,4 @@ The terminal's search bar sits at the top right of the pane it searches: a field
 
 Option-drag selects text even inside a program that takes the mouse. Option types accents unless the Terminal setting "Option as Meta" (macOS only, off by default) makes that Option key Meta: Off, Left Option, Right Option or Both (D20.1). Enter (and Esc in the review comment) that ends a composition (a dead key such as ´ ~ ^, or an IME) is the composition's, never the field's action.
 
-Tooltips show the shortcut in parentheses, e.g. "Files and diff (Ctrl+Shift+B)"; buttons show it as a kbd chip (e.g. "Ctrl+Shift+O"). On macOS every Ctrl+Shift+letter is Cmd+Shift+letter, shown as "⇧⌘O", and Ctrl+S is "⌘S". The settings' Shortcuts section lists the platform's commands (on macOS with the table above).
+Tooltips show the shortcut in parentheses, e.g. "Close (Ctrl+Shift+B)"; buttons show it as a kbd chip (e.g. "Ctrl+Shift+O"). On macOS every Ctrl+Shift+letter is Cmd+Shift+letter, shown as "⇧⌘O", and Ctrl+S is "⌘S". The settings' Shortcuts section lists the platform's commands (on macOS with the table above).
