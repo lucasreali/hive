@@ -70,7 +70,6 @@ import { TableView } from "../viewer/TableView";
 import { commandKey, isMac, keyText } from "../window";
 import { BrowserView } from "./BrowserView";
 import { askDiscard } from "./ConfirmDialog";
-import { designOf, Menu, More, Rail, Strip, withDesignViews } from "./DesignSwitcher";
 import { askDelete } from "./FileMenu";
 import {
   BranchIcon,
@@ -356,47 +355,31 @@ export function RightPanel() {
   const target = useShownWorktree();
   const selected = useHive((s) => s.panelView);
   const browser = useHive((s) => s.settings.browser.enabled);
-  const design = designOf();
-  const views = withDesignViews(panelViews(target?.project, browser));
+  const views = panelViews(target?.project, browser);
   // A view the shown place lacks shows its files.
   const shown = (views.find((v) => v.view === selected) ?? views[0]) as (typeof VIEWS)[number];
   const view = shown.view;
   const width = useHive((s) => s.panelWidth);
   return (
-    <aside
-      className={design.layout === "rail" ? "right-panel d-with-rail" : "right-panel"}
-      aria-label="Side panel"
-      style={{ width }}
-    >
+    <aside className="right-panel" aria-label="Side panel" style={{ width }}>
       <ResizeHandle side="panel" />
-      {design.layout === "rail" && <Rail views={views} view={view} />}
       <div className="bar">
-        {design.layout === "strip" ? (
-          <Strip views={views} view={view} />
-        ) : design.layout === "more" ? (
-          <More views={views} view={view} />
-        ) : design.layout === "menu" ? (
-          <Menu views={views} view={view} />
-        ) : design.layout === "rail" ? (
-          <span className="d-rail-title">{shown.label}</span>
-        ) : (
-          <div className="panel-views" role="tablist" aria-label="Panel">
-            {views.map((v) => (
-              <button
-                key={v.view}
-                type="button"
-                role="tab"
-                aria-selected={view === v.view}
-                aria-label={v.label}
-                title={v.label}
-                onClick={() => setPanelView(v.view)}
-              >
-                {v.icon}
-                <span className="tab-label">{v.label}</span>
-              </button>
-            ))}
-          </div>
-        )}
+        <div className="panel-views" role="tablist" aria-label="Panel">
+          {views.map((v) => (
+            <button
+              key={v.view}
+              type="button"
+              role="tab"
+              aria-selected={view === v.view}
+              aria-label={v.label}
+              title={v.label}
+              onClick={() => setPanelView(v.view)}
+            >
+              {v.icon}
+              <span className="tab-label">{v.label}</span>
+            </button>
+          ))}
+        </div>
         <button
           type="button"
           className="ghost"
