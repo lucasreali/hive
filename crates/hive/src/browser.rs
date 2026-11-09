@@ -1092,7 +1092,7 @@ mod tests {
     }
 
     #[test]
-    fn a_stopping_browser_gives_one_picture_of_the_shown_titled() {
+    fn a_stopping_browser_gives_one_picture_of_the_shown_page() {
         let mut screen = Screen::default();
         // No page: nothing to take.
         let out = screen.command(Command::Capture);
@@ -1103,8 +1103,14 @@ mod tests {
             "https://a.test/",
             None,
         ));
+        // A message with no id, before any picture is asked for, is no answer.
+        assert_eq!(screen.message(&json!({})).events, []);
         let attach = screen.command(Command::Capture).cdp.remove(0);
         assert_eq!(attach["method"], "Target.attachToTarget");
+        // Another answer while the attach is awaited is not it, and it is still awaited.
+        let other = json!({ "id": 9999, "error": { "message": "no" } });
+        let out = screen.message(&other);
+        assert_eq!((out.cdp, out.events), (vec![], vec![]));
         assert_eq!(
             attach["params"],
             json!({ "targetId": "p", "flatten": true })
