@@ -281,6 +281,10 @@ Every default the agents took in Stages 1–9, one row per task (reviewed 2026-0
 | 26.6 (1) | Release notes' shape: sections "Breaking changes", "Features", "Fixes", "Performance", each only when it has a line, newest first; a line is the commit's text as written, with its task number, led by "**scope:**" when it has one. The one-time note of 25.5 comes first, the link last; a release with no listed commit has only those. The link says "First install on a Mac" and points at the README's `#macos`; nothing for Windows. | pending |
 | 26.6 (2) | Which commits: a `!` or a `BREAKING CHANGE:` / `BREAKING-CHANGE:` line at a line's start lists a commit of **any** type under "Breaking changes", and only there. Other types, an empty scope, uppercase types (`Fix:`), and `chore(merge)` stay out; so does every merge commit, whatever its subject, while the commits it brings count. `Revert "<subject>"` drops the commit it reverts when that is in the range, and is itself not listed, also when what it reverts was in an earlier release; `Reapply "<subject>"` undoes such a revert. A `revert:` type is just another left-out type. | pending |
 | 26.6 (3) | The previous tag is the closest `v[0-9]*` tag reachable from HEAD other than the one being released, so a dry run with no new version counts from the tag before it; with none, every commit counts. A shallow clone fails the release before it publishes, rather than publishing wrong notes. Past 100,000 bytes of lines, whole lines are left out and counted ("And N more, left out for length"), breaking changes kept first. Control characters are removed from subjects; other text, Markdown included, comes through unchanged, so a subject's `@name` or link is live on GitHub's release page. | pending |
+| 26.1 (1) | The ssh link also passes `ClearAllForwardings=yes` (a `LocalForward` in the user's config cannot fail the link) and `ConnectTimeout=15`. An alias has no leading `-`, no whitespace or control characters, and is at most 255 bytes. Reconnects come after 1, 2, 5, 10 and 30 s, then every 30 s while the host keeps terminals; there is no retry after a host key, authentication, platform or version error. Only wake triggers an immediate reconnect, not a network change. | pending |
+| 26.1 (2) | A detached terminal keeps the last 1 MiB of its output in a ring buffer, and its PTY is never paused while no app is attached. A new app connection with the same `app_id` takes over a stale one; a second app (another `app_id`) is refused as today. The hosts list (`remote.hosts`) and the keep time (`remote.keep_minutes`) live in the local service's settings. | pending |
+| 26.1 (3) | An upload is checked by byte count and by `--version` before the rename. The remote's `uname` text is cut to 64 characters. WSL keeps today's glibc `hive`; only remotes get the musl builds. Restarting a remote service of another version is a new `hive bridge --replace` (SIGTERM to the lockfile's holder). | pending |
+| 26.1 (4) | After a reattach, one summary notification per host replaces the alerts missed while the link was down. In a remote space, open in the default app, reveal, the settings file, the shared folder and the dev-server preview are hidden, and a file dropped from Finder types nothing and shows a toast. A host is added by its alias typed in; Hive does not parse `~/.ssh/config`. | pending |
 
 ---
 
@@ -433,9 +437,23 @@ Moved here 2026-11-06 at the human's request (Stage 25 carried much more work th
 
 ## Stage 26 — Remote connections over SSH
 
-Created 2026-11-05 at the human's request: "I want something for remote connections, for now only over SSH, as Orca has; I want my agent to think about the best way to bring this". Planned after Stage 25 (split from the old Stage 25 on 2026-11-08; each moved task says its old number). **Changes `docs/hive.md`** (Hive today runs its service on this machine or in WSL, #1, #26, #29): the human updates it once 26.1's design is chosen. New dependencies need the human's approval (rule 3) before `cargo add`.
+Created 2026-11-05 at the human's request: "I want something for remote connections, for now only over SSH, as Orca has; I want my agent to think about the best way to bring this". Planned after Stage 25 (split from the old Stage 25 on 2026-11-08; each moved task says its old number). **Changes `docs/hive.md`** (Hive today runs its service on this machine or in WSL, #1, #26, #29). The design was chosen on 2026-11-09 (26.1, `docs/spike/ssh.md`); the human updates `docs/hive.md` from its section 13. Tasks 26.13–26.21 build it. New dependencies and build tools need the human's approval (rule 3) before they are added.
 
-- [ ] **26.1 Design: Hive over SSH.** *(Was 25.1.)* No production code; a throwaway branch for experiments only, never the human's real hosts (a local `sshd` in a container or a temp user, with a temp `HOME` and keys). The agent **thinks through the best way** and presents it at the checkpoint, with a recommendation:
+- [x] **26.1 Design: Hive over SSH.** `task/26.1-ssh-design` — *Design picked by the human (2026-11-09): [`docs/spike/ssh.md`](docs/spike/ssh.md). The whole service runs on the remote, reached by the stdio bridge over the user's own `ssh` (`BatchMode=yes`, `StrictHostKeyChecking=yes`, a constant remote command running `~/.hive/bin/hive bridge`). The doc also holds the comparison with stablyai/orca, the rejected alternatives, the measurements and the security notes. Echo over ssh is 0.4 ms at p50 on loopback and 102.7 ms with 100 ms RTT; a plain `ssh -tt` is no faster. The lab was a local `sshd` with temp keys and a delaying proxy, since Docker was not running. The human's answers:*
+  - *A space belongs to one host.*
+  - *Remote agents keep running after a dropped link, and after quit unless the user says otherwise (keep is the default).*
+  - *The keep time is 24 h by default, 1 minute to 7 days.*
+  - *Static Linux x86_64 and aarch64 builds are bundled in the macOS app and uploaded over ssh.*
+  - ***Linux hosts only**: macOS and everything else is refused with a message.*
+  - *An unknown or changed host key is refused ("run `ssh <alias>` once"), and Hive never writes `known_hosts`.*
+  - *Keepalive 10 s × 3, plus a reconnect on wake.*
+  - *A remote service of another version holding terminals: both versions shown, restart it or stay disconnected.*
+  - *Screen restore is a ring-buffer replay plus a forced redraw.*
+  - *The 512 KiB window does not change.*
+  - *Remote Linux terminals use `$SHELL` as a login shell.*
+  - *Hive does not force `ControlMaster`.*
+  
+  *Defaults the answers leave open: ledger rows 26.1 (1)–(4).* *(Was 25.1.)* No production code; a throwaway branch for experiments only, never the human's real hosts (a local `sshd` in a container or a temp user, with a temp `HOME` and keys). The agent **thinks through the best way** and presents it at the checkpoint, with a recommendation:
   - **What Orca does** (its docs and source): how a remote is added, what runs on the remote, what the local app keeps, how it reconnects, what it does not support. Say what to copy and what not, and why.
   - **The shape that fits Hive.** Hive already splits app and service and already reaches a service elsewhere through a stdio bridge: on Windows the app runs `wsl.exe --exec … hive bridge` (`bridge.rs`, `src-tauri/src/lib.rs`), and the service owns the PTYs, git, hooks and files (#37). The obvious candidate is the same bridge over `ssh <host> -- ~/.hive/bin/hive bridge` (22.1's folder), with the service, its terminals, worktrees, hooks and the `claude` wrapper all on the remote; compare it with the alternatives (the service local and only PTYs or git over SSH; SSH port forwarding of the socket; an SFTP or `sshfs` file layer) on latency, what keeps working when the link drops, and how much code changes.
   - **One app, several services:** today the app talks to one service. Decide whether a remote is a separate window, a space (#48) bound to a host, or projects of any space on any host, and what the sidebar, status bar, notifications (#5), session history and the files panel show for a remote project; local and remote at the same time is the expected case.
@@ -480,6 +498,130 @@ Moved here 2026-11-06 at the human's request: every task still open in the stage
   - **Pending defaults for the ledger:** clicking the selected icon of an open view does nothing (not asked to close it; the agent reports it as an option); whether the view reopens by itself after a restart follows what `rightPanel` does today.
   - **Tests:** unit and e2e for each case above, at the panel's widths, in light and dark; the specs that used the removed button (`e2e/shell.e2e.ts`, `shortcuts`, `panel-tabs` and the others a search turns up) move to the X, the rail or the shortcut with no assertion lost. `docs/ui-reference.md` and a new ledger row replace 25.3's tab order (rail, Collapse, view).
   - **Hand check at the checkpoint:** in the real app, the X leaves the rail, each icon reopens its view, Ctrl+Shift+B does the same, and the terminal bar has no panel button.
+
+### Hive over SSH (from 26.1)
+
+The design is [`docs/spike/ssh.md`](docs/spike/ssh.md) with the human's answers of 2026-11-09 (its "Decisions" section; ledger 26.1 for the rest):
+
+- the whole service runs on a remote Linux host, reached by `ssh` and the stdio bridge;
+- one link per host;
+- a space belongs to one host;
+- a remote's terminals outlive a dropped link and are reattached.
+
+Every task that changes `crates/hive` or `src-tauri` gets `security-reviewer`. Tests never use the human's hosts or `~/.ssh`: only temp keys, a temp `HOME` and a local or containerized `sshd`.
+
+- [ ] **26.13 Linux builds for remote hosts.** `task/26.13-linux-remote-builds` — Spike §6.2, Q4, Q5. Needs nothing.
+  - **Builds:** static musl `hive` for `x86_64-unknown-linux-musl` and `aarch64-unknown-linux-musl`, built by a new `release.yml` job and checked (build only) in `ci.yml`.
+  - **Build tool:** `cargo zigbuild` or `cross`. The agent proposes one and waits for the human's approval before installing it (rule 3).
+  - **Bundled:** the macOS app carries them as `hive-linux-x86_64` and `hive-linux-aarch64`. WSL keeps today's glibc `hive`.
+  - **`macos-bundle.sh check`** verifies that both are there, both are static, and both print the app's version.
+  - **Smoke test in CI:** each build runs in an old-glibc container (e.g. `debian:10`; aarch64 under QEMU or on an arm runner). `hive --version`, then `hive daemon` with a temp `HOME` starts, listens, and ends on SIGTERM.
+  - **Report:** the app's size before and after.
+  - **Tests:** `scripts/test-scripts.sh` for any script added or changed.
+- [ ] **26.14 Remote Linux terminals use the login shell.** `task/26.14-linux-login-shell` — Q11. Needs nothing.
+  - **Remote mode:** `hive bridge --remote` starts `hive daemon --remote`. WSL and native Windows are unchanged (WSL keeps `fish -C`, #25).
+  - **Terminals:** a remote service runs each terminal as the user's `$SHELL` login shell, with Hive's bin dir first once its login files ran, as `terminal::login` does on macOS (the macOS code made portable Unix code).
+  - **The service's own `PATH`** (for `git`, `gh`, `claude -p` and the wrapper's `real_claude`) comes from that login shell, as `macos.rs` asks it.
+  - **No usable `$SHELL`** (missing, or not executable): `/bin/sh -l`.
+  - **Tests:** integration tests (`common::Env`) for bash, zsh and fish (CI's Linux job installs the missing ones) and for a missing `$SHELL`:
+    - the wrapper's `claude` is first on a terminal's `PATH`;
+    - a `git` found only on the login shell's `PATH` is the one the service runs.
+- [ ] **26.15 A remote service outlives a dropped link.** `task/26.15-remote-keep` — Q2, Q3, spike §6.3. Needs nothing.
+  - **Protocol 1, optional fields:** `hello` gains `keep_secs` and `app_id`; a new `bye {end}`. A connection without `keep_secs`, and `bye {end: true}`, keep #18 exactly as today.
+  - **When an app connection with `keep_secs` ends without `bye {end: true}`:**
+    - the service keeps every terminal and chat for `keep_secs`;
+    - each terminal's output goes into a 1 MiB ring buffer (the oldest bytes dropped). The PTY is **never paused** while no app is attached; 9.19's window applies again once one is;
+    - hooks, states, transcripts and worktrees are processed as now;
+    - after `keep_secs` with no app, the service ends as it does today (`open-sessions.json` written).
+  - **Takeover:** a new app connection with the same `app_id` replaces a stale one, and the old connection is closed. Another `app_id` while one is attached keeps today's refusal.
+  - **Docs:** `docs/architecture.md` (Handshake, App disconnect, message catalog).
+  - **Tests:**
+    - integration: the socket is dropped mid-flood and the program keeps writing past 512 KiB with no stall;
+    - integration: the terminals end after a short test grace time;
+    - integration: the takeover, the refusal for another `app_id`, the ring keeping the last 1 MiB, and `bye {end: true}` ending at once;
+    - protocol: round trips with and without the new fields.
+- [ ] **26.16 Reattach after a dropped link.** `task/26.16-reattach` — Q9, spike §6.4. Needs 26.15.
+  - **Offsets:** every terminal counts its output in bytes (a `u64` offset); the app counts what its xterm received.
+  - **After `welcome`:** a service holding kept terminals sends `terminals_kept [{channel, cwd, worktree, account, offset}]`. The app answers `attach_terminal {channel, from}`.
+  - **Replay:** a `from` still inside the ring gets only the missing bytes. Otherwise the service sends `terminal_reset`; the app clears that xterm and gets the whole ring.
+  - **Redraw:** the app then resizes by one column and back, so a full-screen program (Claude Code) redraws.
+  - **Unknown terminals** (the app restarted) open as tabs under their worktree, from the ring.
+  - **Chats (#40):** the agent does the same for a kept chat's stream, or reports it as a gap.
+  - **Docs:** `docs/architecture.md`.
+  - **Tests:**
+    - Rust: an offset inside, at the edge of and outside the ring, and the reset;
+    - bun: the xterm is cleared and replayed, the redraw resize is sent, unknown terminals open as tabs;
+    - integration: detach, 2 MiB written, reattach, every byte that is still in the ring arrives in order.
+- [ ] **26.17 The app's links over ssh.** `task/26.17-ssh-links` — Spike §6.1–6.2, Q4–Q8, Q12. Needs 26.13 and 26.15; reattach on reconnect uses 26.16.
+  - **One link per host** in `src-tauri`: the local service and each remote. UI messages and app commands carry `host`; terminal channels are mapped per link so ids never clash.
+  - **The command:** `ssh -T -o BatchMode=yes -o StrictHostKeyChecking=yes -o ClearAllForwardings=yes -o ServerAliveInterval=10 -o ServerAliveCountMax=3 -o ConnectTimeout=15 -- <alias> <constant>`.
+    - There is no `ControlMaster` option: the user's config decides.
+    - The alias is validated: no leading `-`, no whitespace or control characters, at most 255 bytes.
+  - **Check and install:**
+    - the spike's constant check-and-run command, then the upload command with 26.13's build for the remote's `uname -m`: byte count and `--version` checked before the rename;
+    - `Darwin`, or any OS other than Linux or any CPU other than x86_64 and aarch64, is refused with its message (Q5); the `uname` text is cut to 64 characters and shown as text.
+  - **Handshake:** `hello` carries `keep_secs` (the setting `remote.keep_minutes`, default 1440, range 1–10080) and `app_id`, on remote links only.
+  - **stderr classified, each case with its message:**
+    - unknown or changed host key: "run `ssh <alias>` once in a terminal to check and accept its key". Hive never writes `known_hosts`;
+    - authentication: a passphrase or password was asked, so "add the key to your ssh agent";
+    - network;
+    - unsupported platform;
+    - another version (Q8): both versions shown, with "Restart the remote service (ends N terminals)" or "Stay disconnected". Restart runs a new `hive bridge --replace`, which ends the running service (SIGTERM to the lockfile's holder) and starts its own.
+  - **Reconnect:** a ladder of 1, 2, 5, 10 and 30 s, then every 30 s while the host has kept terminals. No retry after a host key, authentication, platform or version error. An immediate try on wake (`NSWorkspaceDidWakeNotification`).
+  - **Settings:** the hosts list (`remote.hosts`) and `remote.keep_minutes` live in the local service's settings.
+  - **Tests:**
+    - a fake `ssh` (a C fixture like `fake_claude.c`) that checks its argv, replays each stderr case, or pipes to a test service;
+    - the ladder with a fake clock;
+    - the alias validation;
+    - the install's checks;
+    - channel mapping across two links.
+- [ ] **26.18 Hosts in the interface.** `task/26.18-hosts-ui` — Spike §5, Q1–Q3. Needs 26.17.
+  - **Settings → Hosts:**
+    - add a host by its `~/.ssh/config` alias, typed in (Hive does not parse the config);
+    - Test, Remove, and the keep time.
+  - **Spaces:** the space switcher lists each connected host's spaces as "Space · host", and a new space can be created on a host.
+  - **Naming the host:** the sidebar, bell, F8, sound and notifications name it. After a reattach, one summary notification ("2 agents waiting on gpu-box") instead of a burst.
+  - **Link state:**
+    - the status bar has a chip per host (connected / reconnecting since … / disconnected: reason) with Reconnect;
+    - a terminal of a host that is down shows "Reconnecting to <host>…" over it, with input blocked and its buffer kept.
+  - **Quit:** with agents running on a host, quit asks "Keep N agents running on <host>?" (keep is the default, Q2), and the answer goes as `bye`.
+  - **Off for a remote space** (the items hidden): Open with default app, Reveal, Open settings file, Open shared folder, the dev-server preview. Files dropped from Finder type nothing and show a toast.
+  - **Mock transport:** a second host (`?mock=remote`).
+  - **Tests:** bun for each case; e2e for the switcher, the overlay and the quit dialog, in light and dark.
+  - ⏸ **Checkpoint:** the human looks at it in the real app against the CI-style container host of 26.20, or a host of their own.
+- [ ] **26.19 A remote cannot harm the app.** `task/26.19-hostile-remote` — Spike §8. Needs 26.17.
+  - **Opens:** for a remote link the app refuses every open or reveal, whatever the service sends (`editor_target`, `session_located`, `open_settings_file`, `open_shared`).
+  - **URLs:** only `https://` URLs open, for every link.
+  - **Caps:** each link has a cap on queued control frames and on list sizes (`projects`, `sessions` and the others). Past a cap the link is dropped with the reason shown.
+  - **Text** from a remote is clipped by the app too.
+  - **Tests:** a fake remote service sends each bad case (oversized frames, unknown types, a path to open, `file:` and `javascript:` URLs, a flood of control frames, huge lists). The app stays up and says why.
+  - **Review:** `security-reviewer` on the whole remote path (26.13–26.19).
+- [ ] **26.20 A real remote in CI.** `task/26.20-remote-ci` — Answers the spike's open questions 2 and 5. Needs 26.13–26.17.
+  - **The host:** a Linux job with `sshd` in a container, temp keys and a temp `HOME` (never the runner's `~/.ssh`), `tc netem` with 100 ms delay and 2 % loss, and 26.13's musl `hive`. The app's Rust link code drives it headless, with no WebView.
+  - **Checks:**
+    - the install over ssh;
+    - echo p95 under RTT + 50 ms;
+    - a second terminal's echo during a flood (reported);
+    - the link dropped and reattached, the output written meanwhile replayed;
+    - unknown and changed host keys refused;
+    - a faked `Darwin` `uname` refused.
+  - **Report:** the numbers go in this task's note.
+- [ ] **26.21 Docs and the hand check on a real host.** `task/26.21-remote-docs` — Needs 26.13–26.20.
+  - **README, "Remote hosts":**
+    - Linux x86_64 and aarch64 only, with `git` and a logged-in `claude` on the remote;
+    - `ssh-add`, host keys, the keep time;
+    - what is off for remote spaces;
+    - the `ForwardAgent` warning.
+  - **`docs/architecture.md`:** links per host, the ssh command, install, keep and reattach.
+  - **`docs/remote-checklist.md`,** on a real Linux host of the human's:
+    - add the host and install;
+    - agents across a lid close and a Wi-Fi switch;
+    - `ProxyJump`;
+    - a FIDO2 key, if the human has one;
+    - an app update while terminals are kept (Q8);
+    - a macOS host refused.
+  - **`docs/hive.md`:** the human updates it from the spike's section 13.
+  - ⏸ **Checkpoint:** the human runs the checklist.
 
 ---
 

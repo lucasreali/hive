@@ -12,6 +12,27 @@ Run the **whole service on the remote host**, reached through the **same stdio b
 
 Hive stores no secrets. It uses the user's `ssh` and `~/.ssh/config` with `BatchMode=yes` and `StrictHostKeyChecking=yes`, so an unknown or changed host key is refused and never accepted silently.
 
+## Decisions (the human, 2026-11-09)
+
+The human picked this design: the whole service on the remote, over the stdio bridge. The answers to section 11's questions:
+
+| # | Answer |
+|---|---|
+| Q1 | A space belongs to one host (as recommended). |
+| Q2 | Remote agents keep running after a dropped link and after quitting; quitting asks, and keep is the default. |
+| Q3 | Kept for 24 h by default; the setting ranges from 1 minute to 7 days. |
+| Q4 | Static Linux x86_64 and aarch64 builds, bundled in the macOS app and uploaded over ssh. |
+| Q5 | **Linux only** (not the recommendation). A macOS remote is refused with a clear message: no best effort. Every other OS is refused too. |
+| Q6 | An unknown or changed host key is refused, with "run `ssh <alias>` once"; Hive never writes `known_hosts`. |
+| Q7 | Keepalive 10 s × 3, plus an immediate reconnect on wake. |
+| Q8 | A remote service of another version holding kept terminals: show both versions and offer "Restart the remote service" or "Stay disconnected". |
+| Q9 | Replay the ring buffer and force a redraw; no terminal emulator in the service. |
+| Q10 | No change to the 512 KiB window; measure in the real app first. |
+| Q11 | The user's `$SHELL` as a login shell on a remote Linux host; WSL keeps fish. |
+| Q12 | Hive does not force `ControlMaster`. |
+
+Where the text below still discusses an alternative, these answers win. The tasks are 26.13–26.21 in `TODO.md` (section 12 lists them). Defaults the answers leave open are `pending` rows of `TODO.md`'s ledger, marked 26.1.
+
 ## 2. Which Orca
 
 "Orca" here means **stablyai/orca** (`github.com/stablyai/orca`, MIT, Electron + TypeScript). `docs/hive.md` already names it as Hive's main inspiration ("Referências para estudar"; "igual ao Orca"; requirement 3 about Orca being heavy), so the reference is not ambiguous. Sources read on 2026-11-09:
@@ -107,7 +128,11 @@ The local service is not special in this model: it is the host "This Mac".
 
 ### 6.2 Installing and updating the remote service
 
-- **Platforms:** Linux x86_64 and aarch64 first. macOS arm64 hosts work almost for free (the app already bundles that `hive`), but macOS hosts have their own catches: Orca documents the Local Network privacy loss for processes started by an SSH session, and the measured first run of a new binary was slow (section 7.4). Q5 asks about them.
+- **Platforms: Linux x86_64 and aarch64 only** (decided, Q5).
+  - `hive-needs Darwin …`: "gpu-box runs macOS; Hive connects only to Linux hosts".
+  - Any other OS or CPU: "gpu-box runs <os> <cpu>; Hive connects only to Linux x86_64 and aarch64 hosts".
+  - In both cases nothing is uploaded. The check text is the remote's `uname -s` and `uname -m`, cut to 64 characters and shown as text.
+  - Why macOS was not taken: Orca documents the Local Network privacy loss for processes started by an SSH session, and the first run of a new binary was slow (section 7.4).
 - **Builds.** Today's release builds a glibc `hive` on ubuntu-22.04 (for WSL), which needs glibc ≥ 2.35. Remote hosts are older and more varied (RHEL 8 has 2.28, Debian 11 has 2.31), so the proposal is **static musl builds** `hive-linux-x86_64` and `hive-linux-aarch64`. Whether the WSL path switches to the musl build too is a separate choice; keeping it unchanged is the default.
 - **Where the binary comes from: bundled in the app (recommended, Q4).** That is the same trust path as #29 (the signed installer carries the service), works offline and always matches the app's version, at about 10 MB more per app. The alternative is that the app downloads the matching release asset and checks a minisign signature: a smaller app but a new trust path and a network dependency. The remote downloading it itself is rejected: it needs internet access on the remote and runs `curl | sh`-shaped code.
 - **Upload.** When the check says `hive-needs Linux x86_64`, the app runs a second constant command over `ssh` with the binary on stdin:
@@ -116,7 +141,7 @@ The local service is not special in this model: it is the host "This Mac".
   3. `hive.new --version` must print the expected version;
   4. `mv -f hive.new hive`, so a running service keeps its file.
   
-  Then it reconnects. Measured: 4.7 MB in 2.9 s on loopback and in 7.6 s on a 1 MiB/s, 100 ms link (section 7.4). An unknown platform ("FreeBSD amd64", "Linux armv7l") is refused with a message.
+  Then it reconnects. Measured: 4.7 MB in 2.9 s on loopback and in 7.6 s on a 1 MiB/s, 100 ms link (section 7.4). The lab host was a Mac only because no Linux sshd was at hand; that is no support for macOS hosts.
 - **Versions.** The handshake is unchanged: the remote `hive` must equal the app's version (#29). An app update means the next connect finds a different `--version`, uploads, and starts the new binary. A remote service of the old version that is still running (terminals kept) refuses the new app: see Q8.
 - **What the remote needs:** `/bin/sh`, `uname`, `git`, and `claude` installed and logged in on the remote (#45: Hive never copies credentials). `gh` is optional. The "no `claude`" and "not logged in" cases surface as they do locally.
 - **Shell on Linux.** Today Linux terminals run `fish -C` (#25, built for the human's WSL). A remote Linux host rarely has fish. The remote service must start the user's `$SHELL` as a login shell, as `terminal::login` already does on macOS (bash, zsh and fish are already handled there), with the bin dir first. The service's own `PATH` (for `git`, `claude -p`, `gh`) must come from that login shell too, because sshd's non-interactive `PATH` is minimal (measured: `/usr/bin:/bin:/usr/sbin:/sbin`). This is a real gap and task 26.14.
@@ -271,11 +296,11 @@ A **remote is a less trusted peer than the local service.** It is someone else's
 
 Say these plainly:
 
+- **macOS hosts** (Q5: refused with a message) and every OS but Linux;
 - Windows hosts and WSL behind ssh;
 - password, keyboard-interactive and OTP prompts;
 - passphrase prompts by Hive;
 - a remote with no POSIX `/bin/sh`;
-- FreeBSD and 32-bit ARM;
 - port forwarding and the dev-server preview of a remote;
 - open, reveal or drop of remote files from Finder;
 - SFTP downloads;
@@ -295,7 +320,7 @@ Say these plainly:
 
 ## 11. Decisions for the human
 
-Each is phrased for the questionnaire, with the recommended answer first.
+Each is phrased for the questionnaire, with the recommended answer first. **Answered 2026-11-09**: see "Decisions" near the top; Q5 went against the recommendation (Linux only).
 
 | # | Question | Recommended answer | Alternatives |
 |---|---|---|---|
@@ -312,39 +337,34 @@ Each is phrased for the questionnaire, with the recommended answer first.
 | Q11 | Linux terminals on a remote: which shell? | The user's `$SHELL` as a login shell, as on macOS. fish stays for WSL. | fish required on the remote. |
 | Q12 | Does Hive set `ControlMaster`? | No: the user's config decides. | Hive adds `ControlMaster=auto` with its own `ControlPath`. |
 
-## 12. Proposed tasks (written into `TODO.md` only after the human approves)
+## 12. Tasks
 
-Each is sized like the other stages' tasks. All are Rust plus frontend unless noted; every `crates/hive` or `src-tauri` change gets `security-reviewer`.
+These are now in `TODO.md` (Stage 26), worded there in full; that text wins over this summary. Every `crates/hive` or `src-tauri` change gets `security-reviewer`.
 
-- **26.13 Remote Linux builds.** Static musl `hive` for x86_64 and aarch64 in `ci.yml` and `release.yml` (`cross` or `cargo zigbuild`, a dependency to approve). Bundled in the macOS app per Q4, with `macos-bundle.sh check` verifying them. A smoke test runs each in an old-glibc container (`hive --version`, `hive daemon` start and stop). README: supported remote platforms.
-- **26.14 Login shell on Linux.** The service started over ssh (`hive bridge --remote` tells the daemon) runs terminals as the user's `$SHELL` login shell with the bin dir first (`terminal::login` made portable), and takes its own `PATH` from that shell as macOS does. WSL keeps `fish -C`. Tests: bash, zsh, fish and dash login shells in integration tests (`common::Env`).
-- **26.15 The service outlives a dropped link.** `hello {keep_secs, app_id}` and `bye {end}` (protocol 1, optional fields). Takeover of a stale connection by the same `app_id`. A ring buffer per terminal while detached (no backpressure). The end after `keep_secs`. `docs/architecture.md` (handshake, App disconnect). Integration tests: drop the app socket mid-flood, and the agent keeps writing; takeover; the end after the grace time; the ring overflow.
-- **26.16 Reattach.** Output offsets, `terminals_kept`, `attach_terminal {from}`, `terminal_reset`, and the redraw resize in the app. Tests in Rust (offsets inside and outside the ring) and bun (xterm cleared and replayed, tabs reopened).
-- **26.17 The app's links.** `src-tauri`:
-  - one `Link` per host;
-  - the `ssh` command builder (alias validation, fixed options), the constant check and install commands, the upload;
-  - stderr classified into host key, authentication, network, platform and version;
-  - the reconnect ladder, wake and network-change reconnect;
-  - UI messages tagged with `host`, and channels mapped per link.
-  
-  Tests with a fake `ssh` program (a C fixture like `fake_claude.c`) that replays each stderr case and pipes to a test service.
-- **26.18 Hosts in the UI.** Settings → Hosts (add by `~/.ssh/config` alias, test, remove; kept in the local service's settings), the space switcher with remote spaces, the host chip, the reconnect overlay on terminals, notifications and bell naming the host, the summary after a reattach, and the remote-only refusals (open, reveal, drop, preview). Mock transport with a second host. e2e for the switcher and the overlay.
-- **26.19 Hostile remote.** The app-side limits of section 8 (refuse opens for remote links, `https` only, caps on queued control frames and list sizes, clipped text), with tests that feed malformed and oversized frames through a fake remote. `security-reviewer` on the whole remote path.
-- **26.20 A real remote in CI.** A Linux job running sshd in a container with temp keys, `tc netem` 100 ms delay and 2 % loss. Checks: install, echo bound (p95 below RTT + 50 ms), drop and reattach, host key refusal. It answers open questions 2 and 5.
-- **26.21 Docs and hand check.** README "Remote hosts" (requirements, `ssh-add`, host keys, what is off for remotes, `ForwardAgent` warning), `docs/architecture.md`, and a manual checklist on a real Linux host (sleep, ProxyJump, FIDO2, update with kept terminals). ⏸ Checkpoint.
+| Task | What | Needs |
+|---|---|---|
+| 26.13 Linux builds for remote hosts | Static musl `hive` for x86_64 and aarch64, bundled in the macOS app, smoke-tested in an old-glibc container. | — |
+| 26.14 Remote Linux terminals use the login shell | `hive bridge --remote` / `daemon --remote`: `$SHELL` login shell, the service's `PATH` from it; WSL unchanged. | — |
+| 26.15 A remote service outlives a dropped link | `hello {keep_secs, app_id}`, `bye {end}`, ring buffer while detached, takeover by `app_id`, the end after the keep time. | — |
+| 26.16 Reattach after a dropped link | Offsets, `terminals_kept`, `attach_terminal {from}`, `terminal_reset`, the redraw resize. | 26.15 |
+| 26.17 The app's links over ssh | One link per host, the ssh command, check and install (Linux only), stderr classes, Q8's restart, reconnect ladder and wake. | 26.13, 26.15 |
+| 26.18 Hosts in the interface ⏸ | Settings → Hosts, "Space · host", host chip, reconnect overlay, quit question, remote-only refusals. | 26.17 |
+| 26.19 A remote cannot harm the app | Section 8's app-side limits, a fake hostile remote, `security-reviewer` on the whole path. | 26.17 |
+| 26.20 A real remote in CI | sshd in a container with `tc netem`, install, echo bound, drop and reattach, host keys, a `Darwin` refusal. | 26.13–26.17 |
+| 26.21 Docs and the hand check on a real host ⏸ | README, `docs/architecture.md`, `docs/remote-checklist.md`; the human updates `docs/hive.md`. | 26.13–26.20 |
 
 ## 13. Changes `docs/hive.md` would need (the human's; never edited here)
 
 | Item | Today | Proposed |
 |---|---|---|
-| #3 | App on Windows + service in WSL | Add: the service can also run on a remote host over SSH; the app talks to several services (local and one per remote). |
+| #3 | App on Windows + service in WSL | Add: the service can also run on a remote **Linux** host (x86_64, aarch64) over SSH; macOS and every other OS are refused (Q5); the app talks to several services (local and one per remote). |
 | #14 | Service with the app's lifetime, bridge via `wsl.exe` | Add: a remote service is started by `ssh -T … -- <alias> <fixed command>` running `~/.hive/bin/hive bridge`; it outlives a dropped link for the grace time (Q3). |
 | #18 | Terminals and agents end when the app closes, even in a crash; "no reconnection or snapshot" | Exception for remote hosts: they keep running after a dropped link (and after quit, per Q2) for the grace time; the app reattaches and replays the missing output (Q9). |
 | #24 | Handshake compares versions | `hello` gains optional `keep_secs` and `app_id`; new `bye`, `terminals_kept`, `attach_terminal {from}`, `terminal_reset`. |
 | #25 | `claude` wrapper put first on `PATH` through `fish -C` | On a remote Linux host, through the user's login shell, as on macOS (Q11). |
 | #26 | Single binary in Hive's bin folder | The same `~/.hive/bin/hive` on each remote. |
-| #29 | Distribution and versions | The macOS app also carries the Linux musl `hive` for x86_64 and aarch64 (Q4), uploaded over ssh when the remote's `--version` differs; an old remote service with kept terminals: Q8. |
+| #29 | Distribution and versions | The macOS app also carries the Linux musl `hive` for x86_64 and aarch64 (Q4), uploaded over ssh when the remote's `--version` differs; a remote service of another version holding terminals: both versions shown, restart it or stay disconnected (Q8). |
 | #45 | Hive never reads credentials | Also never stores ssh passwords, passphrases or keys, never writes `known_hosts`; the remote's own `claude` login is used. |
 | #48 | A space groups projects and an identity | A space belongs to one host; a remote's spaces live in its `~/.hive` and show as "Space · host" (Q1). |
 | #5 | Notifications | They name the host for a remote agent; one summary after a reattach. |
-| New | — | SSH link: the user's `ssh` and `~/.ssh/config`, `BatchMode=yes`, `StrictHostKeyChecking=yes` (unknown or changed key refused, Q6), `ServerAlive` 10 × 3 (Q7), no forced `ControlMaster` (Q12); out for now: section 9. |
+| New | — | SSH link: the user's `ssh` and `~/.ssh/config`, `BatchMode=yes`, `StrictHostKeyChecking=yes` (unknown or changed key refused, Q6), `ServerAlive` 10 × 3 (Q7), no forced `ControlMaster` (Q12); Linux hosts only (Q5); out for now: section 9. |
