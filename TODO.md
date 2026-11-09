@@ -467,6 +467,15 @@ Moved here 2026-11-06 at the human's request: every task still open in the stage
   - **History stays:** ticked tasks and ledger rows of 24.x and 25.2 are not rewritten; a new ledger row says 26.11 removed them. The pending 25.2 defaults end with it.
   - **Decisions:** `docs/hive.md` is the human's; the agent lists what to change there (the browser's decisions, D22.3 and later) in its report and never edits it.
   - **Hand check at the checkpoint:** after updating from the previous release in the real app, no Browser tab and no Settings row; a new `claude` has no `hive-browser` in `/mcp`; `hive-browser.json` is gone; no headless browser of Hive's is running.
+- [ ] **26.12 The side panel's X closes the view, and the rail stays.** `task/26.12-panel-rail-stays` — Seen by the human (2026-11-09, screenshot): the terminal bar's panel button beside the panel's X makes no sense, and the X should not close the rail of icons (Files, Diff, Scripts, PRs, Actions, Sessions, 25.3).
+  - **The terminal bar's panel button goes** (`PanelIcon`, `TerminalArea.tsx`), its icon too if nothing else uses it.
+  - **The X closes only the view:** its bar and content go, and the terminals take their width; the rail stays in its place at its width. Its title stops saying "Collapse" (for example "Close (Ctrl+Shift+B)").
+  - **With the view closed**, no rail icon shows as selected, and clicking one opens that view at the panel's last width. The resize handle shows only with the view open.
+  - **Ctrl+Shift+B (#35) stays** and shows or hides the view as the X does, so no action hides the rail. The palette's "Show <view>" commands open the view; the toggle command's label says what it now does.
+  - **Unchanged:** a closed view still stops what only an open panel needs (`src/follow.test.ts`). The rail stays usable with no project or worktree selected as far as its views already allow; the agent says what it shows there.
+  - **Pending defaults for the ledger:** clicking the selected icon of an open view does nothing (not asked to close it; the agent reports it as an option); whether the view reopens by itself after a restart follows what `rightPanel` does today.
+  - **Tests:** unit and e2e for each case above, at the panel's widths, in light and dark; the specs that used the removed button (`e2e/shell.e2e.ts`, `shortcuts`, `panel-tabs` and the others a search turns up) move to the X, the rail or the shortcut with no assertion lost. `docs/ui-reference.md` and a new ledger row replace 25.3's tab order (rail, Collapse, view).
+  - **Hand check at the checkpoint:** in the real app, the X leaves the rail, each icon reopens its view, Ctrl+Shift+B does the same, and the terminal bar has no panel button.
 
 ---
 
