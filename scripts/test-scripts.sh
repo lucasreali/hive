@@ -8,8 +8,10 @@
 #     alone above
 #   - energy.sh: its argument checks, and finding Hive's processes in and parsing canned `ps` and
 #     `top` output
-#   - macos-bundle.sh (macOS only): its bundle check passes a correctly signed bundle and fails
-#     each broken one (TODO 17.11)
+#   - macos-bundle.sh check-updater: every macOS key of latest.json has the one tarball (TODO 26.5)
+#   - macos-bundle.sh (macOS only): its bundle check passes a correctly signed universal bundle and
+#     fails each broken one, in either architecture (TODO 17.11, 26.5); join-dsyms; smoke, with a
+#     fake `arch` (the real one under Rosetta runs in macos.yml's bundle job)
 # Never touches the real environment: a temporary HOME, a scratch repository outside this one.
 # The one exception is for a CI runner only, whose keychain search list is disposable: with both
 # GITHUB_ACTIONS and REQUIRE_REAL_CERTIFICATE set (macos.yml), a real certificate signs a bundle in
@@ -302,6 +304,30 @@ check "release-notes: other earlier notes do not silence it" \
 check "release-notes: an ad-hoc release has none" '[ -z "$(notes adhoc "")" ]'
 check "release-notes: a Developer ID release has none" '[ -z "$(notes developer-id "")" ]'
 
+# --- macos-bundle.sh check-updater --------------------------------------------------------------
+# What an installed Hive reads: each macOS key, with the one universal tarball.
+updater_json() { # <jq filter on the good file>
+  jq -n '{x: {url: "https://example.com/Hive_universal.app.tar.gz", signature: "sig"}} |
+    {platforms: {"windows-x86_64": {url: "w", signature: "w"}, "darwin-aarch64": .x, "darwin-aarch64-app": .x,
+      "darwin-x86_64": .x, "darwin-x86_64-app": .x}}' | jq "$1" >"$tmp/latest.json"
+}
+updater_check() { scripts/macos-bundle.sh check-updater "$tmp/latest.json" >/dev/null 2>&1; }
+updater_json .
+check "check-updater: all four macOS keys pass" 'updater_check'
+for key in darwin-aarch64 darwin-aarch64-app darwin-x86_64 darwin-x86_64-app; do
+  updater_json "del(.platforms[\"$key\"])"
+  check "check-updater: no $key fails" '! updater_check'
+done
+updater_json '.platforms["darwin-x86_64"].url = "https://example.com/other.app.tar.gz"'
+check "check-updater: another tarball for Intel fails" '! updater_check'
+updater_json '.platforms["darwin-x86_64-app"].signature = "other"'
+check "check-updater: another signature for Intel fails" '! updater_check'
+updater_json '.platforms |= map_values(.url = "https://example.com/Hive.dmg")'
+check "check-updater: a .dmg, which the updater cannot unpack, fails" '! updater_check'
+updater_json '.platforms |= map_values(.signature = "")'
+check "check-updater: no signature fails" '! updater_check'
+check "check-updater: no file fails" '! scripts/macos-bundle.sh check-updater "$tmp/no-such.json" 2>/dev/null'
+
 # --- macos-bundle.sh check (macOS only: codesign) -----------------------------------------------
 # A small bundle shaped like Hive.app, with the real Info.plist keys and entitlements, signed
 # ad-hoc as the macos.yml bundle is; each case breaks one thing and re-signs the app.
@@ -309,19 +335,61 @@ if [ "$(uname)" = Darwin ]; then
   unset APPLE_SIGNING_IDENTITY
   app=$tmp/Fake.app
   mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
-  printf 'int main(void) { return 0; }\n' | cc -x c -o "$app/Contents/MacOS/fake" -
+  # Stdin would reach only the first architecture's compiler, so the source is a file.
+  printf 'int main(void) { return 0; }\n' >"$tmp/main.c"
+  universal() { cc -arch arm64 -arch x86_64 -o "$1" "$tmp/main.c"; }
+  universal "$app/Contents/MacOS/fake"
   plutil -convert xml1 -o "$app/Contents/Info.plist" src-tauri/Info.plist
   plutil -insert CFBundleExecutable -string fake "$app/Contents/Info.plist"
   plutil -insert CFBundleIdentifier -string com.example.fake "$app/Contents/Info.plist"
   plutil -insert CFBundleIconName -string AppIcon "$app/Contents/Info.plist"
   cp src-tauri/icons/Assets.car "$app/Contents/Resources/Assets.car"
-  new_hive() { printf 'int main(void) { return 0; }\n' | cc -x c -o "$app/Contents/Resources/hive" -; }
+  new_hive() { universal "$app/Contents/Resources/hive"; }
   seal() { codesign --force --sign - --options runtime "$@" "$app" 2>/dev/null; }
   bundle_check() { scripts/macos-bundle.sh check "$app" "$@" >/dev/null 2>&1; }
   new_hive
   scripts/macos-bundle.sh sign-hive "$app/Contents/Resources/hive" 2>/dev/null
   seal --entitlements src-tauri/Entitlements.plist
   check "bundle: a signed bundle passes" 'bundle_check'
+  for slice in x86_64 arm64; do
+    check "bundle: the nested hive is signed in $slice" \
+      'has "$(codesign --arch "$slice" -dv "$app/Contents/Resources/hive" 2>&1)" "Signature=adhoc" "Identifier=com.lucas.hive.service"'
+  done
+  # A thin hive or app: what a build that skipped `lipo` or the universal target would ship.
+  hive_bin=$app/Contents/Resources/hive app_bin=$app/Contents/MacOS/fake
+  check_says() { [[ $(scripts/macos-bundle.sh check "$app" 2>&1) == *"$1"* ]]; }
+  for slice in x86_64 arm64; do
+    missing=arm64
+    [ "$slice" = arm64 ] && missing=x86_64
+    cp "$hive_bin" "$tmp/hive.saved"
+    lipo "$tmp/hive.saved" -thin "$slice" -output "$hive_bin"
+    scripts/macos-bundle.sh sign-hive "$hive_bin" 2>/dev/null
+    seal --entitlements src-tauri/Entitlements.plist
+    check "bundle: a hive of $slice alone fails" 'check_says "hive has no $missing slice"'
+    cp "$tmp/hive.saved" "$hive_bin"
+    cp "$app_bin" "$tmp/app.saved"
+    lipo "$tmp/app.saved" -thin "$slice" -output "$app_bin"
+    seal --entitlements src-tauri/Entitlements.plist
+    check "bundle: an app of $slice alone fails" 'check_says "fake has no $missing slice"'
+    cp "$tmp/app.saved" "$app_bin"
+    seal --entitlements src-tauri/Entitlements.plist
+  done
+  check "bundle: both again, it passes" 'bundle_check'
+  # `lipo` after signing, or a signature of one slice only: the other slice is not properly signed.
+  cp "$hive_bin" "$tmp/hive.saved"
+  cc -arch arm64 -o "$tmp/hive-arm" "$tmp/main.c"
+  scripts/macos-bundle.sh sign-hive "$tmp/hive-arm" 2>/dev/null
+  cc -arch x86_64 -o "$tmp/hive-intel" "$tmp/main.c"
+  lipo -create -output "$hive_bin" "$tmp/hive-arm" "$tmp/hive-intel"
+  seal --entitlements src-tauri/Entitlements.plist
+  check "bundle: a hive with its Intel slice unsigned fails" '! bundle_check'
+  cc -arch arm64 -o "$tmp/hive-arm" "$tmp/main.c"
+  scripts/macos-bundle.sh sign-hive "$tmp/hive-intel" 2>/dev/null
+  lipo -create -output "$hive_bin" "$tmp/hive-arm" "$tmp/hive-intel"
+  seal --entitlements src-tauri/Entitlements.plist
+  check "bundle: a hive with its arm64 slice only linker-signed fails" 'check_says "arm64 slice is only linker-signed"'
+  cp "$tmp/hive.saved" "$hive_bin"
+  seal --entitlements src-tauri/Entitlements.plist
   check "bundle: the nested hive is signed ad-hoc" \
     'has "$(codesign -dv "$app/Contents/Resources/hive" 2>&1)" "Signature=adhoc" "Identifier=com.lucas.hive.service"'
   check "bundle: an ad-hoc bundle fails the Developer ID check" '! bundle_check --developer-id'
@@ -381,6 +449,98 @@ EOF
   check "bundle: a hive with another signer fails" '! PATH=$tmp/signer:$PATH bundle_check'
   check "bundle: it fails on the signers" \
     '[[ $(PATH=$tmp/signer:$PATH scripts/macos-bundle.sh check "$app" 2>&1) == *"different signers"* ]]'
+  # The same in the slice this machine does not run: only asking for it by name would see it.
+  sed 's|case "\$\*" in \*-dvv\*/Resources/hive)|case "$*" in *x86_64*-dvv*/Resources/hive)|' \
+    "$tmp/signer/codesign" >"$tmp/signer/codesign.intel"
+  mkdir -p "$tmp/signer-intel"
+  mv "$tmp/signer/codesign.intel" "$tmp/signer-intel/codesign"
+  chmod +x "$tmp/signer-intel/codesign"
+  check "bundle: another signer only in x86_64 fails, naming it" \
+    '[[ $(PATH=$tmp/signer-intel:$PATH scripts/macos-bundle.sh check "$app" 2>&1) == *"different signers in x86_64"* ]]'
+
+  # --- macos-bundle.sh join-dsyms ------------------------------------------------------------------
+  # Two dSYMs per architecture whose DWARF files differ in name, as cargo's hashes make them.
+  dsym_of() { # <folder> <name> <arch>
+    local object=$tmp/$3-$2.o name=$2-$3-hash
+    mkdir -p "$1"
+    cc -g -arch "$3" -c -o "$object" -DNAME="\"$2-$3\"" -x c - <<<'const char *n = NAME; int main(void) { return n[0]; }'
+    cc -arch "$3" -o "$1/$name" "$object"
+    dsymutil -o "$1/$name.dSYM" "$1/$name" 2>/dev/null
+    ln -s "$name.dSYM" "$1/$2.dSYM"
+    mv "$1/$name" "$1/$2"
+  }
+  for name in hive hive-app; do
+    dsym_of "$tmp/dsym-arm" "$name" arm64
+    dsym_of "$tmp/dsym-intel" "$name" x86_64
+  done
+  dsym_app=$tmp/Dsym.app
+  mkdir -p "$dsym_app/Contents/MacOS" "$dsym_app/Contents/Resources"
+  plutil -create xml1 "$dsym_app/Contents/Info.plist"
+  plutil -insert CFBundleExecutable -string hive-app "$dsym_app/Contents/Info.plist"
+  lipo -create -output "$dsym_app/Contents/MacOS/hive-app" "$tmp/dsym-arm/hive-app" "$tmp/dsym-intel/hive-app"
+  lipo -create -output "$dsym_app/Contents/Resources/hive" "$tmp/dsym-arm/hive" "$tmp/dsym-intel/hive"
+  check "join-dsyms: it makes the two" \
+    'scripts/macos-bundle.sh join-dsyms "$tmp/dsym-arm" "$tmp/dsym-intel" "$tmp/dsym-joined" 2>/dev/null'
+  check "join-dsyms: the joined dSYMs match the universal binaries" \
+    'scripts/macos-bundle.sh dsyms "$dsym_app" "$tmp/dsym-joined" >/dev/null 2>&1'
+  for name in hive hive-app; do
+    check "join-dsyms: $name holds both architectures" \
+      '[ "$(dwarfdump --uuid "$tmp/dsym-joined/$name.dSYM" | wc -l)" -eq 2 ]'
+  done
+  check "join-dsyms: one architecture's dSYM does not match the universal binaries" \
+    '! scripts/macos-bundle.sh dsyms "$dsym_app" "$tmp/dsym-arm" >/dev/null 2>&1'
+  check "join-dsyms: an existing folder fails" \
+    '! scripts/macos-bundle.sh join-dsyms "$tmp/dsym-arm" "$tmp/dsym-intel" "$tmp/dsym-joined" 2>/dev/null'
+  check "join-dsyms: a missing dSYM fails" \
+    '! scripts/macos-bundle.sh join-dsyms "$tmp/dsym-arm" "$tmp/no-such" "$tmp/dsym-none" 2>/dev/null'
+  check "join-dsyms: the same architecture twice fails" \
+    '! scripts/macos-bundle.sh join-dsyms "$tmp/dsym-arm" "$tmp/dsym-arm" "$tmp/dsym-same" 2>/dev/null'
+
+  # --- macos-bundle.sh smoke -----------------------------------------------------------------------
+  # A fake `arch`: this Mac may have no Rosetta, and a fake hive and app show what each slice does.
+  smoke_app=$tmp/Smoke.app
+  mkdir -p "$smoke_app/Contents/MacOS" "$smoke_app/Contents/Resources" "$tmp/fake-arch"
+  plutil -create xml1 "$smoke_app/Contents/Info.plist"
+  plutil -insert CFBundleExecutable -string smoke-app "$smoke_app/Contents/Info.plist"
+  cat >"$tmp/fake-arch/arch" <<'EOF'
+#!/bin/sh
+echo "$1 $2" >>"$FAKE_ARCH_LOG"
+FAKE_ARCH=$1
+export FAKE_ARCH
+shift
+exec "$@"
+EOF
+  cat >"$smoke_app/Contents/Resources/hive" <<'EOF'
+#!/bin/sh
+[ "$FAKE_ARCH" != "$FAKE_BROKEN" ] || exit 1
+[ "$FAKE_ARCH" != "$FAKE_OLDER" ] || { echo "hive 0.0.1"; exit 0; }
+[ "$FAKE_ARCH" != "$FAKE_OTHER" ] || { echo "not it"; exit 0; }
+echo "hive 1.2.3"
+EOF
+  cat >"$smoke_app/Contents/MacOS/smoke-app" <<'EOF'
+#!/bin/sh
+echo "$HOME" >"$FAKE_APP_HOME"
+[ -z "$FAKE_APP_ENDS" ] || exit 1
+exec sleep 30
+EOF
+  chmod +x "$tmp/fake-arch/arch" "$smoke_app/Contents/Resources/hive" "$smoke_app/Contents/MacOS/smoke-app"
+  export FAKE_ARCH_LOG=$tmp/arch.log FAKE_APP_HOME=$tmp/app.home SMOKE_APP_TICKS=2
+  smoke_run() { env PATH="$tmp/fake-arch:$PATH" GITHUB_ACTIONS=1 "$@" scripts/macos-bundle.sh smoke "$smoke_app" 2>&1; }
+  check "smoke: both slices and the Intel app pass" 'smoke_run >/dev/null'
+  check "smoke: it runs hive in both architectures, then the app in x86_64" \
+    '[ "$(tr "\n" " " <"$FAKE_ARCH_LOG")" = "-arm64 $smoke_app/Contents/Resources/hive -x86_64 $smoke_app/Contents/Resources/hive -x86_64 $smoke_app/Contents/MacOS/smoke-app " ]'
+  check "smoke: the app has a temporary HOME, gone after" \
+    '[ "$(cat "$FAKE_APP_HOME")" != "$HOME" ] && [ ! -e "$(cat "$FAKE_APP_HOME")" ]'
+  check "smoke: outside CI it refuses" \
+    '[[ $(env -u GITHUB_ACTIONS PATH="$tmp/fake-arch:$PATH" scripts/macos-bundle.sh smoke "$smoke_app" 2>&1) == *"CI only"* ]]'
+  check "smoke: a hive that does not run in x86_64 fails, naming Rosetta" \
+    '[[ $(smoke_run FAKE_BROKEN=-x86_64) == *"x86_64 hive does not run"*Rosetta* ]]'
+  check "smoke: a hive that does not run in arm64 fails" '! smoke_run FAKE_BROKEN=-arm64 >/dev/null'
+  check "smoke: slices of different versions fail" '[[ $(smoke_run FAKE_OLDER=-x86_64) == *"slices disagree"* ]]'
+  check "smoke: another answer fails" '[[ $(smoke_run FAKE_OTHER=-x86_64) == *"answers: not it"* ]]'
+  check "smoke: an app that ends at once fails" '[[ $(smoke_run FAKE_APP_ENDS=1) == *"x86_64 app ended"* ]]'
+  check "smoke: the ended app's HOME is gone too" '[ ! -e "$(cat "$FAKE_APP_HOME")" ]'
+  unset FAKE_ARCH_LOG FAKE_APP_HOME SMOKE_APP_TICKS
 
   # --- macos-bundle.sh new-certificate ------------------------------------------------------------
   sha1=$(umask 022; scripts/macos-bundle.sh new-certificate "$tmp/certificate" 2>/dev/null)
