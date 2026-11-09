@@ -2507,7 +2507,8 @@ button.chevron:hover {
 }
 
 .terminal-permission {
-  display: flex;
+  display: grid;
+  grid-template-columns: 110px 1fr auto;
   align-items: baseline;
   gap: 12px;
   padding: 4px 0;
@@ -2515,7 +2516,6 @@ button.chevron:hover {
 
 .terminal-permission-state {
   color: var(--text-3);
-  margin-right: auto;
 }
 
 .settings-group h3 {

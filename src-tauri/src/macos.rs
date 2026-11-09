@@ -75,11 +75,15 @@ fn held(answer: u8) -> Permission {
 /// process has Hive.app as its responsible process, so macOS answers it the same.
 pub fn terminal_permissions() -> TerminalPermissions {
     // SAFETY: neither takes arguments or has requirements; both only read.
-    unsafe {
-        TerminalPermissions {
-            screen_recording: held(CGPreflightScreenCaptureAccess()),
-            accessibility: held(AXIsProcessTrusted()),
-        }
+    let (screen, trusted) = unsafe { (CGPreflightScreenCaptureAccess(), AXIsProcessTrusted()) };
+    answered(screen, trusted)
+}
+
+/// The permissions, from macOS's raw answers for Screen Recording and Accessibility.
+fn answered(screen: u8, trusted: u8) -> TerminalPermissions {
+    TerminalPermissions {
+        screen_recording: held(screen),
+        accessibility: held(trusted),
     }
 }
 
@@ -1351,6 +1355,16 @@ mod tests {
         assert_eq!(held(0), Permission::Denied);
         assert_eq!(held(1), Permission::Granted);
         assert_eq!(held(2), Permission::Granted, "C's truth: anything but zero");
+    }
+
+    #[test]
+    fn each_answer_is_its_own_permission() {
+        let only_screen = answered(1, 0);
+        assert_eq!(only_screen.screen_recording, Permission::Granted);
+        assert_eq!(only_screen.accessibility, Permission::Denied);
+        let only_trusted = answered(0, 1);
+        assert_eq!(only_trusted.screen_recording, Permission::Denied);
+        assert_eq!(only_trusted.accessibility, Permission::Granted);
     }
 
     #[test]
