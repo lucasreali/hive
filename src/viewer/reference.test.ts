@@ -61,6 +61,15 @@ test("without selected lines or a live terminal in that worktree, it says why", 
   expect(target({ activeTab: 1 })).toEqual({ why: "The active terminal is in another worktree" });
 });
 
+test("sending puts the terminal in front of a browser's tab too", () => {
+  const write = spyOn(transport, "writeTerminal").mockImplementation(async () => {});
+  useHive.setState({ ...ready, fileShown: true, browserShown: "/elsewhere" });
+  sendReference();
+  expect(write).toHaveBeenCalled();
+  expect(useHive.getState().browserShown).toBeNull();
+  write.mockRestore();
+});
+
 test("sending writes the reference as input, without Enter, only when it can", () => {
   const write = spyOn(transport, "writeTerminal").mockImplementation(async () => {});
   sendReference();

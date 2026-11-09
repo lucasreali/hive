@@ -681,6 +681,14 @@ label:has(> input[type="checkbox"]:disabled) {
   font-style: italic;
 }
 
+/* A page's title or address, the page's own text: cut when long, so its × stays in reach. */
+.tab-name[data-browser] {
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 /* A session's name, not a path: prose, cut when long. */
 .tab-name[data-agent] {
   max-width: 220px;
@@ -855,11 +863,13 @@ label:has(> input[type="checkbox"]:disabled) {
 
 /* A file in a pair (25.1): each side of the divider at --split, a terminal's host too. */
 .file-view[data-pane="left"],
+.browser[data-pane="left"],
 .terminal-host[data-half="left"] {
   right: calc((1 - var(--split)) * 100%);
 }
 
 .file-view[data-pane="right"],
+.browser[data-pane="right"],
 .terminal-host[data-half="right"] {
   left: calc(var(--split) * 100%);
 }
@@ -4823,33 +4833,63 @@ button.link:hover {
   font-size: var(--fs-small);
 }
 
-/* The agent's browser (24.6): its page's address, then the screencast, fit to the panel. */
+/* The agent's browser's tab (25.2): its address, the last action, then the page, fit to its width. */
 .browser {
-  flex: 1 1 0;
-  min-height: 0;
+  position: absolute;
+  inset: 0;
   display: flex;
   flex-direction: column;
+  background: var(--bg);
 }
 
-.browser-url {
-  min-height: 28px;
-  padding: 0 12px;
+.browser-bar {
+  min-height: 34px;
+  padding: 3px 12px;
   display: flex;
   align-items: center;
+  gap: 8px;
   border-bottom: 1px solid var(--border-subtle);
   font-size: var(--fs-meta);
   color: var(--text-3);
+}
+
+.browser-url {
+  flex: 1;
+  min-width: 0;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
-.browser-frame {
+.browser-state {
+  flex: none;
+  color: var(--text-2);
+}
+
+.browser-caption {
+  min-height: 24px;
+  padding: 0 12px;
+  display: flex;
+  align-items: center;
+  border-bottom: 1px solid var(--border-subtle);
+  font-size: var(--fs-meta);
+  color: var(--text-2);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.browser-page {
   flex: 1 1 0;
   min-height: 0;
-  width: 100%;
-  object-fit: contain;
-  object-position: top;
+  overflow: auto;
+}
+
+/* Scaled down to the tab's width, never above the frame's own size. */
+.browser-frame {
+  display: block;
+  max-width: 100%;
+  height: auto;
   user-select: none;
 }
 
@@ -4857,4 +4897,39 @@ button.link:hover {
   padding: 16px 12px;
   font-size: var(--fs-meta);
   color: var(--text-3);
+}
+
+/* The sign of an agent using its browser (25.2), in its row; it pulses once at each action. */
+.agent-browser {
+  flex: none;
+  display: flex;
+  align-items: center;
+  align-self: flex-start;
+  margin-top: 1px;
+  padding: 0;
+  color: var(--text-3);
+}
+
+.agent-browser:hover {
+  color: var(--text);
+}
+
+.agent-browser-globe {
+  animation: agent-browser-pulse 600ms ease-out 1;
+}
+
+@keyframes agent-browser-pulse {
+  from {
+    transform: scale(1.5);
+    color: var(--accent);
+  }
+  to {
+    transform: scale(1);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .agent-browser-globe {
+    animation: none;
+  }
 }

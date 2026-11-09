@@ -118,7 +118,7 @@ test("a file and a terminal pair: both show, the focused one's tab active, in th
   expect([shownPane(s()), shownPanes(s()), shownTerminals(s())]).toEqual([A, [1, A], [1]]);
   expect(s().fileShown).toBe(true);
   expect(s().activeTab).toBe(1);
-  expect(barItems(s()).map((t) => ("path" in t ? t.path : t.id))).toEqual([1, a.path, 2]);
+  expect(barItems(s()).map((t) => ("path" in t ? t.path : paneIdOf(t)))).toEqual([1, a.path, 2]);
   // The terminal's tab shows the same pair, with the focus there.
   activateTab({ id: 1, cwd: W });
   expect([shownPane(s()), shownPanes(s()), s().fileShown]).toEqual([1, [1, A], false]);

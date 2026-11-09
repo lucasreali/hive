@@ -55,7 +55,7 @@ const [, fixLogin, checkout] = shop.worktrees;
 const W = fixLogin.path;
 const s = () => useHive.getState();
 /** The bar's tabs: a file by its path, a terminal by its id. */
-const bar = () => barItems(s()).map((t) => ("path" in t ? t.path : t.id));
+const bar = () => barItems(s()).map((t) => ("path" in t ? t.path : "id" in t ? t.id : t.browser));
 const file = (path: string, worktree = W) => ({ worktree, path });
 /** Opens `f` and keeps its tab (a double click, 11.1), so the next file gets a tab of its own. */
 const keepOpen = (f: OpenFile, editing?: boolean, line?: number) => {

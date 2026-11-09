@@ -56,6 +56,7 @@ import type { JobLog, OpenRun, RunBusy, RunError, Runs } from "./runs";
 import {
   barItems,
   barKey,
+  browserKey,
   dropFile,
   droppable,
   editFor,
@@ -63,12 +64,17 @@ import {
   fileVisible,
   kept,
   opened,
+  paneBrowser,
   paneFile,
+  paneIdOf,
   paneKey,
   patchEdits,
+  shownBrowser,
+  shownInstead,
   shownPane,
   shownSplit,
   splitOf,
+  tabsPlace,
   tabWorktree,
   visibleTabs,
   withKey,
@@ -237,9 +243,11 @@ export const DEFAULT_SETTINGS: Settings = {
 
 /** A tab of the terminal area: a terminal, and the worktree path it was opened in (its title's source). */
 export type Tab = { id: number; cwd: string };
+/** The tab of a worktree's agent's browser (25.2), at most one per worktree. */
+export type BrowserTab = { browser: string };
 /**
  * A tab as a pane of a pair: a terminal by its id, any other tab by its key in the bar (a file's
- * `fileKey`, 25.1).
+ * `fileKey`, 25.1; a browser's `browserKey`, 25.2).
  */
 export type PaneId = number | string;
 /** Two tabs side by side (6.11, a pair: 20.5, any kind: 25.1), left and right, of one worktree. */
@@ -290,16 +298,12 @@ export type WorktreeMenu = { worktree: string; x: number; y: number };
 export type ProjectMenu = { project: string; x: number; y: number };
 export type RightPanel = "files" | null;
 /** What the right panel shows. */
-export type PanelView =
-  | "files"
-  | "changes"
-  | "sessions"
-  | "pulls"
-  | "actions"
-  | "scripts"
-  | "browser";
+export type PanelView = "files" | "changes" | "sessions" | "pulls" | "actions" | "scripts";
 /** The key of a project's Actions runs on `branch` (all branches: null) in `HiveState.runs`. */
 export const runsKey = (project: string, branch: string | null) => `${project}\n${branch ?? ""}`;
+
+/** An agent's last action on a browser, as `browser_action` says: plain text. */
+export type BrowserAction = { agent: string; agentTitle: string | null; action: string };
 
 export type HiveState = {
   // UI state
@@ -471,10 +475,20 @@ export type HiveState = {
    * they show under their subagent only, not in their project's list.
    */
   subagentWorktrees: string[];
-  /** By worktree id: its browser as the service last said (24.6), while the panel watched it. */
+  /** By worktree id: its browser as the service last said (24.6). */
   browsers: Record<string, BrowserStatus>;
   /** The watched browser's newest frame (24.6), a JPEG in base64. */
   browserFrame: { worktree: string; data: string } | null;
+  /** The browsers' tabs in the bar (25.2); not kept across a reload, as pairs. */
+  browserTabs: BrowserTab[];
+  /** The worktree whose browser's tab shows, in front of its terminals and files. */
+  browserShown: string | null;
+  /** The worktrees whose browser's tab the human closed while that browser runs: it stays closed. */
+  browserClosed: Record<string, true>;
+  /** By worktree id: its browser's last action (25.2), for the tab's caption. */
+  browserActions: Record<string, BrowserAction>;
+  /** By agent session: how many browser actions it made, for its globe's pulse (25.2). */
+  browserPulses: Record<string, number>;
   /** The files of the worktree the files panel shows (see `panelWorktree`); check `path`. */
   worktreeFiles: WorktreeFiles | null;
   /** By worktree path: the last `changes` the service sent for it. */
@@ -615,6 +629,11 @@ export const initialState: HiveState = {
   subagentWorktrees: [],
   browsers: {},
   browserFrame: null,
+  browserTabs: [],
+  browserShown: null,
+  browserClosed: {},
+  browserActions: {},
+  browserPulses: {},
   worktreeFiles: null,
   changes: {},
   scripts: {},
@@ -966,18 +985,18 @@ export function selected(s: HiveState, selection: string | null): Partial<HiveSt
   const next = { ...s, selection };
   const tabs = visibleTabs(next);
   const keep = tabs.some((t) => t.id === s.activeTab);
+  const items = barItems(next);
+  const browser = shownBrowser(next);
   const shown = {
     selection,
     activeTab: keep ? s.activeTab : (tabs.at(-1)?.id ?? null),
     fileShown: s.fileShown && fileVisible(next),
+    browserShown: browser,
   };
-  // A place with files but no terminal shows its last file.
-  const file = barItems(next)
-    .filter((t) => "path" in t)
-    .at(-1) as FileTab | undefined;
-  return !shown.fileShown && tabs.length === 0 && file
-    ? { ...shown, ...opened(next, file, false) }
-    : shown;
+  if (shown.fileShown || browser !== null || tabs.length > 0) return shown;
+  // A place with files but no terminal shows its last file; with neither, its browser's tab.
+  const file = items.filter((t) => "path" in t).at(-1);
+  return { ...shown, ...shownInstead(next, file ?? items.at(-1)) };
 }
 export const setFocused = (focused: boolean) => useHive.setState({ focused });
 export const setSystemTheme = (systemTheme: AppliedTheme) => useHive.setState({ systemTheme });
@@ -997,6 +1016,7 @@ export const addTab = (id: number, cwd: string) =>
       tabOrder: withKey(s.tabOrder, `tab:${id}`),
       activeTab: id,
       fileShown: false,
+      browserShown: null,
       selection: tabWorktree(s, tab),
     };
   });
@@ -1004,8 +1024,70 @@ export const activateTab = (tab: Tab) =>
   useHive.setState((s) => ({
     activeTab: tab.id,
     fileShown: false,
+    browserShown: null,
     selection: tabWorktree(s, tab),
   }));
+
+/**
+ * Shows `worktree`'s browser's tab (the agent's globe, the palette, 25.2), opening it when closed
+ * and selecting its worktree when another one shows.
+ */
+export const showBrowserTab = (worktree: string) =>
+  useHive.setState((s) => {
+    const { [worktree]: _, ...browserClosed } = s.browserClosed;
+    const tab = {
+      browserClosed,
+      browserTabs: s.browserTabs.some((t) => t.browser === worktree)
+        ? s.browserTabs
+        : [...s.browserTabs, { browser: worktree }],
+      tabOrder: withKey(s.tabOrder, browserKey(worktree)),
+    };
+    const next = { ...s, ...tab };
+    const moved = tabsPlace(s) === worktree ? {} : selected(next, worktree);
+    return { ...tab, ...moved, browserShown: worktree, fileShown: false };
+  });
+
+/**
+ * "Show beside the agent" (25.2): the terminal of the agent of `worktree`'s browser's last action,
+ * when it is still open.
+ */
+export function browserAgentTerminal(s: HiveState, worktree: string): number | null {
+  const agent = s.agents[s.browserActions[worktree]?.agent ?? ""];
+  return agent && s.tabs.some((t) => t.id === agent.terminal) ? agent.terminal : null;
+}
+
+/** Pairs `worktree`'s browser's tab with its last action's agent's terminal; never by itself. */
+export function showBesideAgent(worktree: string): void {
+  const terminal = browserAgentTerminal(useHive.getState(), worktree);
+  if (terminal !== null) setSplit({ left: terminal, right: browserKey(worktree) });
+}
+
+/**
+ * Closes `worktree`'s browser's tab; when it was shown, the tab beside it shows instead. While
+ * that browser runs, it does not come back by itself (25.2).
+ */
+export const closeBrowserTab = (worktree: string) =>
+  useHive.setState((s) => {
+    const key = browserKey(worktree);
+    const items = barItems(s);
+    const i = items.findIndex((t) => "browser" in t && t.browser === worktree);
+    const rest = items.filter((_, j) => j !== i);
+    const split = splitOf(s, key);
+    const other = split && (split.left === key ? split.right : split.left);
+    const closed = {
+      browserTabs: s.browserTabs.filter((t) => t.browser !== worktree),
+      tabOrder: s.tabOrder.filter((k) => k !== key),
+      splits: s.splits.filter((p) => p !== split),
+      browserClosed: s.browsers[worktree]?.running
+        ? { ...s.browserClosed, [worktree]: true as const }
+        : s.browserClosed,
+    };
+    if (shownBrowser(s) !== worktree) return closed;
+    // The other pane of its pair, else the tab beside it.
+    const next =
+      other !== null ? rest.find((t) => paneIdOf(t) === other) : rest[Math.min(i, rest.length - 1)];
+    return { ...closed, browserShown: null, ...shownInstead({ ...s, ...closed }, next) };
+  });
 /**
  * Removes the tab; when it was shown, the other pane of its split is, else its right neighbour
  * in the bar (the left one when it was last), which may be a file. Closing either pane ends its
@@ -1021,7 +1103,7 @@ export const removeTab = (id: number) =>
     const terminal = typeof other === "number" ? other : null;
     const next = terminal ?? rest[Math.min(i, rest.length - 1)]?.id ?? null;
     const items = barItems(s);
-    const at = items.findIndex((t) => !("path" in t) && t.id === id);
+    const at = items.findIndex((t) => "id" in t && t.id === id);
     const beside = items.filter((_, j) => j !== at)[Math.min(at, items.length - 2)];
     const gone = [barKey(s, { id, cwd: "" }), `tab:${id}`];
     const { [id]: _, ...scriptRuns } = s.scriptRuns;
@@ -1032,10 +1114,10 @@ export const removeTab = (id: number) =>
       activeTab: s.activeTab === id ? next : s.activeTab,
       splits: s.splits.filter((p) => p !== split),
     };
-    // A file takes over from the terminal shown: the other pane of its pair, else the one beside.
-    const file = other === null ? beside : other === terminal ? undefined : paneFile(s, other);
-    return s.activeTab === id && !s.fileShown && file && "path" in file
-      ? { ...removed, ...opened({ ...s, ...removed }, file, false) }
+    // What takes over from the terminal shown: the other pane of its pair, else the tab beside it.
+    const instead = other === null ? beside : items.find((t) => paneIdOf(t) === other);
+    return s.activeTab === id && terminalShown(s) && instead && !("id" in instead)
+      ? { ...removed, ...shownInstead({ ...s, ...removed }, instead) }
       : removed;
   });
 
@@ -1059,7 +1141,11 @@ export const setSplit = (split: Split, focus = split.right) =>
     const pair = { splits, tabOrder, openFiles };
     const file = paneFile({ ...s, ...pair }, focus);
     if (file) return { ...pair, ...opened({ ...s, ...pair }, file, false) };
-    return typeof focus === "number" ? { ...pair, activeTab: focus, fileShown: false } : pair;
+    const browser = paneBrowser(focus);
+    if (browser !== null) return { ...pair, browserShown: browser, fileShown: false };
+    return typeof focus === "number"
+      ? { ...pair, activeTab: focus, fileShown: false, browserShown: null }
+      : pair;
   });
 
 /** Ends the pair tab `id` is in; the other tab stays, alone. */
@@ -1113,14 +1199,15 @@ export const openTerminalSearch = () =>
 export const closeTerminalSearch = () => useHive.setState({ terminalSearch: null });
 
 /** Whether a terminal is shown: an active tab, and no file's tab over it. */
-export const terminalShown = (s: HiveState) => s.activeTab !== null && !s.fileShown;
+export const terminalShown = (s: HiveState) =>
+  s.activeTab !== null && !s.fileShown && shownBrowser(s) === null;
 
 /** A click in a shown pane focuses it: it becomes the active tab, the one "in view". */
 export const focusPane = (id: number) =>
   useHive.setState((s) => {
     const split = shownSplit(s);
     return split && (split.left === id || split.right === id)
-      ? { activeTab: id, fileShown: false }
+      ? { activeTab: id, fileShown: false, browserShown: null }
       : {};
   });
 

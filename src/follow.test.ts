@@ -8,6 +8,7 @@ import {
 } from "./follow";
 import { apply } from "./reduce";
 import {
+  activateTab,
   addTab,
   askBufferTable,
   editOpenTable,
@@ -22,6 +23,7 @@ import {
   setRightPanel,
   setTableShown,
   setVisible,
+  showBrowserTab,
   useHive,
 } from "./store";
 import { transport as realTransport, type Transport } from "./transport";
@@ -269,6 +271,21 @@ test("tells the service the terminal in view, the window focus and visibility, o
   stop();
   setFocused(false);
   expect(setView).toHaveBeenCalledTimes(9);
+});
+
+test("a terminal behind a browser's tab is not in view: the service is told none", () => {
+  const setView = mock(
+    async (_terminal: number | null, _focused: boolean, _visible: boolean) => {},
+  );
+  addTab(1, "/w");
+  const stop = followView({ setView } as unknown as Transport);
+  welcome();
+  expect(setView.mock.calls.at(-1)?.[0]).toBe(1);
+  showBrowserTab("/w");
+  expect(setView.mock.calls.at(-1)?.[0]).toBeNull();
+  activateTab({ id: 1, cwd: "/w" });
+  expect(setView.mock.calls.at(-1)?.[0]).toBe(1);
+  stop();
 });
 
 test("asks for the open table file's table while it shows as one", () => {

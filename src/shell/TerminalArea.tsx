@@ -5,6 +5,7 @@ import {
   CopyIcon,
   EraserIcon,
   FilePlusIcon,
+  GlobeIcon,
   SquareSplitHorizontalIcon,
   TerminalWindowIcon,
   XIcon,
@@ -25,6 +26,8 @@ import { draggedFrom, useReorder } from "../reorder";
 import {
   accountLine,
   activateTab,
+  browserAgentTerminal,
+  closeBrowserTab,
   dropOnPane,
   type FileTab as FileTabData,
   type HiveState,
@@ -38,8 +41,11 @@ import {
   selectedPlace,
   setOpenFile,
   setRightPanel,
+  showBesideAgent,
+  showBrowserTab,
   swapSides,
   type Tab,
+  terminalShown,
   useHive,
   useTerminal,
 } from "../store";
@@ -47,13 +53,16 @@ import {
   type BarItem,
   barItems,
   barKey,
+  browserKey,
   droppable,
   fileKey,
   fileTabState,
   inBarOrder,
   itemWorktree,
+  paneBrowser,
   paneFile,
   paneIdOf,
+  shownBrowser,
   shownPanes,
   shownSplit,
   shownTerminals,
@@ -72,6 +81,7 @@ import {
 } from "../terminals";
 import { isDirty, isFor } from "../viewer/buffer";
 import { isMac, keyText } from "../window";
+import { BrowserView } from "./BrowserView";
 import {
   AddFolderIcon,
   CloseIcon,
@@ -129,8 +139,14 @@ function tabLabel(s: HiveState, tab: Tab): string {
 const fileName = (path: string) => path.slice(path.lastIndexOf("/") + 1);
 
 /** What a tab of the bar is called. */
-const itemLabel = (s: HiveState, item: BarItem) =>
-  "path" in item ? fileName(item.path) : tabLabel(s, item);
+function itemLabel(s: HiveState, item: BarItem): string {
+  if ("path" in item) return fileName(item.path);
+  return "browser" in item ? browserLabel(s, item.browser) : tabLabel(s, item);
+}
+
+/** What a worktree's browser's tab is called: its page's title, else its URL. */
+const browserLabel = (s: HiveState, worktree: string) =>
+  s.browsers[worktree]?.title || s.browsers[worktree]?.url || "Browser";
 
 /**
  * Pane `id`'s pair as its tab shows it (20.5): its side, its partner's label, and whether the pair
@@ -142,7 +158,9 @@ const usePair = (id: PaneId) =>
       const split = splitOf(s, id);
       if (!split) return null;
       const other = split.left === id ? split.right : split.left;
-      const partner = [...s.tabs, ...s.openFiles].find((t) => paneIdOf(t) === other);
+      const partner = [...s.tabs, ...s.openFiles, ...s.browserTabs].find(
+        (t) => paneIdOf(t) === other,
+      );
       return {
         side: split.left === id ? ("left" as const) : ("right" as const),
         partner: partner ? itemLabel(s, partner) : "",
@@ -220,7 +238,7 @@ function TabItem(props: {
  */
 function TerminalTab(props: { tab: Tab; onMenu: (menu: TabMenu) => void; drag: Drag }) {
   const { tab, onMenu } = props;
-  const active = useHive((s) => s.activeTab === tab.id && !s.fileShown);
+  const active = useHive((s) => s.activeTab === tab.id && terminalShown(s));
   const pair = usePair(tab.id);
   const state = useTerminal(tab.id);
   const name = useHive((s) => find(s, tab.cwd)?.worktree.name ?? tab.cwd);
@@ -331,6 +349,44 @@ function FileTab(props: { file: FileTabData; onMenu: (menu: TabMenu) => void; dr
       <FileIcon />
       <span className="tab-name" data-preview={preview || undefined}>
         {name}
+      </span>
+    </TabItem>
+  );
+}
+
+/**
+ * A worktree's agent's browser's tab (25.2): a globe, its page's title (else its URL) as its
+ * label, its URL as its tooltip.
+ */
+function BrowserTab(props: { worktree: string; onMenu: (menu: TabMenu) => void; drag: Drag }) {
+  const { worktree, onMenu, drag } = props;
+  const key = browserKey(worktree);
+  const pair = usePair(key);
+  const active = useHive((s) => shownBrowser(s) === worktree);
+  const url = useHive((s) => s.browsers[worktree]?.url ?? null);
+  const label = useHive((s) => browserLabel(s, worktree));
+  const paired = pair ? `Split with ${pair.partner}` : undefined;
+  const tip = url ?? label;
+  return (
+    <TabItem
+      drag={drag}
+      active={active}
+      pair={pair?.side}
+      split={pair && !active ? (pair.shown ? "view" : "paired") : undefined}
+      description={paired}
+      onMenu={(event) => {
+        event.preventDefault();
+        onMenu({ tab: key, x: event.clientX, y: event.clientY });
+      }}
+      title={paired ? `${tip}\n${paired}` : tip}
+      onShow={() => showBrowserTab(worktree)}
+      close={`Close browser ${label}`}
+      onClose={() => closeBrowserTab(worktree)}
+    >
+      {pair?.side === "left" && <SquareSplitHorizontalIcon className="tab-split" {...ICON} />}
+      <GlobeIcon className="tab-globe" {...ICON} />
+      <span className="tab-name" data-browser>
+        {label}
       </span>
     </TabItem>
   );
@@ -518,6 +574,40 @@ function FileTabMenu({ at, onClose }: { at: TabMenu; onClose: () => void }) {
   );
 }
 
+/**
+ * A browser's tab's context menu: beside the agent of its last action (25.2), never by itself;
+ * in a pair, undo or swap it; or close it.
+ */
+function BrowserTabMenu({ at, onClose }: { at: TabMenu; onClose: () => void }) {
+  const worktree = paneBrowser(at.tab) as string;
+  const split = useHive((s) => splitOf(s, at.tab));
+  const terminal = useHive((s) => browserAgentTerminal(s, worktree));
+  const beside = split?.left === terminal || split?.right === terminal;
+  return (
+    <ContextMenu at={at} label="Browser" onClose={onClose}>
+      <MenuItem
+        onClose={onClose}
+        disabled={terminal === null || beside}
+        action={() => showBesideAgent(worktree)}
+      >
+        <SquareSplitHorizontalIcon {...ICON} />
+        Show beside the agent
+      </MenuItem>
+      {split && <SplitItem tab={at.tab} onClose={onClose} />}
+      {split && (
+        <MenuItem onClose={onClose} action={() => swapSides(at.tab)}>
+          <ArrowsLeftRightIcon {...ICON} />
+          Swap sides
+        </MenuItem>
+      )}
+      <MenuItem onClose={onClose} action={() => closeBrowserTab(worktree)}>
+        <XIcon {...ICON} />
+        Close browser
+      </MenuItem>
+    </ContextMenu>
+  );
+}
+
 type PaneMenu = { tab: number; x: number; y: number; selection: boolean };
 
 /**
@@ -563,7 +653,7 @@ function TerminalHost(props: { hidden: boolean; half?: "left" | "right" }) {
   const { hidden, half } = props;
   const ref = useRef<HTMLDivElement>(null);
   // The terminal to give the keyboard: none while a file's pane has the focus.
-  const active = useHive((s) => (s.fileShown ? null : s.activeTab));
+  const active = useHive((s) => (terminalShown(s) ? s.activeTab : null));
   const panes = useHive(useShallow(shownTerminals));
   const share = useHive(leftShare);
   const [drop, setDrop] = useState<"left" | "right" | null>(null);
@@ -766,7 +856,7 @@ export function TerminalArea() {
   const items = bar.filter((x): x is BarItem => typeof x !== "string");
   const keys = bar.filter((x): x is string => typeof x === "string");
   const drag = useReorder("tabs", moveTab, true);
-  // What shows, left to right: the terminals in their host, each file in its view.
+  // What shows, left to right: the terminals in their host, each file and browser in its view.
   const panes = useHive(useShallow(shownPanes));
   const file = panes.some((pane) => typeof pane === "string");
   const selected = useHive(selectedPlace);
@@ -786,6 +876,8 @@ export function TerminalArea() {
             const key = keys[i] as string;
             return "path" in item ? (
               <FileTab key={fileKey(item)} file={item} onMenu={setMenu} drag={drag(key)} />
+            ) : "browser" in item ? (
+              <BrowserTab key={key} worktree={item.browser} onMenu={setMenu} drag={drag(key)} />
             ) : (
               <TerminalTab key={item.id} tab={item} onMenu={setMenu} drag={drag(key)} />
             );
@@ -807,6 +899,8 @@ export function TerminalArea() {
       {menu &&
         (typeof menu.tab === "number" ? (
           <TerminalTabMenu tab={menu.tab} at={menu} onClose={closeMenu} />
+        ) : paneBrowser(menu.tab) !== null ? (
+          <BrowserTabMenu at={menu} onClose={closeMenu} />
         ) : (
           <FileTabMenu at={menu} onClose={closeMenu} />
         ))}
@@ -821,16 +915,16 @@ export function TerminalArea() {
             panes.length > 1 && file ? (typeof panes[0] === "number" ? "left" : "right") : undefined
           }
         />
-        {panes.map((pane) =>
-          typeof pane === "string" ? (
-            <FilePane
-              key={pane}
-              id={pane}
-              side={panes.length > 1 ? (pane === panes[0] ? "left" : "right") : undefined}
-              onMenu={setMenu}
-            />
-          ) : null,
-        )}
+        {panes.map((pane) => {
+          if (typeof pane !== "string") return null;
+          const side = panes.length > 1 ? (pane === panes[0] ? "left" : "right") : undefined;
+          const browser = paneBrowser(pane);
+          return browser !== null ? (
+            <BrowserView key={pane} worktree={browser} side={side} />
+          ) : (
+            <FilePane key={pane} id={pane} side={side} onMenu={setMenu} />
+          );
+        })}
         {panes.length > 1 && <ResizeHandle side="split" />}
       </div>
     </section>

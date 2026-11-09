@@ -13,6 +13,7 @@ import {
   setTableSentFrom,
   type TableAsk,
   tableShown,
+  terminalShown,
   useHive,
 } from "./store";
 import { asideFile, asksPending, fileKey, fileTabState, paneState } from "./tabs";
@@ -64,7 +65,12 @@ export function followPanel(transport: Transport): () => void {
 export function followView(transport: Transport): () => void {
   let sent: unknown[] = [];
   const sync = (s: HiveState) => {
-    const view = [s.connection, s.fileShown ? null : s.activeTab, s.focused, s.visible] as const;
+    const view = [
+      s.connection,
+      terminalShown(s) ? s.activeTab : null,
+      s.focused,
+      s.visible,
+    ] as const;
     if (s.connection.status !== "connected" || view.every((v, i) => v === sent[i])) return;
     sent = [...view];
     void transport.setView(view[1], view[2], view[3]);

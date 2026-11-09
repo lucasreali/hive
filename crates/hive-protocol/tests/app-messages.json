@@ -69,7 +69,8 @@
       }
     ],
     "activity": "Reading a.rs",
-    "since_ms": 1
+    "since_ms": 1,
+    "browsing": true
   },
   {
     "type": "subagent_worktrees",
@@ -810,12 +811,20 @@
     "worktree": "/r",
     "running": true,
     "url": "http://localhost:5173/",
+    "title": "Shop",
     "error": null
   },
   {
     "type": "browser_frame",
     "worktree": "/r",
     "data": "/9j/4AAQ"
+  },
+  {
+    "type": "browser_action",
+    "worktree": "/r",
+    "agent": "s",
+    "agent_title": "Fix login",
+    "action": "clicked 'Learn more'"
   },
   {
     "type": "error",

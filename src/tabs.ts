@@ -1,6 +1,6 @@
 import { ORDER_LIMIT } from "./persist";
 import type { FileText } from "./protocol";
-import type { FileTab, HiveState, OpenFile, PaneId, Split, Tab } from "./store";
+import type { BrowserTab, FileTab, HiveState, OpenFile, PaneId, Split, Tab } from "./store";
 import { type EditBuffer, fromDisk, isDirty, isFor, startEdit } from "./viewer/buffer";
 
 // The bar, tab and file-tab selectors: pure functions of the store's state.
@@ -54,6 +54,7 @@ export function opened(s: HiveState, file: OpenFile, editing: boolean, line?: nu
   const beside = [pair?.left, pair?.right].find((p) => typeof p === "number");
   const shown = {
     fileShown: true,
+    browserShown: null,
     gotoLine: line ? { worktree, path, line } : null,
     ...(beside === undefined ? {} : { activeTab: beside }),
   };
@@ -154,8 +155,14 @@ export function dropFile(s: HiveState, f: OpenFile): Partial<HiveState> {
     : other !== null
       ? rest.find((t) => paneIdOf(t) === other)
       : rest[Math.min(Math.max(i, 0), rest.length - 1)];
-  if (next && "path" in next) return { ...closed, ...opened({ ...s, ...closed }, next, false) };
-  return next ? { ...closed, activeTab: next.id } : closed;
+  return { ...closed, ...shownInstead({ ...s, ...closed }, next) };
+}
+
+/** What shows `next`, the tab beside one that closed (none: nothing changes). */
+export function shownInstead(s: HiveState, next: BarItem | undefined): Partial<HiveState> {
+  if (!next) return {};
+  if ("path" in next) return opened(s, next, false);
+  return "browser" in next ? { browserShown: next.browser } : { activeTab: next.id };
 }
 
 /** The pair tab `id` is in (20.5: one at most), or none. */
@@ -163,8 +170,11 @@ export const splitOf = (s: HiveState, id: PaneId | null): Split | null =>
   s.splits.find((p) => p.left === id || p.right === id) ?? null;
 
 /** The tab shown, the focused pane in a pair: the open file while it shows, else the active terminal. */
-export const shownPane = (s: HiveState): PaneId | null =>
-  s.fileShown && s.openFile && fileVisible(s) ? fileKey(s.openFile) : s.activeTab;
+export function shownPane(s: HiveState): PaneId | null {
+  const browser = shownBrowser(s);
+  if (browser !== null) return browserKey(browser);
+  return s.fileShown && s.openFile && fileVisible(s) ? fileKey(s.openFile) : s.activeTab;
+}
 
 /** The split shown: the shown tab's pair (that tab is the focused pane), else none. */
 export const shownSplit = (s: HiveState): Split | null => splitOf(s, shownPane(s));
@@ -195,8 +205,15 @@ export function asideFile(s: HiveState): FileTab | null {
   return files.find((f) => !s.openFile || !isFor(f, s.openFile)) ?? null;
 }
 
-/** What a tab of the bar is as a pane: a terminal by its id, a file by its key. */
-export const paneIdOf = (item: BarItem): PaneId => ("path" in item ? fileKey(item) : item.id);
+/** What a tab of the bar is as a pane: a terminal by its id, a file or a browser by its key. */
+export function paneIdOf(item: BarItem): PaneId {
+  if ("path" in item) return fileKey(item);
+  return "browser" in item ? browserKey(item.browser) : item.id;
+}
+
+/** The worktree whose browser pane `pane` shows, if it is a browser's. */
+export const paneBrowser = (pane: PaneId): string | null =>
+  typeof pane === "string" && pane.startsWith(BROWSER_KEY) ? pane.slice(BROWSER_KEY.length) : null;
 
 /** The bar key of pane `pane`. */
 export const paneKey = (s: HiveState, pane: PaneId): string =>
@@ -231,8 +248,18 @@ export function visibleTabs(s: HiveState): Tab[] {
   return inBarOrder(s, place === null ? s.tabs : s.tabs.filter((t) => tabWorktree(s, t) === place));
 }
 
-/** A tab of the bar: a terminal or an open file. */
-export type BarItem = Tab | FileTab;
+/** A tab of the bar: a terminal, an open file or a worktree's browser (25.2). */
+export type BarItem = Tab | FileTab | BrowserTab;
+
+/** The key of a worktree's browser's tab in `tabOrder`. */
+export const browserKey = (worktree: string) => `${BROWSER_KEY}${worktree}`;
+const BROWSER_KEY = "browser:";
+
+/** The worktree whose browser's tab shows: only one of the place the tab bar shows. */
+export function shownBrowser(s: HiveState): string | null {
+  const place = tabsPlace(s);
+  return place === null || place === s.browserShown ? s.browserShown : null;
+}
 
 /**
  * A tab's key in `tabOrder` (8.21): a file's by its path; a terminal's by its Claude
@@ -241,6 +268,7 @@ export type BarItem = Tab | FileTab;
  */
 export function barKey(s: HiveState, item: BarItem): string {
   if ("path" in item) return fileKey(item);
+  if ("browser" in item) return browserKey(item.browser);
   const agent = Object.values(s.agents).find((a) => a.terminal === item.id);
   return agent ? `session:${agent.id}` : `tab:${item.id}`;
 }
@@ -249,15 +277,17 @@ export function barKey(s: HiveState, item: BarItem): string {
 export function inBarOrder<T extends BarItem>(s: HiveState, items: T[]): T[] {
   const rank = (item: T) => {
     let i = s.tabOrder.indexOf(barKey(s, item));
-    if (i < 0 && !("path" in item)) i = s.tabOrder.indexOf(`tab:${item.id}`);
+    if (i < 0 && "id" in item) i = s.tabOrder.indexOf(`tab:${item.id}`);
     return i < 0 ? s.tabOrder.length : i;
   };
   return [...items].sort((a, b) => rank(a) - rank(b));
 }
 
 /** The worktree a tab of the bar belongs to. */
-export const itemWorktree = (s: HiveState, item: BarItem): string =>
-  "path" in item ? item.worktree : tabWorktree(s, item);
+export function itemWorktree(s: HiveState, item: BarItem): string {
+  if ("path" in item) return item.worktree;
+  return "browser" in item ? item.browser : tabWorktree(s, item);
+}
 
 /**
  * The tab `key` (a `barKey`) names when it can be dropped on the panes shown: a terminal or a
@@ -270,11 +300,12 @@ export function droppable(s: HiveState, key: string): PaneId | null {
   return item && shown && itemWorktree(s, item) === itemWorktree(s, shown) ? paneIdOf(item) : null;
 }
 
-/** The tabs of the bar, terminals and files mixed, in its order. */
+/** The tabs of the bar, terminals, files and browsers mixed, in its order. */
 export function barItems(s: HiveState): BarItem[] {
   const place = tabsPlace(s);
   const files = s.openFiles.filter((f) => place === null || f.worktree === place);
-  return inBarOrder(s, [...visibleTabs(s), ...files]);
+  const browsers = s.browserTabs.filter((b) => place === null || b.browser === place);
+  return inBarOrder(s, [...visibleTabs(s), ...files, ...browsers]);
 }
 
 /** Whether the open file's tab belongs to the place the tab bar shows. */

@@ -100,17 +100,27 @@ export type ServiceMessage =
   // A window of the current account reached 80% or 95%, once per window (17.23).
   | { type: "usage_alert"; window: UsageWindow; threshold: number; resets_at: number }
   | { type: "subagent_worktrees"; worktrees: string[] }
-  // 24.6: the watched worktree's browser: running or not, the page shown, why it did not start.
+  // 24.6, 25.2: a worktree's browser: running or not, the page shown (the last one once it
+  // stopped), why it did not start.
   | {
       type: "browser_status";
       worktree: string;
       running: boolean;
       url: string | null;
+      title: string | null;
       error: string | null;
     }
-  // 24.6: one screencast frame of the watched browser, a JPEG in base64; the next comes after
-  // `browserDrawn`.
+  // 24.6: one frame of the watched browser, a JPEG in base64: of its screencast (the next comes
+  // after `browserDrawn`), or the one kept once it stopped.
   | { type: "browser_frame"; worktree: string; data: string }
+  // 25.2: an agent called a tool of the worktree's running browser; `action` is plain text.
+  | {
+      type: "browser_action";
+      worktree: string;
+      agent: string;
+      agent_title: string | null;
+      action: string;
+    }
   | { type: "projects"; projects: Project[] }
   | { type: "project_added"; project: Project }
   | { type: "add_project_failed"; path: string; error: ProjectError; message: string }
@@ -567,6 +577,11 @@ export type AgentStatus = {
   /** Show an OS notification for `alert`: the service's call (out of the focused window's view). */
   notify: boolean;
   subagents: Subagent[];
+  /**
+   * It uses the agent's browser (25.2): from its last browser tool call until it stops. Absent
+   * from an older service.
+   */
+  browsing?: boolean;
 } & Doing;
 
 /**
@@ -639,7 +654,12 @@ export type Settings = {
 };
 
 /** Mirrors `browser_status` (24.6), without its type and worktree. */
-export type BrowserStatus = { running: boolean; url: string | null; error: string | null };
+export type BrowserStatus = {
+  running: boolean;
+  url: string | null;
+  title: string | null;
+  error: string | null;
+};
 
 /**
  * Mirrors `hive_protocol::Account`: a Claude account, a name and its `CLAUDE_CONFIG_DIR`.

@@ -500,7 +500,7 @@ const FIELDS: Field[] = [
   {
     section: "Agents",
     label: "Give agents a browser",
-    help: "Agents in Hive's terminals get a browser of their worktree, which the panel's Browser tab shows (view only).",
+    help: "Agents in Hive's terminals get a browser of their worktree, which a tab of its own shows (view only).",
     tip: "Its tools are the Playwright MCP, which bunx or npx downloads the first time an agent uses them. The browser is an installed Chrome, Chromium, Edge or Brave, with a new profile each time; it listens on 127.0.0.1 without a password, so a program of yours could drive it too.",
     check: true,
     control: () => (

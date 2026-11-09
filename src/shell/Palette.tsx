@@ -8,6 +8,7 @@ import {
   openModal,
   panelWorktree,
   select,
+  showBrowserTab,
   spaceProjects,
   treeAgents,
   useHive,
@@ -89,6 +90,13 @@ export function paletteCommands(s: HiveState): PaletteItem[] {
   const place = panelWorktree(s);
   if (place) {
     const { worktree } = place;
+    if (s.browsers[worktree.id]?.running) {
+      extra.push({
+        label: "Show the agent's browser",
+        detail: worktree.name,
+        run: () => showBrowserTab(worktree.id),
+      });
+    }
     const listed = s.scripts[worktree.path];
     for (const script of worktreeScripts(listed, s.settings, place.project.id)) {
       extra.push({

@@ -666,7 +666,7 @@ test("each panel tab keeps its label as its accessible name and title", () => {
     labels.map((l) => [l, l]),
   );
   for (const l of labels) expect(screen.getByRole("tab", { name: l })).toBeDefined();
-  // The agent's browser (24.6) while its setting is on.
+  // The agent's browser has a tab of its own (25.2), whatever its setting.
   act(() => {
     const settings = useHive.getState().settings;
     apply({
@@ -674,7 +674,7 @@ test("each panel tab keeps its label as its accessible name and title", () => {
       settings: { ...settings, browser: { ...settings.browser, enabled: true } },
     });
   });
-  expect(screen.getByRole("tab", { name: "Browser" })).toBeDefined();
+  expect(screen.queryByRole("tab", { name: "Browser" })).toBeNull();
 });
 
 test("a folder project's panel has its files and sessions only, and asks for no changes", () => {

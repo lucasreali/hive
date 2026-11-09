@@ -996,6 +996,7 @@ mod tests {
             subagents: vec![],
             activity: None,
             since_ms: 0,
+            browsing: false,
         };
         // Each agent's state; the named one's name too, and only after its state.
         let named = Control::AgentTitle {

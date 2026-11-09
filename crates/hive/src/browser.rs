@@ -48,6 +48,14 @@ const MAX_MESSAGE: usize = 4 << 20;
 pub const MAX_FRAME: usize = 3 << 20;
 /// The longest page URL shown, in characters.
 const MAX_URL: usize = 2048;
+/// The longest page title shown, in characters.
+const MAX_TITLE: usize = 256;
+/// The longest text of a tool's input quoted in a caption, in characters.
+pub(crate) const MAX_QUOTE: usize = 120;
+/// The longest caption of an action, in characters.
+const MAX_CAPTION: usize = 300;
+/// What the names of the `hive-browser` MCP server's tools start with, in hook payloads.
+const TOOL_PREFIX: &str = "mcp__hive-browser__";
 /// The most pages followed; older ones are forgotten.
 const MAX_PAGES: usize = 100;
 /// The most `DevToolsActivePort` may hold.
@@ -326,6 +334,12 @@ async fn connect(
 }
 
 impl Process {
+    /// A process for a test of what happens around it.
+    #[cfg(test)]
+    pub(crate) fn of(child: tokio::process::Child, profile: PathBuf) -> Self {
+        Self { child, profile }
+    }
+
     /// Ends the browser (SIGTERM to its group, SIGKILL after [`STOP_GRACE`]) and deletes its
     /// profile.
     pub async fn stop(mut self) {
@@ -353,6 +367,9 @@ pub enum Command {
     Watch(bool),
     /// The app drew the last frame.
     Drawn,
+    /// The browser is about to stop: one picture of the page shown, so its result can still
+    /// be seen (25.2), as [`Event::Last`].
+    Capture,
 }
 
 /// What a browser's screencast tells the service.
@@ -360,8 +377,12 @@ pub enum Command {
 pub enum Event {
     /// The page shown is now at this URL (`None`: no page).
     Url(Option<String>),
+    /// The page shown now has this title (`None`: none, or no page).
+    Title(Option<String>),
     /// A frame for the app: a JPEG in base64.
     Frame(String),
+    /// [`Command::Capture`]'s answer: a JPEG in base64, `None` when there is no picture.
+    Last(Option<String>),
 }
 
 /// The screencast of one browser, as a state machine over CDP messages: it follows the pages
@@ -372,8 +393,8 @@ pub enum Event {
 pub struct Screen {
     /// The last CDP command id used.
     id: u64,
-    /// The pages, `(target id, url)`; the last one is shown.
-    pages: Vec<(String, String)>,
+    /// The pages; the last one is shown.
+    pages: Vec<Page>,
     watched: bool,
     /// The target attached to (or being attached to).
     target: Option<String>,
@@ -387,6 +408,21 @@ pub struct Screen {
     queued: Option<(u64, String)>,
     /// The URL last reported.
     url: Option<String>,
+    /// The title last reported.
+    title: Option<String>,
+    /// The id of the `Target.attachToTarget` awaited for [`Command::Capture`].
+    capture_attaching: Option<u64>,
+    /// The id of the `Page.captureScreenshot` awaited for [`Command::Capture`].
+    capturing: Option<u64>,
+}
+
+/// A page the browser reported.
+#[derive(Debug)]
+struct Page {
+    target: String,
+    url: String,
+    /// Empty: none.
+    title: String,
 }
 
 /// Messages to the browser (`Value`s) and events for the service.
@@ -430,6 +466,14 @@ impl Screen {
                     out.events.push(Event::Frame(data));
                 }
             }
+            Command::Capture => match self.pages.last().map(|p| p.target.clone()) {
+                Some(target) => {
+                    let params = json!({ "targetId": target, "flatten": true });
+                    let id = self.send(&mut out, None, "Target.attachToTarget", params);
+                    self.capture_attaching = Some(id);
+                }
+                None => out.events.push(Event::Last(None)),
+            },
         }
         out
     }
@@ -442,12 +486,12 @@ impl Screen {
         match message["method"].as_str() {
             Some("Target.targetCreated" | "Target.targetInfoChanged") if info["type"] == "page" => {
                 if let (Some(id), Some(url)) = (info["targetId"].as_str(), info["url"].as_str()) {
-                    self.page(id, url);
+                    self.page(id, url, info["title"].as_str().unwrap_or_default());
                 }
             }
             Some("Target.targetDestroyed") => {
                 let id = params["targetId"].as_str();
-                self.pages.retain(|(target, _)| Some(target.as_str()) != id);
+                self.pages.retain(|page| Some(page.target.as_str()) != id);
                 if self.target.as_deref() == id {
                     self.detached();
                 }
@@ -467,13 +511,20 @@ impl Screen {
     }
 
     /// A page created or changed: shown when it is new or its URL changed (navigated).
-    fn page(&mut self, id: &str, url: &str) {
+    fn page(&mut self, id: &str, url: &str, title: &str) {
         let url = crate::adapter::clip(url, MAX_URL);
-        if self.pages.iter().any(|(t, u)| t == id && *u == url) {
+        let title = crate::adapter::clip(title, MAX_TITLE);
+        let same = |p: &&mut Page| p.target == id && p.url == url;
+        if let Some(page) = self.pages.iter_mut().find(same) {
+            page.title = title;
             return;
         }
-        self.pages.retain(|(t, _)| t != id);
-        self.pages.push((id.to_owned(), url));
+        self.pages.retain(|p| p.target != id);
+        self.pages.push(Page {
+            target: id.to_owned(),
+            url,
+            title,
+        });
         if self.pages.len() > MAX_PAGES {
             self.pages.remove(0);
         }
@@ -488,10 +539,24 @@ impl Screen {
         self.queued = None;
     }
 
-    /// An answer to one of our commands: only `Target.attachToTarget`'s matters.
+    /// An answer to one of our commands: only `Target.attachToTarget`'s and
+    /// `Page.captureScreenshot`'s matter.
     fn answer(&mut self, message: &Value, out: &mut Out) {
         let session = message["result"]["sessionId"].as_str();
-        if self.attaching.is_some() && message["id"].as_u64() == self.attaching {
+        let id = message["id"].as_u64();
+        if self.capture_attaching.is_some() && id == self.capture_attaching {
+            self.capture_attaching = None;
+            let Some(session) = session else {
+                return out.events.push(Event::Last(None));
+            };
+            let params = json!({ "format": "jpeg", "quality": QUALITY });
+            let shot = self.send(out, Some(session), "Page.captureScreenshot", params);
+            self.capturing = Some(shot);
+        } else if self.capturing.is_some() && id == self.capturing {
+            self.capturing = None;
+            let data = message["result"]["data"].as_str().filter(|d| base64(d));
+            out.events.push(Event::Last(data.map(str::to_owned)));
+        } else if self.attaching.is_some() && message["id"].as_u64() == self.attaching {
             self.attaching = None;
             let Some(session) = session else {
                 // Refused (the page went away): not tried again until the pages change.
@@ -540,7 +605,7 @@ impl Screen {
     /// Attaches to the page to show while watched (detaching from another first), and reports
     /// the shown page's URL when it changed.
     fn follow(&mut self, out: &mut Out) {
-        let shown = self.pages.last().map(|(target, _)| target.clone());
+        let shown = self.pages.last().map(|page| page.target.clone());
         let wanted = shown.clone().filter(|_| self.watched);
         if self.target != wanted {
             if let Some(session) = self.session.clone() {
@@ -555,10 +620,16 @@ impl Screen {
                 self.target = Some(target);
             }
         }
-        let url = self.pages.last().map(|(_, url)| url.clone());
+        let url = self.pages.last().map(|page| page.url.clone());
         if url != self.url {
             self.url.clone_from(&url);
             out.events.push(Event::Url(url));
+        }
+        let title = self.pages.last().map(|page| page.title.clone());
+        let title = title.filter(|title| !title.is_empty());
+        if title != self.title {
+            self.title.clone_from(&title);
+            out.events.push(Event::Title(title));
         }
     }
 
@@ -615,6 +686,85 @@ pub async fn screencast(
             },
         };
     }
+}
+
+/// Whether `tool`, as hook payloads name it, is one of the agent's browser's.
+pub fn is_tool(tool: &str) -> bool {
+    tool.starts_with(TOOL_PREFIX)
+}
+
+/// What an agent's call of a browser tool does (25.2), for the app's caption: plain text from its
+/// untrusted `input`, each part and the whole size-capped; `None` for any other tool. A form's
+/// values are left out: they are the likeliest to be secret.
+pub fn caption(tool: &str, input: &Value) -> Option<String> {
+    let name = tool.strip_prefix(TOOL_PREFIX)?;
+    let flag = |field: &str| input.get(field).and_then(Value::as_bool) == Some(true);
+    let text = |field: &str| {
+        let value = input.get(field)?.as_str()?;
+        Some(crate::adapter::clip(value, MAX_QUOTE)).filter(|v| !v.is_empty())
+    };
+    let quoted = |field: &str, none: &str| {
+        text(field).map_or_else(|| none.to_owned(), |value| format!("'{value}'"))
+    };
+    let on = |field: &str| quoted(field, "an element");
+    let count = |field: &str| {
+        input
+            .get(field)
+            .and_then(Value::as_array)
+            .map_or(0, Vec::len)
+    };
+    let many = |n: usize, what: &str| format!("{n} {what}{}", if n == 1 { "" } else { "s" });
+    let caption = match name {
+        "browser_navigate" => match text("url") {
+            Some(url) => format!("opened {url}"),
+            None => "opened a page".to_owned(),
+        },
+        "browser_navigate_back" => "went back".to_owned(),
+        "browser_click" if flag("doubleClick") => format!("double-clicked {}", on("element")),
+        "browser_click" => format!("clicked {}", on("element")),
+        "browser_type" if flag("submit") => {
+            format!("typed {} and pressed Enter", quoted("text", "some text"))
+        }
+        "browser_type" => format!("typed {}", quoted("text", "some text")),
+        "browser_fill_form" => format!("filled {}", many(count("fields"), "field")),
+        "browser_press_key" => format!("pressed {}", quoted("key", "a key")),
+        "browser_hover" => format!("hovered over {}", on("element")),
+        "browser_select_option" => format!("chose an option of {}", on("element")),
+        "browser_drag" => format!("dragged {} to {}", on("startElement"), on("endElement")),
+        "browser_drop" => format!("dropped onto {}", on("element")),
+        "browser_file_upload" => match count("paths") {
+            0 => "cancelled a file upload".to_owned(),
+            n => format!("uploaded {}", many(n, "file")),
+        },
+        "browser_take_screenshot" => "took a screenshot".to_owned(),
+        "browser_snapshot" => "read the page".to_owned(),
+        "browser_find" => format!("searched the page for {}", quoted("text", "a pattern")),
+        "browser_evaluate" | "browser_run_code" | "browser_run_code_unsafe" => {
+            "ran a script on the page".to_owned()
+        }
+        "browser_wait_for" => match (text("text"), text("textGone")) {
+            (Some(shown), _) => format!("waited for '{shown}'"),
+            (None, Some(gone)) => format!("waited for '{gone}' to go"),
+            (None, None) => "waited".to_owned(),
+        },
+        "browser_tabs" => match input.get("action").and_then(Value::as_str) {
+            Some("new") => "opened a new tab".to_owned(),
+            Some("close") => "closed a tab".to_owned(),
+            Some("select") => "switched tabs".to_owned(),
+            _ => "listed the tabs".to_owned(),
+        },
+        "browser_close" => "closed the page".to_owned(),
+        "browser_resize" => "resized the window".to_owned(),
+        "browser_handle_dialog" if flag("accept") => "accepted a dialog".to_owned(),
+        "browser_handle_dialog" => "dismissed a dialog".to_owned(),
+        "browser_console_messages" => "read the console".to_owned(),
+        "browser_network_request" | "browser_network_requests" => {
+            "read the network requests".to_owned()
+        }
+        "browser_emulate_media" => "changed how the page is shown".to_owned(),
+        other => format!("used {other}"),
+    };
+    Some(crate::adapter::clip(&caption, MAX_CAPTION))
 }
 
 /// `hive browser-mcp`'s question to the service: the CDP endpoint of the browser of the
@@ -690,6 +840,339 @@ pub async fn mcp(paths: &Paths) -> io::Result<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The caption of a call of browser tool `name`.
+    fn said(name: &str, input: Value) -> String {
+        caption(&format!("mcp__hive-browser__{name}"), &input).unwrap()
+    }
+
+    #[test]
+    fn only_the_browsers_tools_are_its_own() {
+        assert!(is_tool("mcp__hive-browser__browser_click"));
+        assert!(!is_tool("Read"));
+        assert!(!is_tool("mcp__other__browser_click"));
+        assert_eq!(caption("Read", &json!({"element": "x"})), None);
+    }
+
+    #[test]
+    fn each_tool_call_has_its_caption_from_its_input() {
+        let cases = [
+            (
+                "browser_navigate",
+                json!({"url": "https://a.test/"}),
+                "opened https://a.test/",
+            ),
+            ("browser_navigate", json!({}), "opened a page"),
+            ("browser_navigate", json!({"url": 3}), "opened a page"),
+            ("browser_navigate", json!({"url": "  "}), "opened a page"),
+            ("browser_navigate_back", json!({}), "went back"),
+            (
+                "browser_click",
+                json!({"element": "Learn more", "target": "e1"}),
+                "clicked 'Learn more'",
+            ),
+            (
+                "browser_click",
+                json!({"target": "e1"}),
+                "clicked an element",
+            ),
+            (
+                "browser_click",
+                json!({"element": "Row", "doubleClick": true}),
+                "double-clicked 'Row'",
+            ),
+            (
+                "browser_click",
+                json!({"element": "Row", "doubleClick": false}),
+                "clicked 'Row'",
+            ),
+            (
+                "browser_type",
+                json!({"text": "Honey bee", "submit": true}),
+                "typed 'Honey bee' and pressed Enter",
+            ),
+            (
+                "browser_type",
+                json!({"text": "Honey bee", "submit": false}),
+                "typed 'Honey bee'",
+            ),
+            ("browser_type", json!({}), "typed some text"),
+            (
+                "browser_type",
+                json!({"submit": true}),
+                "typed some text and pressed Enter",
+            ),
+            (
+                "browser_fill_form",
+                json!({"fields": [{"value": "hunter2"}]}),
+                "filled 1 field",
+            ),
+            (
+                "browser_fill_form",
+                json!({"fields": [{}, {}]}),
+                "filled 2 fields",
+            ),
+            ("browser_fill_form", json!({}), "filled 0 fields"),
+            (
+                "browser_press_key",
+                json!({"key": "Enter"}),
+                "pressed 'Enter'",
+            ),
+            ("browser_press_key", json!({}), "pressed a key"),
+            (
+                "browser_hover",
+                json!({"element": "Menu"}),
+                "hovered over 'Menu'",
+            ),
+            (
+                "browser_select_option",
+                json!({"element": "Size"}),
+                "chose an option of 'Size'",
+            ),
+            (
+                "browser_drag",
+                json!({"startElement": "A", "endElement": "B"}),
+                "dragged 'A' to 'B'",
+            ),
+            (
+                "browser_drag",
+                json!({}),
+                "dragged an element to an element",
+            ),
+            (
+                "browser_drop",
+                json!({"element": "Box"}),
+                "dropped onto 'Box'",
+            ),
+            ("browser_file_upload", json!({}), "cancelled a file upload"),
+            (
+                "browser_file_upload",
+                json!({"paths": ["/a"]}),
+                "uploaded 1 file",
+            ),
+            (
+                "browser_file_upload",
+                json!({"paths": ["/a", "/b"]}),
+                "uploaded 2 files",
+            ),
+            ("browser_take_screenshot", json!({}), "took a screenshot"),
+            ("browser_snapshot", json!({}), "read the page"),
+            (
+                "browser_find",
+                json!({"text": "Price"}),
+                "searched the page for 'Price'",
+            ),
+            (
+                "browser_find",
+                json!({"regex": "x"}),
+                "searched the page for a pattern",
+            ),
+            (
+                "browser_evaluate",
+                json!({"function": "() => 1"}),
+                "ran a script on the page",
+            ),
+            ("browser_run_code", json!({}), "ran a script on the page"),
+            (
+                "browser_run_code_unsafe",
+                json!({}),
+                "ran a script on the page",
+            ),
+            (
+                "browser_wait_for",
+                json!({"text": "Done"}),
+                "waited for 'Done'",
+            ),
+            (
+                "browser_wait_for",
+                json!({"textGone": "Busy"}),
+                "waited for 'Busy' to go",
+            ),
+            ("browser_wait_for", json!({"time": 2}), "waited"),
+            ("browser_tabs", json!({"action": "new"}), "opened a new tab"),
+            ("browser_tabs", json!({"action": "close"}), "closed a tab"),
+            ("browser_tabs", json!({"action": "select"}), "switched tabs"),
+            ("browser_tabs", json!({"action": "list"}), "listed the tabs"),
+            ("browser_close", json!({}), "closed the page"),
+            (
+                "browser_resize",
+                json!({"width": 1, "height": 2}),
+                "resized the window",
+            ),
+            (
+                "browser_handle_dialog",
+                json!({"accept": true}),
+                "accepted a dialog",
+            ),
+            (
+                "browser_handle_dialog",
+                json!({"accept": false}),
+                "dismissed a dialog",
+            ),
+            ("browser_console_messages", json!({}), "read the console"),
+            (
+                "browser_network_request",
+                json!({"index": 1}),
+                "read the network requests",
+            ),
+            (
+                "browser_network_requests",
+                json!({}),
+                "read the network requests",
+            ),
+            (
+                "browser_emulate_media",
+                json!({}),
+                "changed how the page is shown",
+            ),
+            ("browser_new_thing", json!({}), "used browser_new_thing"),
+        ];
+        for (name, input, expected) in cases {
+            assert_eq!(said(name, input.clone()), expected, "{name} {input}");
+        }
+    }
+
+    #[test]
+    fn a_captions_untrusted_text_is_plain_and_capped() {
+        // Control and invisible characters go.
+        assert_eq!(
+            said("browser_click", json!({"element": "a\u{202E}b\nc\u{7}"})),
+            "clicked 'abc'"
+        );
+        // Each quote is capped, then the whole.
+        let long = "x".repeat(100_000);
+        let one = said("browser_click", json!({"element": long}));
+        assert_eq!(one.chars().count(), "clicked ''".len() + MAX_QUOTE);
+        assert!(one.ends_with("…'"));
+        let tool = format!("mcp__hive-browser__{long}");
+        let whole = caption(&tool, &json!({})).unwrap();
+        assert_eq!(whole.chars().count(), MAX_CAPTION);
+    }
+
+    /// A page message of the browser.
+    fn titled(method: &str, id: &str, url: &str, title: Option<&str>) -> Value {
+        let mut info = json!({ "targetId": id, "type": "page", "url": url });
+        if let Some(title) = title {
+            info["title"] = json!(title);
+        }
+        json!({ "method": method, "params": { "targetInfo": info } })
+    }
+
+    #[test]
+    fn the_shown_pages_title_is_reported_and_a_title_alone_moves_no_page() {
+        let mut screen = Screen::default();
+        let created = titled("Target.targetCreated", "a", "https://a.test/", None);
+        let out = screen.message(&created);
+        assert_eq!(out.events, [Event::Url(Some("https://a.test/".into()))]);
+        let changed = "Target.targetInfoChanged";
+        let out = screen.message(&titled(
+            changed,
+            "a",
+            "https://a.test/",
+            Some(" Shop\u{7} "),
+        ));
+        assert_eq!(out.events, [Event::Title(Some("Shop".into()))]);
+        // The same again: nothing new.
+        let out = screen.message(&titled(changed, "a", "https://a.test/", Some("Shop")));
+        assert_eq!(out.events, []);
+        // Another page shows, with its title.
+        let out = screen.message(&titled(changed, "b", "https://b.test/", Some("Other")));
+        assert_eq!(
+            out.events,
+            [
+                Event::Url(Some("https://b.test/".into())),
+                Event::Title(Some("Other".into()))
+            ]
+        );
+        // The first page's title changing does not bring it back to the front.
+        let out = screen.message(&titled(changed, "a", "https://a.test/", Some("Shop 2")));
+        assert_eq!(out.events, []);
+        assert_eq!(screen.pages[0].title, "Shop 2");
+        // Blank fillers are no title, so the tab falls back to the address.
+        let blank = titled(changed, "b", "https://b.test/", Some("\u{3164}\u{3164}"));
+        assert_eq!(screen.message(&blank).events, [Event::Title(None)]);
+        screen.message(&titled(changed, "b", "https://b.test/", Some("Other")));
+        // An empty title is none; a long one is capped.
+        let out = screen.message(&titled(changed, "b", "https://b.test/", Some("")));
+        assert_eq!(out.events, [Event::Title(None)]);
+        let long = "t".repeat(1000);
+        let out = screen.message(&titled(changed, "b", "https://b.test/", Some(&long)));
+        let capped = "t".repeat(MAX_TITLE - 1) + "…";
+        assert_eq!(out.events, [Event::Title(Some(capped))]);
+    }
+
+    #[test]
+    fn a_stopping_browser_gives_one_picture_of_the_shown_page() {
+        let mut screen = Screen::default();
+        // No page: nothing to take.
+        let out = screen.command(Command::Capture);
+        assert_eq!((out.cdp, out.events), (vec![], vec![Event::Last(None)]));
+        screen.message(&titled(
+            "Target.targetCreated",
+            "p",
+            "https://a.test/",
+            None,
+        ));
+        // A message with no id, before any picture is asked for, is no answer.
+        assert_eq!(screen.message(&json!({})).events, []);
+        // Of two pages, the one shown: the last opened.
+        screen.message(&titled(
+            "Target.targetCreated",
+            "q",
+            "https://b.test/",
+            None,
+        ));
+        let attach = screen.command(Command::Capture).cdp.remove(0);
+        assert_eq!(attach["method"], "Target.attachToTarget");
+        // Another answer while the attach is awaited is not it, and it is still awaited.
+        let other = json!({ "id": 9999, "error": { "message": "no" } });
+        let out = screen.message(&other);
+        assert_eq!((out.cdp, out.events), (vec![], vec![]));
+        assert_eq!(
+            attach["params"],
+            json!({ "targetId": "q", "flatten": true })
+        );
+        let attached = json!({ "id": attach["id"], "result": { "sessionId": "s" } });
+        let shot = screen.message(&attached).cdp.remove(0);
+        assert_eq!(shot["method"], "Page.captureScreenshot");
+        assert_eq!(shot["sessionId"], "s");
+        assert_eq!(
+            shot["params"],
+            json!({ "format": "jpeg", "quality": QUALITY })
+        );
+        // Another answer is not it.
+        let other = json!({ "id": 9999, "result": { "data": "BBBB" } });
+        assert_eq!(screen.message(&other).events, []);
+        let answer = json!({ "id": shot["id"], "result": { "data": "AAAA" } });
+        assert_eq!(
+            screen.message(&answer).events,
+            [Event::Last(Some("AAAA".into()))]
+        );
+        // Answered once: the same again is no picture.
+        assert_eq!(screen.message(&answer).events, []);
+    }
+
+    #[test]
+    fn a_picture_that_cannot_be_taken_is_said_so() {
+        let mut screen = Screen::default();
+        screen.message(&titled(
+            "Target.targetCreated",
+            "p",
+            "https://a.test/",
+            None,
+        ));
+        // The page refuses the attach.
+        let attach = screen.command(Command::Capture).cdp.remove(0);
+        let refused = json!({ "id": attach["id"], "error": { "message": "gone" } });
+        let out = screen.message(&refused);
+        assert_eq!((out.cdp, out.events), (vec![], vec![Event::Last(None)]));
+        // A picture that is no base64 is none.
+        let attach = screen.command(Command::Capture).cdp.remove(0);
+        let attached = json!({ "id": attach["id"], "result": { "sessionId": "s" } });
+        let shot = screen.message(&attached).cdp.remove(0);
+        let bad = json!({ "id": shot["id"], "result": { "data": "<script>" } });
+        assert_eq!(screen.message(&bad).events, [Event::Last(None)]);
+    }
 
     fn exe(path: &Path, text: &str) {
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
@@ -1042,7 +1525,7 @@ mod tests {
             ));
         }
         assert_eq!(screen.pages.len(), MAX_PAGES);
-        assert_eq!(screen.pages[0].0, "t1");
+        assert_eq!(screen.pages[0].target, "t1");
     }
 
     #[test]
