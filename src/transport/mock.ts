@@ -1445,6 +1445,15 @@ export function createMockTransport(
       later({ type: "notification_permission", permission });
     },
     async openNotificationSettings() {},
+    // `?mock=denied`: Screen Recording not granted, as in the report that asked for this (25.5).
+    async checkTerminalPermissions() {
+      later({
+        type: "terminal_permissions",
+        screen_recording: scenario === "denied" ? "denied" : "granted",
+        accessibility: "granted",
+      });
+    },
+    async openPrivacySettings() {},
     // The browser plays the tone itself.
     async playTone() {
       throw new Error("mock: no app to play the tone");

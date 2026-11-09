@@ -125,6 +125,8 @@ test("terminal and project actions call their commands", async () => {
   await tauriTransport.showNotification("fix login finished", "shop", "a");
   await tauriTransport.checkNotifications();
   await tauriTransport.openNotificationSettings();
+  await tauriTransport.checkTerminalPermissions();
+  await tauriTransport.openPrivacySettings("accessibility");
   await tauriTransport.playTone(40);
   await tauriTransport.setMode("native");
   expect(calls).toEqual([
@@ -195,6 +197,8 @@ test("terminal and project actions call their commands", async () => {
     ["show_notification", { title: "fix login finished", body: "shop", agent: "a" }],
     ["check_notifications", {}],
     ["open_notification_settings", {}],
+    ["check_terminal_permissions", {}],
+    ["open_privacy_settings", { pane: "accessibility" }],
     ["play_tone", { volume: 40 }],
     ["set_mode", { mode: "native" }],
   ]);

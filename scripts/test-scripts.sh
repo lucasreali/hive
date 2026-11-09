@@ -11,6 +11,9 @@
 #   - macos-bundle.sh (macOS only): its bundle check passes a correctly signed bundle and fails
 #     each broken one (TODO 17.11)
 # Never touches the real environment: a temporary HOME, a scratch repository outside this one.
+# The one exception is for a CI runner only, whose keychain search list is disposable: with both
+# GITHUB_ACTIONS and REQUIRE_REAL_CERTIFICATE set (macos.yml), a real certificate signs a bundle in
+# a temporary keychain put on that list. Never set both on a machine of yours.
 set -uo pipefail
 cd "$(dirname "$0")/.." || exit 1
 repo=$PWD
@@ -21,6 +24,7 @@ bad=0
 check() { if eval "$2"; then echo "ok    $1"; else echo "FAIL  $1"; bad=$((bad + 1)); fi; }
 
 # --- release.sh ---------------------------------------------------------------------------------
+real_home=$HOME
 export HOME=$tmp/home GIT_CONFIG_NOSYSTEM=1
 unset XDG_CONFIG_HOME
 mkdir -p "$HOME/.cargo/bin" "$tmp/rel/scripts" "$tmp/rel/src-tauri" "$tmp/rel/crates/hive"
@@ -89,6 +93,8 @@ gates() {  # gates <cargo status> <function and args…>: its output, then "fail
 # has <output> <line regex>…: every regex matches a whole line (no pipe into `grep -q`, whose early
 # exit would fail the pipeline under pipefail).
 has() { local text=$1; shift; for re in "$@"; do grep -qx -- "$re" <<<"$text" || return 1; done; }
+# holds <text> <part>...: every part is somewhere in the text, as it is written.
+holds() { local text=$1; shift; for part in "$@"; do [[ $text == *"$part"* ]] || return 1; done; }
 o=$(gates 0 run fmt cargo fmt)
 check "gates: a passing gate" 'has "$o" "ok    fmt" "failures=0"'
 o=$(gates 1 run fmt cargo fmt)
@@ -265,6 +271,36 @@ check "signing-mode: all six is Developer ID" '[ "$(mode 6)" = developer-id ]'
 check "signing-mode: one secret fails" '[ "$(mode 1)" = failed ]'
 check "signing-mode: five secrets fail" '[ "$(mode 5)" = failed ]'
 check "signing-mode: five and an empty one fail" '[ "$(mode 5 "")" = failed ]'
+own="HIVE_CERTIFICATE HIVE_CERTIFICATE_PASSWORD HIVE_CERTIFICATE_SHA1"
+# own_mode <how many of Hive's certificate secrets> <how many of the Apple ones> [<value of the others>].
+own_mode() {
+  ( n=0
+    for v in $own; do
+      if [ $n -lt "$1" ]; then export "$v=x"; elif [ $# = 3 ]; then export "$v=$3"; else unset "$v"; fi
+      n=$((n + 1))
+    done
+    if [ $# = 3 ]; then mode "$2" "$3"; else mode "$2"; fi )
+}
+check "signing-mode: the certificate's three secrets are self-signed" '[ "$(own_mode 3 0)" = self-signed ]'
+check "signing-mode: its three with the others empty are self-signed" '[ "$(own_mode 3 0 "")" = self-signed ]'
+check "signing-mode: none of them, empty, is ad-hoc" '[ "$(own_mode 0 0 "")" = adhoc ]'
+check "signing-mode: one of the certificate's fails" '[ "$(own_mode 1 0)" = failed ]'
+check "signing-mode: two of the certificate's fail" '[ "$(own_mode 2 0 "")" = failed ]'
+check "signing-mode: all of both is Developer ID" '[ "$(own_mode 3 6)" = developer-id ]'
+check "signing-mode: the certificate and a partial Apple set fail" '[ "$(own_mode 3 2)" = failed ]'
+check "signing-mode: Developer ID and a partial certificate fail" '[ "$(own_mode 1 6)" = failed ]'
+
+# --- macos-bundle.sh release-notes --------------------------------------------------------------
+notes() { printf '%s' "$2" | scripts/macos-bundle.sh release-notes "$1"; }
+first=$(notes self-signed "")
+check "release-notes: the first self-signed release says to allow Hive once more" \
+  'holds "$first" "signed with its own certificate" "allow it one last time" "Screen & System Audio Recording" "Accessibility"'
+check "release-notes: it stays silent once an earlier release said it" \
+  '[ -z "$(notes self-signed "$(printf "older\n\n%s\n" "$first")")" ]'
+check "release-notes: other earlier notes do not silence it" \
+  '[ "$(notes self-signed "something else")" = "$first" ]'
+check "release-notes: an ad-hoc release has none" '[ -z "$(notes adhoc "")" ]'
+check "release-notes: a Developer ID release has none" '[ -z "$(notes developer-id "")" ]'
 
 # --- macos-bundle.sh check (macOS only: codesign) -----------------------------------------------
 # A small bundle shaped like Hive.app, with the real Info.plist keys and entitlements, signed
@@ -345,6 +381,128 @@ EOF
   check "bundle: a hive with another signer fails" '! PATH=$tmp/signer:$PATH bundle_check'
   check "bundle: it fails on the signers" \
     '[[ $(PATH=$tmp/signer:$PATH scripts/macos-bundle.sh check "$app" 2>&1) == *"different signers"* ]]'
+
+  # --- macos-bundle.sh new-certificate ------------------------------------------------------------
+  sha1=$(umask 022; scripts/macos-bundle.sh new-certificate "$tmp/certificate" 2>/dev/null)
+  check "certificate: it prints a SHA-1" '[[ $sha1 =~ ^[0-9A-F]{40}$ ]]'
+  check "certificate: only the .p12 and its password stay, in a private folder" \
+    '[ "$(ls "$tmp/certificate" | xargs)" = "certificate.p12 password" ] && [ "$(stat -f %Lp "$tmp/certificate")" = 700 ]'
+  check "certificate: the .p12 and its password are private, whatever the umask" \
+    '[ "$(stat -f %Lp "$tmp/certificate/certificate.p12")" = 600 ] && [ "$(stat -f %Lp "$tmp/certificate/password")" = 600 ]'
+  shown=$(/usr/bin/openssl pkcs12 -in "$tmp/certificate/certificate.p12" -nokeys \
+    -passin "file:$tmp/certificate/password" 2>/dev/null |
+    /usr/bin/openssl x509 -noout -fingerprint -sha1 -subject -text 2>/dev/null)
+  check "certificate: the .p12 holds that certificate, for code signing" \
+    'holds "${shown//:/}" "$sha1" "Hive Self-Signed" "Code Signing"'
+  check "certificate: an existing folder fails" \
+    '! scripts/macos-bundle.sh new-certificate "$tmp/certificate" 2>/dev/null'
+  check "certificate: an existing folder keeps its files" \
+    '[ "$(ls "$tmp/certificate" | xargs)" = "certificate.p12 password" ]'
+  # A failure after openssl wrote the unencrypted key: uuidgen is the next step, and can be replaced.
+  mkdir -p "$tmp/no-uuidgen"
+  printf '#!/bin/sh\nexit 1\n' >"$tmp/no-uuidgen/uuidgen"
+  chmod +x "$tmp/no-uuidgen/uuidgen"
+  check "certificate: a failure fails" \
+    '! PATH=$tmp/no-uuidgen:$PATH scripts/macos-bundle.sh new-certificate "$tmp/failed" >/dev/null 2>&1'
+  check "certificate: a failure leaves no key or certificate" \
+    '[ -d "$tmp/failed" ] && [ ! -e "$tmp/failed/key.pem" ] && [ ! -e "$tmp/failed/certificate.pem" ]'
+  check "certificate: importing it outside CI fails, before any keychain" \
+    '[[ $(env -u GITHUB_ACTIONS scripts/macos-bundle.sh import-certificate "$tmp/never" 2>&1) == *"CI only"* ]] && [ ! -e "$tmp/never" ]'
+
+  # --- macos-bundle.sh sign-hive and check --self-signed -------------------------------------------
+  # A real certificate signature needs a keychain on the search list (the real environment; CI's
+  # is below): a wrapper signs ad-hoc whatever the identity, keeping the other options and logging
+  # them, and reports each requirement as that of the certificate in $FAKE_SHA1 (for the nested
+  # hive, $FAKE_HIVE_SHA1 if set).
+  mkdir -p "$tmp/selfsign"
+  cat >"$tmp/selfsign/codesign" <<'EOF'
+#!/bin/bash
+args=("$@")
+case " $* " in
+  *" -d -r- "*)
+    path=${args[${#args[@]} - 1]}
+    case $path in
+      */Resources/hive) id=com.lucas.hive.service sha1=${FAKE_HIVE_SHA1:-$FAKE_SHA1} ;;
+      *) id=${FAKE_ID:-com.example.fake} sha1=$FAKE_SHA1 ;;
+    esac
+    echo "Executable=$path" >&2
+    echo "designated => identifier \"$id\" and certificate root = H\"$sha1\""
+    exit 0
+    ;;
+  *" --sign "*)
+    echo "$*" >>"$FAKE_LOG"
+    for i in "${!args[@]}"; do [ "${args[$i]}" != --sign ] || args[i + 1]=-; done
+    ;;
+esac
+exec /usr/bin/codesign "${args[@]}"
+EOF
+  chmod +x "$tmp/selfsign/codesign"
+  lower=$(tr 'A-F' 'a-f' <<<"$sha1")
+  other=0123456789012345678901234567890123456789
+  export FAKE_LOG=$tmp/selfsign/log FAKE_SHA1=$lower
+  saved_path=$PATH
+  export PATH=$tmp/selfsign:$PATH
+  HIVE_CERTIFICATE_SHA1=$sha1 scripts/macos-bundle.sh sign-hive "$app/Contents/Resources/hive" 2>/dev/null
+  check "sign-hive: it signs with the certificate, the runtime and no timestamp" \
+    'holds "$(cat "$FAKE_LOG")" "--sign $sha1 --identifier com.lucas.hive.service --options runtime --timestamp=none"'
+  : >"$FAKE_LOG"
+  APPLE_SIGNING_IDENTITY=dev HIVE_CERTIFICATE_SHA1=$sha1 \
+    scripts/macos-bundle.sh sign-hive "$app/Contents/Resources/hive" 2>/dev/null
+  check "sign-hive: a Developer ID comes first, with a secure timestamp" \
+    '[[ $(cat "$FAKE_LOG") == *"--sign dev --identifier com.lucas.hive.service --options runtime --timestamp "* ]]'
+  HIVE_CERTIFICATE_SHA1=$sha1 scripts/macos-bundle.sh sign-hive "$app/Contents/Resources/hive" 2>/dev/null
+  seal --entitlements src-tauri/Entitlements.plist
+  check "self-signed: this certificate's bundle passes" 'bundle_check --self-signed "$sha1"'
+  check "self-signed: its SHA-1 may be lowercase" 'bundle_check --self-signed "$lower"'
+  check "self-signed: another certificate fails" '! bundle_check --self-signed "$other"'
+  check "self-signed: no SHA-1 fails" '! bundle_check --self-signed'
+  check "self-signed: a SHA-1 of another shape fails" '! bundle_check --self-signed "abc.*"'
+  check "self-signed: an extra word after a mode fails" '! bundle_check --developer-id "$sha1"'
+  check "self-signed: a nested hive under another certificate fails" \
+    '! FAKE_HIVE_SHA1=$other bundle_check --self-signed "$sha1"'
+  check "self-signed: an app of another identifier fails" \
+    '! FAKE_ID=com.example.other bundle_check --self-signed "$sha1"'
+  codesign --force --sign - --entitlements src-tauri/Entitlements.plist "$app" 2>/dev/null
+  check "self-signed: an app without the hardened runtime fails" '! bundle_check --self-signed "$sha1"'
+  seal --entitlements src-tauri/Entitlements.plist
+  export PATH=$saved_path
+  check "self-signed: an ad-hoc signature (a cdhash) fails" '! bundle_check --self-signed "$sha1"'
+  new_hive
+  scripts/macos-bundle.sh sign-hive "$app/Contents/Resources/hive" 2>/dev/null
+  seal --entitlements src-tauri/Entitlements.plist
+  export PATH=$tmp/selfsign:$PATH
+  check "self-signed: a nested hive without the hardened runtime fails" \
+    '[[ $(scripts/macos-bundle.sh check "$app" --self-signed "$sha1" 2>&1) == *"hardened runtime"* ]]'
+  export PATH=$saved_path
+
+  # The real thing, on a CI runner only, whose keychain search list is disposable: the certificate
+  # new-certificate made, imported as the release does, signs the bundle; unlike the wrapper's, this
+  # requirement is what macOS will compare its grants with. The app is signed under the runtime as
+  # Tauri does (`codesign --force -s <identity> --options runtime --entitlements`), and it still runs.
+  if [ -n "${GITHUB_ACTIONS:-}" ] && [ -n "${REQUIRE_REAL_CERTIFICATE:-}" ]; then
+    saved_home=$HOME
+    export HOME=$real_home
+    keychain=$tmp/self-signed.keychain-db
+    SIGNING_CERTIFICATE=$(base64 -i "$tmp/certificate/certificate.p12") \
+      SIGNING_CERTIFICATE_PASSWORD=$(cat "$tmp/certificate/password") \
+      scripts/macos-bundle.sh import-certificate "$keychain" >/dev/null 2>&1
+    check "real certificate: it is imported" 'security find-identity -p codesigning "$keychain" | grep -q "$sha1"'
+    HIVE_CERTIFICATE_SHA1=$sha1 scripts/macos-bundle.sh sign-hive "$app/Contents/Resources/hive"
+    codesign --force -s "$sha1" --options runtime --entitlements src-tauri/Entitlements.plist "$app"
+    check "real certificate: the bundle passes" \
+      'scripts/macos-bundle.sh check "$app" --self-signed "$sha1"'
+    check "real certificate: another one fails" '! bundle_check --self-signed "$other"'
+    check "real certificate: the requirement names it, not a cdhash" \
+      'holds "$(codesign -d -r- "$app" 2>&1)" "identifier \"com.example.fake\"" "H\"$lower\""'
+    check "real certificate: the signed app and hive run" \
+      '"$app/Contents/MacOS/fake" && "$app/Contents/Resources/hive"'
+    security delete-keychain "$keychain"
+    export HOME=$saved_home
+  elif [ -n "${REQUIRE_REAL_CERTIFICATE:-}" ]; then
+    check "real certificate: required, but this is no CI runner" 'false'
+  else
+    echo "skip  real certificate: a CI runner only (it needs the keychain search list)"
+  fi
 fi
 
 [ $bad = 0 ]

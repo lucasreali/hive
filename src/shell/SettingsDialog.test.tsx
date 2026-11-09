@@ -947,6 +947,82 @@ test("Open settings file asks the service, whose answer opens it", async () => {
   ask.mockRestore();
 });
 
+test("Terminal lists macOS's permissions on a Mac, with their panes, and reads them on focus (25.5)", async () => {
+  asMac();
+  let screen_recording: "granted" | "denied" = "denied";
+  const check = spyOn(transport, "checkTerminalPermissions").mockImplementation(async () => {
+    apply({ type: "terminal_permissions", screen_recording, accessibility: "granted" });
+  });
+  const openPane = spyOn(transport, "openPrivacySettings").mockResolvedValue();
+  try {
+    open();
+    section("Terminal");
+    const group = await screen.findByRole("region", { name: "macOS permissions" });
+    expect(group.textContent).toContain("Claude Code's Computer Use");
+    expect(group.textContent).toContain("After granting Screen Recording, restart Hive");
+    const row = (label: string) =>
+      within(group).getByRole("button", { name: `Open System Settings for ${label}` })
+        .parentElement as HTMLElement;
+    expect(row("Screen Recording").textContent).toContain("Not granted");
+    expect(row("Accessibility").textContent).toContain("Granted");
+    expect(row("Accessibility").textContent).not.toContain("Not granted");
+    fireEvent.click(
+      within(group).getByRole("button", { name: "Open System Settings for Screen Recording" }),
+    );
+    expect(openPane).toHaveBeenLastCalledWith("screen_recording");
+    fireEvent.click(
+      within(group).getByRole("button", { name: "Open System Settings for Accessibility" }),
+    );
+    expect(openPane).toHaveBeenLastCalledWith("accessibility");
+    // Back from System Settings: the window's focus reads them again.
+    const before = check.mock.calls.length;
+    screen_recording = "granted";
+    act(() => {
+      window.dispatchEvent(new Event("focus"));
+    });
+    await waitFor(() => expect(row("Screen Recording").textContent).not.toContain("Not granted"));
+    expect(check).toHaveBeenCalledTimes(before + 1);
+    // Another section reads nothing and listens no more.
+    section("Agents");
+    expect(screen.queryByRole("region", { name: "macOS permissions" })).toBeNull();
+    window.dispatchEvent(new Event("focus"));
+    expect(check).toHaveBeenCalledTimes(before + 1);
+  } finally {
+    check.mockRestore();
+    openPane.mockRestore();
+  }
+});
+
+test("macOS's permissions show nothing where the app cannot read them (25.5)", async () => {
+  asMac();
+  const check = spyOn(transport, "checkTerminalPermissions").mockImplementation(async () => {
+    apply({ type: "terminal_permissions", screen_recording: "unknown", accessibility: "unknown" });
+  });
+  try {
+    open();
+    section("Terminal");
+    await waitFor(() => expect(check).toHaveBeenCalled());
+    expect(screen.queryByRole("region", { name: "macOS permissions" })).toBeNull();
+  } finally {
+    check.mockRestore();
+  }
+});
+
+test("Off a Mac the Terminal section never reads macOS's permissions (25.5)", async () => {
+  Object.defineProperty(navigator, "userAgent", { value: "Windows", configurable: true });
+  const check = spyOn(transport, "checkTerminalPermissions").mockImplementation(async () => {
+    apply({ type: "terminal_permissions", screen_recording: "denied", accessibility: "denied" });
+  });
+  try {
+    open();
+    section("Terminal");
+    expect(screen.queryByRole("region", { name: "macOS permissions" })).toBeNull();
+    expect(check).not.toHaveBeenCalled();
+  } finally {
+    check.mockRestore();
+  }
+});
+
 test("Notifications says when the OS keeps Hive from notifying, with a link to its settings", async () => {
   let permission: "granted" | "denied" = "denied";
   const check = spyOn(transport, "checkNotifications").mockImplementation(async () => {

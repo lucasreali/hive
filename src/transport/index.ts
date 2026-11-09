@@ -306,6 +306,13 @@ export interface Transport {
   /** Opens macOS's notification settings, where the user lets Hive notify again (17.19). */
   openNotificationSettings(): Promise<void>;
   /**
+   * What macOS lets programs in Hive's terminals do (25.5), read without prompting; answered by
+   * `terminal_permissions` (`unknown` where the app cannot read them).
+   */
+  checkTerminalPermissions(): Promise<void>;
+  /** Opens macOS's settings at this permission's pane, where the user allows Hive (25.5). */
+  openPrivacySettings(pane: "screen_recording" | "accessibility"): Promise<void>;
+  /**
    * Plays the alert tone from the app at `volume` percent (17.19: macOS, where a hidden
    * webview's audio can be throttled); rejects where the app plays none.
    */

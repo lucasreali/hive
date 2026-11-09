@@ -99,6 +99,8 @@ export const tauriTransport: Transport = {
   showNotification: (title, body, agent) => send("show_notification", { title, body, agent }),
   checkNotifications: () => send("check_notifications"),
   openNotificationSettings: () => send("open_notification_settings"),
+  checkTerminalPermissions: () => send("check_terminal_permissions"),
+  openPrivacySettings: (pane) => send("open_privacy_settings", { pane }),
   // No toast: the caller falls back to the webview's tone.
   playTone: (volume) => invoke<void>("play_tone", { volume }),
   // No toast on a failure: the icon is a hint (`followTray` drops it).
