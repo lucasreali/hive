@@ -13,6 +13,7 @@ import {
   appliedTheme,
   focusPane,
   type HiveState,
+  type PaneId,
   paneAttention,
   removeTab,
   setSplit,
@@ -20,7 +21,15 @@ import {
   unsplit,
   useHive,
 } from "./store";
-import { inBarOrder, splitOf, tabWorktree } from "./tabs";
+import {
+  type BarItem,
+  inBarOrder,
+  itemWorktree,
+  paneFile,
+  paneIdOf,
+  splitOf,
+  tabWorktree,
+} from "./tabs";
 import { transport } from "./transport";
 import { commandKey, isMac } from "./window";
 
@@ -777,11 +786,21 @@ function fitShown(): void {
 /**
  * Ctrl+Shift+D and the tab menu's "Split right" (6.11): tab `id` beside the next tab of its
  * worktree in the bar's order that is in no pair (20.5), or beside a new terminal there when it
- * has none; when `id` is already in a pair, that pair ends instead.
+ * has none; when `id` is already in a pair, that pair ends instead. A terminal goes beside
+ * terminals only; a file beside any tab (25.1).
  */
-export async function splitTerminal(id: number | null): Promise<void> {
+export async function splitTerminal(id: PaneId | null): Promise<void> {
   const s = useHive.getState();
   if (id !== null && splitOf(s, id)) return unsplit(id);
+  const file = id !== null && paneFile(s, id);
+  if (file) {
+    const free = (item: BarItem) =>
+      item === file || (itemWorktree(s, item) === file.worktree && !splitOf(s, paneIdOf(item)));
+    const same = inBarOrder(s, [...s.tabs, ...s.openFiles].filter(free));
+    const next = same[(same.indexOf(file) + 1) % same.length] as BarItem;
+    const right = next === file ? await openTerminal(file.worktree) : paneIdOf(next);
+    return setSplit({ left: paneIdOf(file), right });
+  }
   const tab = s.tabs.find((t) => t.id === id);
   if (!tab) return;
   const place = tabWorktree(s, tab);

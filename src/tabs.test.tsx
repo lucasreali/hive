@@ -34,7 +34,15 @@ import {
   unsplit,
   useHive,
 } from "./store";
-import { barItems, dropFile, shownSplit, shownTerminals, visibleTabs } from "./tabs";
+import {
+  barItems,
+  dropFile,
+  shownPane,
+  shownPanes,
+  shownSplit,
+  shownTerminals,
+  visibleTabs,
+} from "./tabs";
 import { closeTerminal, splitTerminal } from "./terminals";
 import { MOCK_REPOS } from "./transport/mock";
 import { type EditBuffer, toText } from "./viewer/buffer";
@@ -365,16 +373,32 @@ test("a tab dropped on the terminals takes a pane or makes a pair on its side (2
   expect(s().splits).toEqual([{ left: 3, right: 2 }]);
   dropOnPane("tab:2", "right");
   expect(s().splits).toEqual([{ left: 3, right: 2 }]);
-  // Files, other worktrees' tabs and unknown keys do nothing; nor does a tab on itself.
-  for (const key of [`file:${W}\na.ts`, "tab:9", "tab:99"]) dropOnPane(key, "left");
+  // Other worktrees' tabs and unknown keys do nothing; nor does a tab on itself.
+  for (const key of ["tab:9", "tab:99"]) dropOnPane(key, "left");
   expect(s().splits).toEqual([{ left: 3, right: 2 }]);
   activateTab({ id: 1, cwd: W });
   dropOnPane("tab:1", "left");
   expect([s().splits, shownTerminals(s())]).toEqual([[{ left: 3, right: 2 }], [1]]);
-  // Over a file's view, nothing.
+  // Onto a file alone too (25.1): a pair, the tab dropped on the side it was dropped.
   keepOpen(file("a.ts"));
-  dropOnPane("tab:3", "left");
-  expect(s().splits).toEqual([{ left: 3, right: 2 }]);
+  dropOnPane("tab:1", "left");
+  expect(s().splits).toEqual([
+    { left: 3, right: 2 },
+    { left: 1, right: `file:${W}\na.ts` },
+  ]);
+  // The focus goes to the terminal dropped, in its own pane, with the file still shown beside it.
+  expect([shownPane(s()), s().activeTab, s().fileShown]).toEqual([1, 1, false]);
+  expect(shownPanes(s())).toEqual([1, `file:${W}\na.ts`]);
+  // A tab already in a pair, dropped onto a file alone: it leaves that pair, its partner alone.
+  keepOpen(file("b.ts"));
+  dropOnPane("tab:3", "right");
+  expect(s().splits).toEqual([
+    { left: 1, right: `file:${W}\na.ts` },
+    { left: `file:${W}\nb.ts`, right: 3 },
+  ]);
+  expect([shownPane(s()), s().fileShown]).toEqual([3, false]);
+  activateTab({ id: 2, cwd: W });
+  expect(shownPanes(s())).toEqual([2]);
 });
 
 test("Ctrl+Shift+D pairs with the next tab in no pair; on a paired tab it ends that pair (20.5)", async () => {

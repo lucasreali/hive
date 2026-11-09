@@ -2,12 +2,15 @@ import { useEffect, useRef, useState } from "react";
 import {
   clearGotoLine,
   leaveView,
+  type OpenFile,
   saveFileView,
+  selectIn,
   setEdit,
   setSelectedLines,
   takePlace,
   useHive,
 } from "../store";
+import { paneState } from "../tabs";
 import { transport } from "../transport";
 import { type EditBuffer, failed, isFor, resolve, startSave } from "./buffer";
 import { createEditor, type Editor, restoreView, revealLine, snapshot } from "./editor";
@@ -27,10 +30,13 @@ export function saveOpenFile(): void {
     });
 }
 
-/** The user's edits reach the buffer; ignored once it is gone (the file closed). */
-function changed(doc: EditBuffer["doc"]): void {
+/**
+ * The user's edits to file `f` reach the buffer; ignored once it is gone (the file closed) or
+ * another file is the open one (a pane of a pair without the focus, 25.1).
+ */
+function changed(f: OpenFile, doc: EditBuffer["doc"]): void {
   const { edit } = useHive.getState();
-  if (edit) setEdit({ ...edit, doc });
+  if (edit && isFor(edit, f)) setEdit({ ...edit, doc });
 }
 
 /**
@@ -45,13 +51,15 @@ export function EditView({ edit }: { edit: EditBuffer }) {
   const editor = useRef<Editor | null>(null);
   const [comparing, setComparing] = useState(false);
   const { path, doc, conflict } = edit;
+  const latest = useRef(edit);
+  latest.current = edit;
   useEffect(() => {
-    const { edit, openFiles } = useHive.getState();
-    const file = edit as EditBuffer;
+    const { openFiles } = useHive.getState();
+    const file = latest.current;
     const created = createEditor(parent.current as HTMLDivElement, path, file.doc, {
-      change: changed,
+      change: (doc) => changed(file, doc),
       save: saveOpenFile,
-      select: setSelectedLines,
+      select: selectIn(file),
     });
     editor.current = created;
     // Shown again in its tab (8.21): as it was left.
@@ -75,9 +83,10 @@ export function EditView({ edit }: { edit: EditBuffer }) {
     clearGotoLine();
   }, [goto, path, edit.worktree]);
   // The base text the service sent with the file (`HEAD` or the merge-base), for the markers.
-  const base = useHive((s) =>
-    s.file?.worktree === edit.worktree && s.file.path === path ? s.file.base : null,
-  );
+  const base = useHive((s) => {
+    const text = paneState(s, edit).file;
+    return text?.worktree === edit.worktree && text.path === path ? text.base : null;
+  });
   useEffect(() => editor.current?.setBase(base), [base]);
   const original = comparing && conflict ? (conflict.content ?? "") : null;
   useEffect(() => editor.current?.compare(original), [original]);

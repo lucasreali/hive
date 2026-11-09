@@ -32,6 +32,7 @@ import {
   muted,
   openFileDialog,
   openModal,
+  type PaneId,
   pinFile,
   replacePane,
   selectedPlace,
@@ -49,11 +50,14 @@ import {
   droppable,
   fileKey,
   fileTabState,
-  fileVisible,
+  inBarOrder,
+  itemWorktree,
+  paneFile,
+  paneIdOf,
+  shownPanes,
   shownSplit,
   shownTerminals,
   splitOf,
-  tabWorktree,
   visibleTabs,
 } from "../tabs";
 import {
@@ -120,6 +124,32 @@ function tabLabel(s: HiveState, tab: Tab): string {
   const agent = Object.values(s.agents).find((a) => a.terminal === tab.id)?.id;
   return (agent && s.agentTitles[agent]) || (find(s, tab.cwd)?.worktree.name ?? tab.cwd);
 }
+
+/** A file's name, as its tab shows it. */
+const fileName = (path: string) => path.slice(path.lastIndexOf("/") + 1);
+
+/** What a tab of the bar is called. */
+const itemLabel = (s: HiveState, item: BarItem) =>
+  "path" in item ? fileName(item.path) : tabLabel(s, item);
+
+/**
+ * Pane `id`'s pair as its tab shows it (20.5): its side, its partner's label, and whether the pair
+ * is shown; null outside every pair.
+ */
+const usePair = (id: PaneId) =>
+  useHive(
+    useShallow((s) => {
+      const split = splitOf(s, id);
+      if (!split) return null;
+      const other = split.left === id ? split.right : split.left;
+      const partner = [...s.tabs, ...s.openFiles].find((t) => paneIdOf(t) === other);
+      return {
+        side: split.left === id ? ("left" as const) : ("right" as const),
+        partner: partner ? itemLabel(s, partner) : "",
+        shown: shownSplit(s) === split,
+      };
+    }),
+  );
 
 /** The drag-and-drop props of a tab (`useReorder`), to move it along the bar (8.21). */
 type Drag = ReturnType<ReturnType<typeof useReorder>>;
@@ -191,21 +221,7 @@ function TabItem(props: {
 function TerminalTab(props: { tab: Tab; onMenu: (menu: TabMenu) => void; drag: Drag }) {
   const { tab, onMenu } = props;
   const active = useHive((s) => s.activeTab === tab.id && !s.fileShown);
-  // Its pair (20.5): its side, its partner's label, and whether the pair is shown.
-  const pair = useHive(
-    useShallow((s) => {
-      const split = splitOf(s, tab.id);
-      if (!split) return null;
-      const partner = s.tabs.find(
-        (t) => t.id === (split.left === tab.id ? split.right : split.left),
-      );
-      return {
-        side: split.left === tab.id ? ("left" as const) : ("right" as const),
-        partner: partner ? tabLabel(s, partner) : "",
-        shown: !s.fileShown && shownSplit(s) === split,
-      };
-    }),
-  );
+  const pair = usePair(tab.id);
   const state = useTerminal(tab.id);
   const name = useHive((s) => find(s, tab.cwd)?.worktree.name ?? tab.cwd);
   const agent = useHive((s) => Object.values(s.agents).find((a) => a.terminal === tab.id)?.id);
@@ -281,26 +297,37 @@ function ProgressHint({ state, value }: { state: ProgressState; value: number })
 }
 
 /** An open file's tab (8.21); closing it asks first when its edits are unsaved. */
-function FileTab({ file, drag }: { file: FileTabData; drag: Drag }) {
+function FileTab(props: { file: FileTabData; onMenu: (menu: TabMenu) => void; drag: Drag }) {
+  const { file, onMenu, drag } = props;
+  const pair = usePair(fileKey(file));
   const active = useHive((s) => s.fileShown && !!s.openFile && isFor(file, s.openFile));
   const dirty = useHive((s) => {
     const { edit } = fileTabState(s, file);
     return !!edit && isDirty(edit);
   });
-  const name = file.path.slice(file.path.lastIndexOf("/") + 1);
+  const name = fileName(file.path);
   const preview = !!file.preview;
+  const paired = pair ? `Split with ${pair.partner}` : undefined;
+  const tip = preview ? `${file.path}\nPreview: opening another file replaces it` : file.path;
   return (
     <TabItem
       drag={drag}
       active={active}
-      title={preview ? `${file.path}\nPreview: opening another file replaces it` : file.path}
+      pair={pair?.side}
+      split={pair && !active ? (pair.shown ? "view" : "paired") : undefined}
+      onMenu={(event) => {
+        event.preventDefault();
+        onMenu({ tab: fileKey(file), x: event.clientX, y: event.clientY });
+      }}
+      title={paired ? `${tip}\n${paired}` : tip}
       onShow={() => setOpenFile(file)}
       onPin={() => pinFile(file)}
-      description={preview ? "Preview" : undefined}
+      description={[preview ? "Preview" : "", paired ?? ""].filter(Boolean).join(". ") || undefined}
       close={`Close file ${name}`}
       onClose={() => closeFile(file)}
       dirty={dirty}
     >
+      {pair?.side === "left" && <SquareSplitHorizontalIcon className="tab-split" {...ICON} />}
       <FileIcon />
       <span className="tab-name" data-preview={preview || undefined}>
         {name}
@@ -309,7 +336,7 @@ function FileTab({ file, drag }: { file: FileTabData; drag: Drag }) {
   );
 }
 
-type TabMenu = { tab: number; x: number; y: number };
+type TabMenu = { tab: PaneId; x: number; y: number };
 
 /** A menu item that closes the menu, then runs `action`. */
 function MenuItem(props: {
@@ -343,10 +370,10 @@ const Keys = ({ keys }: { keys?: string }) =>
   ) : null;
 
 /**
- * "Split right" for terminal `tab`, or "Unsplit" when it is a shown pane (6.11); with its key
- * when `keys`.
+ * "Split right" for tab `tab`, or "Unsplit" when it is a shown pane (6.11); with its key when
+ * `keys`.
  */
-function SplitItem(props: { tab: number; onClose: () => void; keys?: boolean }) {
+function SplitItem(props: { tab: PaneId; onClose: () => void; keys?: boolean }) {
   const { tab, onClose } = props;
   const split = useHive((s) => !!splitOf(s, tab));
   return (
@@ -374,21 +401,35 @@ export function Submenu({ label, children }: { label: string; children: ReactNod
 }
 
 /**
- * For terminal `tab` in a pair (20.5): "Replace with ▸", a submenu of its worktree's other
- * terminals, one of which takes its pane; and "Swap sides".
+ * What can take a pane of `tab`'s pair (20.5, 25.1): the other tabs of its worktree, terminals and
+ * files, in the bar's order, as [pane, label] after one another. Tabs of the same name (a
+ * worktree's plain terminals) also say their place in the bar. Null outside every pair.
  */
-function PairItems({ tab, onClose }: { tab: number; onClose: () => void }) {
-  const others = useHive(
-    useShallow((s) => {
-      const split = splitOf(s, tab);
-      const own = s.tabs.find((t) => t.id === tab);
-      if (!split || !own) return null;
-      const place = tabWorktree(s, own);
-      return s.tabs
-        .filter((t) => t.id !== split.left && t.id !== split.right && tabWorktree(s, t) === place)
-        .flatMap((t) => [t.id, tabLabel(s, t)]);
-    }),
+function replacements(s: HiveState, tab: PaneId): (PaneId | string)[] | null {
+  const split = splitOf(s, tab);
+  const own = [...s.tabs, ...s.openFiles].find((t) => paneIdOf(t) === tab);
+  if (!split || !own) return null;
+  const place = itemWorktree(s, own);
+  const same = inBarOrder(
+    s,
+    [...s.tabs, ...s.openFiles].filter((t) => itemWorktree(s, t) === place),
   );
+  const labels = same.map((t) => itemLabel(s, t));
+  return same.flatMap((t, i) => {
+    const pane = paneIdOf(t);
+    if (pane === split.left || pane === split.right) return [];
+    const label = labels[i] as string;
+    const repeated = labels.indexOf(label) !== labels.lastIndexOf(label);
+    return [pane, repeated ? `${label} (tab ${i + 1})` : label];
+  });
+}
+
+/**
+ * For tab `tab` in a pair (20.5): "Replace with ▸", a submenu of its worktree's other tabs,
+ * terminals and files (25.1), one of which takes its pane; and "Swap sides".
+ */
+function PairItems({ tab, onClose }: { tab: PaneId; onClose: () => void }) {
+  const others = useHive(useShallow((s) => replacements(s, tab)));
   const [open, setOpen] = useState(false);
   if (!others) return null;
   return (
@@ -400,6 +441,7 @@ function PairItems({ tab, onClose }: { tab: number; onClose: () => void }) {
           aria-haspopup="menu"
           aria-expanded={open}
           disabled={others.length === 0}
+          title={others.length === 0 ? "No other tab in this worktree" : undefined}
           onClick={() => setOpen(!open)}
           onKeyDown={(e) => {
             if (e.key !== "ArrowRight") return;
@@ -415,8 +457,8 @@ function PairItems({ tab, onClose }: { tab: number; onClose: () => void }) {
           <Submenu label="Replace with">
             {others.map((x, i) =>
               i % 2 ? null : (
-                <MenuItem key={x} onClose={onClose} action={() => replacePane(tab, x as number)}>
-                  <TerminalIcon />
+                <MenuItem key={x} onClose={onClose} action={() => replacePane(tab, x)}>
+                  {typeof x === "number" ? <TerminalIcon /> : <FileIcon />}
                   {others[i + 1]}
                 </MenuItem>
               ),
@@ -445,13 +487,14 @@ function AccountNote({ tab }: { tab: number }) {
 }
 
 /** A terminal tab's context menu (right click): split it, rearrange its pair, or close it. */
-function TerminalTabMenu({ menu, onClose }: { menu: TabMenu; onClose: () => void }) {
+function TerminalTabMenu(props: { tab: number; at: TabMenu; onClose: () => void }) {
+  const { tab, at, onClose } = props;
   return (
-    <ContextMenu at={menu} label="Terminal" onClose={onClose}>
-      <AccountNote tab={menu.tab} />
-      <SplitItem tab={menu.tab} onClose={onClose} />
-      <PairItems tab={menu.tab} onClose={onClose} />
-      <MenuItem onClose={onClose} action={() => closeTerminal(menu.tab)}>
+    <ContextMenu at={at} label="Terminal" onClose={onClose}>
+      <AccountNote tab={tab} />
+      <SplitItem tab={tab} onClose={onClose} />
+      <PairItems tab={tab} onClose={onClose} />
+      <MenuItem onClose={onClose} action={() => closeTerminal(tab)}>
         <XIcon {...ICON} />
         Close terminal
       </MenuItem>
@@ -459,7 +502,23 @@ function TerminalTabMenu({ menu, onClose }: { menu: TabMenu; onClose: () => void
   );
 }
 
-type PaneMenu = TabMenu & { selection: boolean };
+/** A file tab's context menu (25.1, also on its pane's header), as a terminal's. */
+function FileTabMenu({ at, onClose }: { at: TabMenu; onClose: () => void }) {
+  const file = useHive((s) => paneFile(s, at.tab));
+  if (!file) return null;
+  return (
+    <ContextMenu at={at} label="File" onClose={onClose}>
+      <SplitItem tab={at.tab} onClose={onClose} />
+      <PairItems tab={at.tab} onClose={onClose} />
+      <MenuItem onClose={onClose} action={() => closeFile(file)}>
+        <XIcon {...ICON} />
+        Close file
+      </MenuItem>
+    </ContextMenu>
+  );
+}
+
+type PaneMenu = { tab: number; x: number; y: number; selection: boolean };
 
 /**
  * The menu of a terminal itself (17.20, right click or a two-finger tap in it): an app menu,
@@ -495,13 +554,16 @@ function TerminalPaneMenu({ menu, onClose }: { menu: PaneMenu; onClose: () => vo
 
 /**
  * Where xterm.js renders; the terminal manager owns everything inside it. Split, the two panes
- * sit side by side with a divider between them (its position is a UI preference). A right
- * click in a terminal opens its menu. A tab of their worktree dragged from the bar onto a pane
- * takes it, or onto a terminal alone makes a pair on the side it is dropped (20.5), highlighted.
+ * sit side by side; beside a file (25.1), it takes its side of the divider (`half`). A right
+ * click in a terminal opens its menu. A tab of the worktree dragged from the bar onto a pane, file
+ * or terminal, takes it, or onto a tab alone makes a pair on the side it is dropped (20.5, 25.1),
+ * highlighted: the whole terminal body takes the drop, ahead of an editor under it.
  */
-function TerminalHost({ hidden }: { hidden: boolean }) {
+function TerminalHost(props: { hidden: boolean; half?: "left" | "right" }) {
+  const { hidden, half } = props;
   const ref = useRef<HTMLDivElement>(null);
-  const active = useHive((s) => s.activeTab);
+  // The terminal to give the keyboard: none while a file's pane has the focus.
+  const active = useHive((s) => (s.fileShown ? null : s.activeTab));
   const panes = useHive(useShallow(shownTerminals));
   const share = useHive(leftShare);
   const [drop, setDrop] = useState<"left" | "right" | null>(null);
@@ -509,6 +571,7 @@ function TerminalHost({ hidden }: { hidden: boolean }) {
   const closeMenu = useCallback(() => setMenu(null), []);
   useEffect(() => {
     const host = ref.current as HTMLDivElement;
+    const body = host.parentElement as HTMLElement;
     const onMenu = (event: globalThis.MouseEvent) => {
       const at = terminalAt(event.target);
       if (!at) return;
@@ -516,37 +579,42 @@ function TerminalHost({ hidden }: { hidden: boolean }) {
       setMenu({ tab: at.id, selection: at.selection, x: event.clientX, y: event.clientY });
     };
     const side = (event: DragEvent) => {
-      const box = host.getBoundingClientRect();
+      const box = body.getBoundingClientRect();
       return event.clientX < box.left + box.width * leftShare(useHive.getState())
         ? "left"
         : "right";
     };
     const dragged = () => {
       const key = draggedFrom("tabs");
-      return key !== null && droppable(useHive.getState(), key) ? key : null;
+      return key !== null && droppable(useHive.getState(), key) !== null ? key : null;
     };
     const onOver = (event: DragEvent) => {
       if (!dragged()) return;
       event.preventDefault();
+      event.stopPropagation();
+      if (event.dataTransfer) event.dataTransfer.dropEffect = "move";
       setDrop(side(event));
     };
     const onLeave = (event: DragEvent) => {
-      if (!host.contains(event.relatedTarget as Node | null)) setDrop(null);
+      if (!body.contains(event.relatedTarget as Node | null)) setDrop(null);
     };
     const onDrop = (event: DragEvent) => {
       setDrop(null);
       const key = dragged();
       if (!key) return;
       event.preventDefault();
+      event.stopPropagation();
       dropOnPane(key, side(event));
     };
-    const listeners = { contextmenu: onMenu, dragover: onOver, dragleave: onLeave, drop: onDrop };
-    for (const [type, on] of Object.entries(listeners))
-      host.addEventListener(type, on as EventListener);
+    const drops = { dragover: onOver, dragleave: onLeave, drop: onDrop };
+    host.addEventListener("contextmenu", onMenu);
+    for (const [type, on] of Object.entries(drops))
+      body.addEventListener(type, on as EventListener, true);
     const unmount = mountTerminals(host);
     return () => {
-      for (const [type, on] of Object.entries(listeners))
-        host.removeEventListener(type, on as EventListener);
+      host.removeEventListener("contextmenu", onMenu);
+      for (const [type, on] of Object.entries(drops))
+        body.removeEventListener(type, on as EventListener, true);
       unmount();
     };
   }, []);
@@ -557,7 +625,13 @@ function TerminalHost({ hidden }: { hidden: boolean }) {
   const split = panes.length > 1 && !hidden;
   return (
     <>
-      <div className="terminal-host" ref={ref} hidden={hidden} data-split={split || undefined} />
+      <div
+        className="terminal-host"
+        ref={ref}
+        hidden={hidden}
+        data-split={split || undefined}
+        data-half={half}
+      />
       {drop && (
         <div
           className="pane-drop"
@@ -566,7 +640,6 @@ function TerminalHost({ hidden }: { hidden: boolean }) {
           aria-hidden="true"
         />
       )}
-      {split && <ResizeHandle side="split" />}
       <TerminalSearch />
       {menu && <TerminalPaneMenu menu={menu} onClose={closeMenu} />}
     </>
@@ -574,7 +647,7 @@ function TerminalHost({ hidden }: { hidden: boolean }) {
 }
 
 /** The left pane's share of the terminal area: the divider's in a split, else half (a drop there makes a pair). */
-const leftShare = (s: HiveState) => (shownTerminals(s).length > 1 ? s.splitPercent / 100 : 0.5);
+const leftShare = (s: HiveState) => (shownSplit(s) ? s.splitPercent / 100 : 0.5);
 
 /** A worktree without terminals yet: its tab bar is empty. */
 function NoTerminals({ worktree }: { worktree: string }) {
@@ -659,6 +732,29 @@ function NewTabButton({ worktree }: { worktree: string | null }) {
   );
 }
 
+/** The view of the file pane `id` shows, on its `side` in a pair (25.1). */
+function FilePane(props: { id: string; side?: "left" | "right"; onMenu: (menu: TabMenu) => void }) {
+  const { id, side, onMenu } = props;
+  const file = useHive(
+    useShallow((s) => {
+      const tab = paneFile(s, id);
+      return tab ? { worktree: tab.worktree, path: tab.path } : null;
+    }),
+  );
+  if (!file) return null;
+  return (
+    <FileView
+      worktree={file.worktree}
+      file={file}
+      pane={side}
+      onMenu={(event) => {
+        event.preventDefault();
+        onMenu({ tab: id, x: event.clientX, y: event.clientY });
+      }}
+    />
+  );
+}
+
 // "+" opens a terminal or a new file in the selected worktree; Ctrl+Shift+T opens the worktree picker. Only
 // the selected worktree's tabs show (a project's are its main worktree's).
 export function TerminalArea() {
@@ -670,7 +766,9 @@ export function TerminalArea() {
   const items = bar.filter((x): x is BarItem => typeof x !== "string");
   const keys = bar.filter((x): x is string => typeof x === "string");
   const drag = useReorder("tabs", moveTab, true);
-  const file = useHive((s) => (s.fileShown && fileVisible(s) ? s.openFile : null));
+  // What shows, left to right: the terminals in their host, each file in its view.
+  const panes = useHive(useShallow(shownPanes));
+  const file = panes.some((pane) => typeof pane === "string");
   const selected = useHive(selectedPlace);
   const percent = useHive((s) => s.splitPercent);
   const [menu, setMenu] = useState<TabMenu | null>(null);
@@ -687,7 +785,7 @@ export function TerminalArea() {
           {items.map((item, i) => {
             const key = keys[i] as string;
             return "path" in item ? (
-              <FileTab key={fileKey(item)} file={item} drag={drag(key)} />
+              <FileTab key={fileKey(item)} file={item} onMenu={setMenu} drag={drag(key)} />
             ) : (
               <TerminalTab key={item.id} tab={item} onMenu={setMenu} drag={drag(key)} />
             );
@@ -706,14 +804,34 @@ export function TerminalArea() {
           </button>
         </div>
       </div>
-      {menu && <TerminalTabMenu menu={menu} onClose={closeMenu} />}
+      {menu &&
+        (typeof menu.tab === "number" ? (
+          <TerminalTabMenu tab={menu.tab} at={menu} onClose={closeMenu} />
+        ) : (
+          <FileTabMenu at={menu} onClose={closeMenu} />
+        ))}
       <div className="terminal-body" style={{ "--split": percent / 100 } as CSSProperties}>
         {empty && tabs.length === 0 && !file && <EmptyState />}
         {!empty && selected !== null && tabs.length === 0 && !file && (
           <NoTerminals worktree={selected} />
         )}
-        <TerminalHost hidden={tabs.length === 0 || !!file} />
-        {file && <FileView worktree={file.worktree} />}
+        <TerminalHost
+          hidden={tabs.length === 0 || !panes.some((pane) => typeof pane === "number")}
+          half={
+            panes.length > 1 && file ? (typeof panes[0] === "number" ? "left" : "right") : undefined
+          }
+        />
+        {panes.map((pane) =>
+          typeof pane === "string" ? (
+            <FilePane
+              key={pane}
+              id={pane}
+              side={panes.length > 1 ? (pane === panes[0] ? "left" : "right") : undefined}
+              onMenu={setMenu}
+            />
+          ) : null,
+        )}
+        {panes.length > 1 && <ResizeHandle side="split" />}
       </div>
     </section>
   );
