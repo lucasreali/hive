@@ -79,6 +79,8 @@ impl State {
         // never under the lock below.
         #[cfg(unix)]
         tokio::task::block_in_place(terminal::locale_env);
+        // A remote service's terminal keeps its last output (26.15).
+        let kept = self.link().keep.is_some();
         let opened = {
             let mut terminals = self.terminals.lock().await;
             match terminals.entry(channel) {
@@ -92,7 +94,7 @@ impl State {
                             let last = terminal.last_output.clone();
                             let session = terminal.session;
                             slot.insert(terminal);
-                            let output = terminal::Output::new(channel, frames);
+                            let output = terminal::Output::new(channel, frames, kept);
                             self.inputs().insert(channel, (input, output.clone()));
                             // Before the pump starts: a shell that exits at once removes it.
                             if let Some(worktree) = worktree.clone() {

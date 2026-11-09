@@ -16,7 +16,7 @@ use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::sync::mpsc;
 use tokio_util::codec::{FramedRead, FramedWrite};
 
-use super::State;
+use super::{Gone, State};
 use crate::VERSION;
 use crate::adapter::{self, Adapter, ClaudeCode};
 use crate::terminal::Input;
@@ -25,22 +25,32 @@ use crate::{changes, dirs, file, procs, table, table_edit, uninstall, worktree};
 /// Longest `hive badge` label, in characters.
 const MAX_BADGE: usize = 40;
 
+/// Longest `app_id` a `hello` may give (26.15), in bytes.
+const MAX_APP_ID: usize = 128;
+
+/// A client whose `hello` was welcomed.
+struct Client {
+    role: Role,
+    /// An app's link (26.15): how long its terminals are kept once it drops, and its id.
+    link: super::Link,
+}
+
 /// Serves one connection: a Unix socket's, or a named pipe instance's on Windows.
-pub(super) async fn connection<S>(stream: S, state: Arc<State>, app_gone: mpsc::Sender<()>)
+pub(super) async fn connection<S>(stream: S, state: Arc<State>, app_gone: mpsc::Sender<Gone>)
 where
     S: AsyncRead + AsyncWrite + Send + 'static,
 {
     let (read, write) = tokio::io::split(stream);
     let mut reader = FramedRead::new(read, FrameCodec);
     let mut writer = FramedWrite::new(write, FrameCodec);
-    let Some(role) = handshake(&mut reader, &mut writer, state.warning.clone()).await else {
+    let Some(client) = handshake(&mut reader, &mut writer, state.warning.clone()).await else {
         return;
     };
-    match role {
+    match client.role {
         Role::Hook => hook_connection(reader, writer, &state).await,
         Role::App => {
-            if app_connection(reader, writer, &state).await {
-                let _ = app_gone.send(()).await;
+            if let Some(gone) = app_connection(reader, writer, &state, client.link).await {
+                let _ = app_gone.send(gone).await;
             }
         }
     }
@@ -51,31 +61,49 @@ async fn handshake<R, W>(
     reader: &mut FramedRead<R, FrameCodec>,
     writer: &mut FramedWrite<W, FrameCodec>,
     warning: Option<String>,
-) -> Option<Role>
+) -> Option<Client>
 where
     R: AsyncRead + Unpin,
     W: AsyncWrite + Unpin,
 {
     let hello = reader.next().await?.ok()?.to_control();
-    let (reply, role) = match hello {
+    let (reply, client) = match hello {
         Ok(Control::Hello {
-            protocol,
-            version,
-            role,
-        }) if protocol == PROTOCOL_VERSION && version == VERSION => (
-            Control::Welcome {
-                version: VERSION.to_owned(),
-                distro: std::env::var("WSL_DISTRO_NAME").ok(),
-                warning,
-            },
-            Some(role),
-        ),
-        Ok(Control::Hello { .. }) => (
+            protocol, version, ..
+        }) if protocol != PROTOCOL_VERSION || version != VERSION => (
             Control::VersionMismatch {
                 protocol: PROTOCOL_VERSION,
                 version: VERSION.to_owned(),
             },
             None,
+        ),
+        Ok(Control::Hello {
+            app_id: Some(id), ..
+        }) if id.len() > MAX_APP_ID => (
+            Control::Error {
+                message: format!("an app_id is at most {MAX_APP_ID} bytes"),
+            },
+            None,
+        ),
+        Ok(Control::Hello {
+            role,
+            keep_secs,
+            app_id,
+            ..
+        }) => (
+            Control::Welcome {
+                version: VERSION.to_owned(),
+                distro: std::env::var("WSL_DISTRO_NAME").ok(),
+                warning,
+            },
+            Some(Client {
+                role,
+                link: super::Link {
+                    app_id,
+                    keep: keep_secs.map(super::keep_for),
+                    replaced: Default::default(),
+                },
+            }),
         ),
         _ => (
             Control::Error {
@@ -86,7 +114,7 @@ where
     };
     // A hook client may already be gone after sending its event; that is fine.
     let _ = writer.send(Frame::control(0, &reply)).await;
-    role
+    client
 }
 
 /// A hook connection carries exactly one event (or one `hive badge`, or `hive browser-mcp`'s
@@ -157,12 +185,24 @@ async fn hook_connection<R: AsyncRead + Unpin, W: AsyncWrite + Unpin>(
     }
 }
 
-/// Serves the app until it disconnects. Returns false if another app was already connected.
+/// How an app connection's frames ended.
+enum Ended {
+    /// The connection closed, or failed: a dropped link, or an app that quit without `bye`.
+    Dropped,
+    /// The app said `bye {end}`.
+    Bye { end: bool },
+    /// A new connection of the same app took over (26.15).
+    Replaced,
+}
+
+/// Serves the app until it disconnects; how that bears on the service's life. `None` when
+/// another app was already connected (refused), or a new connection of this app took over.
 async fn app_connection<R, W>(
     mut reader: FramedRead<R, FrameCodec>,
     mut writer: FramedWrite<W, FrameCodec>,
     state: &Arc<State>,
-) -> bool
+    link: super::Link,
+) -> Option<Gone>
 where
     R: AsyncRead + Unpin,
     W: AsyncWrite + Unpin + Send + 'static,
@@ -171,16 +211,29 @@ where
     // Unbounded, but each terminal's share is bounded by what the app has not acknowledged
     // ([`terminal::Output`]), so one terminal never makes another wait to queue.
     let (terminal_tx, terminal_rx) = mpsc::unbounded_channel();
-    {
+    let (keep, replaced) = (link.keep, link.replaced.clone());
+    let refused = {
         let mut app = state.app.lock().await;
-        if app.is_some() {
-            let message = Control::Error {
-                message: "another app is already connected".to_owned(),
-            };
-            let _ = writer.send(Frame::control(0, &message)).await;
-            return false;
+        let mut attached = state.link();
+        // Only the same app launch takes over a connection still open (a stale one after a
+        // silent drop, 26.15); anyone else is refused as before.
+        let same = link.app_id.is_some() && attached.app_id == link.app_id;
+        let refused = app.is_some() && !same;
+        if !refused {
+            if app.is_some() {
+                attached.replaced.notify_one();
+            }
+            *attached = link;
+            *app = Some(control_tx.clone());
         }
-        *app = Some(control_tx);
+        refused
+    };
+    if refused {
+        let message = Control::Error {
+            message: "another app is already connected".to_owned(),
+        };
+        let _ = writer.send(Frame::control(0, &message)).await;
+        return None;
     }
     *state.listed() = None;
     *state.scripted() = None;
@@ -195,13 +248,38 @@ where
             .await;
     }
     let writer = tokio::spawn(write_prioritized(writer, control_rx, terminal_rx));
-    while let Some(Ok(frame)) = reader.next().await {
-        app_frame(state, frame, &terminal_tx).await;
-    }
+    let ended = loop {
+        let frame = tokio::select! {
+            frame = reader.next() => frame,
+            () = replaced.notified() => break Ended::Replaced,
+        };
+        let Some(Ok(frame)) = frame else {
+            break Ended::Dropped;
+        };
+        if let Some(end) = app_frame(state, frame, &terminal_tx).await {
+            break Ended::Bye { end };
+        }
+    };
     writer.abort();
-    *state.app.lock().await = None;
+    if keep.is_some() {
+        // Its terminals write on into their rings, never waiting for this app (26.15).
+        for (_, output) in state.inputs().values() {
+            output.detach(&terminal_tx);
+        }
+    }
+    {
+        let mut app = state.app.lock().await;
+        if matches!(ended, Ended::Replaced) {
+            return None;
+        }
+        *app = None;
+        *state.link() = Default::default();
+    }
     state.watch_browser(None).await;
-    true
+    match (ended, keep) {
+        (Ended::Bye { end: true }, _) | (_, None) => Some(Gone::End),
+        (_, Some(keep)) => Some(Gone::Keep(keep)),
+    }
 }
 
 /// The app's uninstall choices; `app` is removed only when it is an app bundle.
@@ -220,18 +298,27 @@ async fn resync(state: &Arc<State>) {
     state.send_usage().await;
 }
 
-async fn app_frame(state: &Arc<State>, frame: Frame, output: &mpsc::UnboundedSender<Frame>) {
+/// Acts on one frame of the app's; `Some(end)` for its `bye {end}` (26.15), the last one.
+async fn app_frame(
+    state: &Arc<State>,
+    frame: Frame,
+    output: &mpsc::UnboundedSender<Frame>,
+) -> Option<bool> {
     // Hive is being uninstalled: nothing more is done for the app.
     if state.uninstalling().is_some() {
-        return;
+        return None;
     }
     let channel = frame.channel;
     let message = match frame.kind {
-        FrameType::Terminal => return state.input(channel, Input::Data(frame.payload)),
+        FrameType::Terminal => {
+            state.input(channel, Input::Data(frame.payload));
+            return None;
+        }
         // A data frame from the app is no request: refused as an unexpected message.
         FrameType::Control | FrameType::Data => frame.to_control(),
     };
     match message {
+        Ok(Control::Bye { end }) => return Some(end),
         Ok(Control::OpenTerminal {
             cwd,
             cols,
@@ -702,6 +789,7 @@ async fn app_frame(state: &Arc<State>, frame: Frame, output: &mpsc::UnboundedSen
             state.to_app(channel, &Control::Error { message }).await;
         }
     }
+    None
 }
 
 /// A space's environment whose Claude account (22.5) is one of the settings' accounts' folders
@@ -979,7 +1067,8 @@ mod tests {
             let state = state.clone();
             async move {
                 let reader = FramedRead::new(read, FrameCodec);
-                app_connection(reader, FramedWrite::new(write, FrameCodec), &state).await
+                let link = Default::default();
+                app_connection(reader, FramedWrite::new(write, FrameCodec), &state, link).await
             }
         });
         let (mine, theirs) = tokio::io::split(client);
@@ -1047,6 +1136,6 @@ mod tests {
         to_service.send(resync).await.unwrap();
         check(&controls(&mut frames, 7).await);
         drop((frames, to_service));
-        assert!(serving.await.unwrap());
+        assert_eq!(serving.await.unwrap(), Some(Gone::End));
     }
 }

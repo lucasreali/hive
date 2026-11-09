@@ -1,4 +1,5 @@
-//! `hive daemon`: the service. Lives exactly as long as the app connection.
+//! `hive daemon`: the service. Lives exactly as long as the app connection; a remote one
+//! (26.15: the app's `hello` gave `keep_secs`) for that long after it drops.
 //!
 //! Split by job (9.20): this module holds the service's `State`, its start and end, and
 //! the projects, health and files-panel work; `app` serves the connections (the app's
@@ -207,15 +208,33 @@ async fn accept(listener: &mut Listener) -> io::Result<UnixStream> {
     listener.accept().await.map(|(stream, _)| stream)
 }
 
-/// Serves until the app connection ends, a SIGTERM, or a failure: accepting, or keeping the
-/// lock and socket in place ([`Claim::keep`]). Ends the terminals whatever the reason.
+/// How an app connection ended, for the service's life.
+#[derive(Debug, PartialEq)]
+enum Gone {
+    /// The service ends with it (#18).
+    End,
+    /// Its terminals are kept this long (26.15): the service ends if no app comes back by then.
+    Keep(Duration),
+}
+
+/// The longest a remote service keeps its terminals without an app (Q3: 7 days).
+const MAX_KEEP: Duration = Duration::from_secs(7 * 24 * 3600);
+
+/// How long a connection's `keep_secs` keeps the terminals, at most [`MAX_KEEP`].
+fn keep_for(secs: u64) -> Duration {
+    Duration::from_secs(secs).min(MAX_KEEP)
+}
+
+/// Serves until the app connection ends (or, when it kept the terminals, until no app came
+/// back in time), a SIGTERM, or a failure: accepting, or keeping the lock and socket in place
+/// ([`Claim::keep`]). Ends the terminals whatever the reason.
 async fn serve(
     mut listener: Listener,
     mut hold: Claim,
     terminated: impl Future<Output = ()>,
     state: Arc<State>,
 ) -> io::Result<()> {
-    let (app_gone, mut app_gone_rx) = mpsc::channel::<()>(1);
+    let (app_gone, mut app_gone_rx) = mpsc::channel::<Gone>(1);
     let watcher = tokio::spawn(watch_terminals(
         state.clone(),
         procs::SystemScan::default(),
@@ -227,8 +246,17 @@ async fn serve(
     let logs = tokio::spawn(watch_sessions(state.clone(), session_watch::Watch::new()));
     let mut check = tokio::time::interval(CLAIM_CHECK);
     tokio::pin!(terminated);
+    // When the terminals kept after the app dropped end, unless an app is back by then.
+    let mut kept_until: Option<tokio::time::Instant> = None;
     let ended = async {
         loop {
+            let until = kept_until;
+            let deadline = async move {
+                match until {
+                    Some(at) => tokio::time::sleep_until(at).await,
+                    None => std::future::pending().await,
+                }
+            };
             tokio::select! {
                 accepted = accept(&mut listener) => {
                     tokio::spawn(connection(accepted?, state.clone(), app_gone.clone()));
@@ -236,7 +264,19 @@ async fn serve(
                 _ = check.tick() => if let Some(bound) = hold.keep()? {
                     listener = bound;
                 },
-                _ = app_gone_rx.recv() => return Ok(()),
+                gone = app_gone_rx.recv() => match gone {
+                    Some(Gone::Keep(keep)) => {
+                        kept_until = Some(tokio::time::Instant::now() + keep);
+                    }
+                    _ => return Ok(()),
+                },
+                () = deadline => {
+                    if state.app.lock().await.is_none() {
+                        return Ok(());
+                    }
+                    // An app came back meanwhile: it keeps them, until it drops in turn.
+                    kept_until = None;
+                }
                 () = state.ending.notified() => return Ok(()),
                 () = &mut terminated => return Ok(()),
             }
@@ -301,6 +341,8 @@ struct Watching {
 struct State {
     /// Control frames to the app connection's writer, while an app is connected.
     app: Mutex<Option<mpsc::UnboundedSender<Frame>>>,
+    /// What the connected app's `hello` asked for (26.15), changed with `app`.
+    link: std::sync::Mutex<Link>,
     /// Open terminals by channel. The channel number is also the `HIVE_TERMINAL_ID`.
     terminals: Mutex<HashMap<u32, Terminal>>,
     /// Each open terminal's input queue and output (for the app's acknowledgements), by channel.
@@ -381,6 +423,18 @@ struct State {
     browsers_dir: PathBuf,
 }
 
+/// The connected app's link (26.15): what its `hello` asked for.
+#[derive(Default)]
+struct Link {
+    /// The app launch's id, so a new connection of it takes over this one.
+    app_id: Option<String>,
+    /// How long the terminals are kept once it drops without `bye {end: true}`; `None`: they
+    /// end with it (#18).
+    keep: Option<Duration>,
+    /// Woken to close this connection: a new one of the same app took over.
+    replaced: Arc<tokio::sync::Notify>,
+}
+
 /// The sessions running in Hive's terminals when the app last closed.
 struct Restore {
     /// Where they are kept between runs.
@@ -401,6 +455,7 @@ impl State {
     ) -> Self {
         Self {
             app: Mutex::new(None),
+            link: Default::default(),
             terminals: Mutex::new(HashMap::new()),
             inputs: Default::default(),
             terminal_worktrees: Default::default(),
@@ -520,6 +575,12 @@ impl State {
     /// The folder every Claude account shares (21.9), beside the bin folder in Hive's data.
     fn shared_dir(&self) -> PathBuf {
         self.bin_dir.with_file_name(crate::shared::FOLDER)
+    }
+
+    fn link(&self) -> std::sync::MutexGuard<'_, Link> {
+        self.link
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
     fn sent(&self) -> std::sync::MutexGuard<'_, health::Sent> {
@@ -1396,6 +1457,15 @@ fn test_state_with(dir: &Path, power: Option<Box<dyn power::Power>>) -> Arc<Stat
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn terminals_are_kept_for_at_most_seven_days() {
+        assert_eq!(keep_for(90), Duration::from_secs(90));
+        let week = 7 * 24 * 3600;
+        assert_eq!(keep_for(week), Duration::from_secs(week));
+        assert_eq!(keep_for(week + 1), Duration::from_secs(week));
+        assert_eq!(keep_for(u64::MAX), Duration::from_secs(week));
+    }
 
     #[test]
     fn the_home_folder_and_hives_and_claudes_folders_are_protected() {

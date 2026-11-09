@@ -27,6 +27,7 @@ use tokio::sync::{mpsc, watch};
 use crate::locale;
 #[cfg(unix)]
 use crate::procs;
+use crate::ring::{RING, Ring};
 use crate::watch::Watch;
 #[cfg(windows)]
 pub use crate::windows::terminal::{Child, Pty, end_sessions, spawn};
@@ -90,30 +91,63 @@ pub const LOW_WATER: usize = 128 * 1024;
 /// has not acknowledged as written to its screen, [`HIGH_WATER`] plus one read, so a flooding
 /// terminal slows its own program down, never another terminal nor the service's memory.
 /// Clones share the count: the pump sends, the app's `ack` lowers it, without a lock.
+///
+/// A remote service's terminal (26.15) also keeps its last [`RING`] bytes, attached or not, and
+/// can be detached from a dropped app: its output then only goes into the ring, and its PTY is
+/// never paused, until an app attaches it again ([`Output::attach`], 26.16).
 #[derive(Clone)]
 pub struct Output {
     channel: u32,
-    frames: mpsc::UnboundedSender<Frame>,
+    sink: Arc<std::sync::Mutex<Sink>>,
     unacked: watch::Sender<usize>,
 }
 
+/// Where a terminal's output goes: the app's queue while one is attached, and the ring of a
+/// kept terminal. Its std lock is never held across an await (9.13).
+struct Sink {
+    app: Option<mpsc::UnboundedSender<Frame>>,
+    ring: Option<Ring>,
+}
+
 impl Output {
-    pub fn new(channel: u32, frames: mpsc::UnboundedSender<Frame>) -> Self {
+    /// The output of terminal `channel` to the app's `frames`; with a ring when `kept` (a
+    /// remote service's terminal, 26.15).
+    pub fn new(channel: u32, frames: mpsc::UnboundedSender<Frame>, kept: bool) -> Self {
+        let sink = Sink {
+            app: Some(frames),
+            ring: kept.then(|| Ring::new(RING)),
+        };
         Self {
             channel,
-            frames,
+            sink: Arc::new(std::sync::Mutex::new(sink)),
             unacked: watch::Sender::new(0),
         }
     }
 
+    fn sink(&self) -> std::sync::MutexGuard<'_, Sink> {
+        self.sink
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
     /// Queues `bytes` for the app; above [`HIGH_WATER`] unacknowledged, returns only once
-    /// under [`LOW_WATER`]. False when the app is gone.
+    /// under [`LOW_WATER`]. False when the app is gone and the terminal is not kept; a kept
+    /// one's output goes on into its ring.
     pub async fn send(&self, bytes: &[u8]) -> bool {
-        // Counted first: the app may acknowledge it as soon as it is queued.
-        self.unacked.send_modify(|n| *n += bytes.len());
-        let frame = Frame::terminal(self.channel, Bytes::copy_from_slice(bytes));
-        if self.frames.send(frame).is_err() {
-            return false;
+        {
+            let mut sink = self.sink();
+            if let Some(ring) = &mut sink.ring {
+                ring.push(bytes);
+            }
+            let Some(app) = &sink.app else {
+                return sink.ring.is_some();
+            };
+            // Counted first: the app may acknowledge it as soon as it is queued.
+            self.unacked.send_modify(|n| *n += bytes.len());
+            let frame = Frame::terminal(self.channel, Bytes::copy_from_slice(bytes));
+            if app.send(frame).is_err() {
+                return sink.ring.is_some();
+            }
         }
         if *self.unacked.borrow() > HIGH_WATER {
             // Never fails: `self` is a sender.
@@ -123,15 +157,45 @@ impl Output {
     }
 
     /// Queues a control message for the app on this terminal's channel, in order with its
-    /// output and without a lock (17.25: its progress).
+    /// output and without a lock (17.25: its progress); dropped while detached.
     pub fn control(&self, message: &hive_protocol::Control) {
-        let _ = self.frames.send(Frame::control(self.channel, message));
+        if let Some(app) = &self.sink().app {
+            let _ = app.send(Frame::control(self.channel, message));
+        }
     }
 
     /// The app wrote `bytes` of this terminal's output to its screen.
     pub fn ack(&self, bytes: u32) {
         let bytes = bytes as usize;
         self.unacked.send_modify(|n| *n = n.saturating_sub(bytes));
+    }
+
+    /// Stops sending to `frames`, the queue of an app connection that ended (26.15), unless the
+    /// output already goes to another one: from now on it only fills the ring, and a pump
+    /// waiting for that app's acknowledgements goes on.
+    pub fn detach(&self, frames: &mpsc::UnboundedSender<Frame>) {
+        let mut sink = self.sink();
+        if sink
+            .app
+            .as_ref()
+            .is_some_and(|app| app.same_channel(frames))
+        {
+            sink.app = None;
+            self.unacked.send_replace(0);
+        }
+    }
+
+    /// Sends to `frames` from now on, an app's that attached this terminal (26.16), with the
+    /// flow control of 9.19 starting afresh.
+    pub fn attach(&self, frames: mpsc::UnboundedSender<Frame>) {
+        self.sink().app = Some(frames);
+        self.unacked.send_replace(0);
+    }
+
+    /// What `read` makes of the ring of a kept terminal (its offsets and the bytes still held,
+    /// for a replay, 26.16); `None` for a terminal that is not kept.
+    pub fn kept<R>(&self, read: impl FnOnce(&Ring) -> R) -> Option<R> {
+        self.sink().ring.as_ref().map(read)
     }
 }
 
@@ -985,7 +1049,7 @@ mod tests {
     #[tokio::test]
     async fn output_pauses_above_the_high_water_and_resumes_under_the_low_water() {
         let (frames, mut queued) = mpsc::unbounded_channel();
-        let output = Output::new(7, frames);
+        let output = Output::new(7, frames, false);
         let app = output.clone();
         // Up to the high water mark, output flows.
         assert!(flows(output.send(&vec![b'y'; HIGH_WATER - 1])).await);
@@ -1021,7 +1085,70 @@ mod tests {
     async fn output_to_a_gone_app_fails() {
         let (frames, queued) = mpsc::unbounded_channel();
         drop(queued);
-        assert!(!Output::new(1, frames).send(b"x").await);
+        assert!(!Output::new(1, frames, false).send(b"x").await);
+    }
+
+    #[tokio::test]
+    async fn a_kept_output_keeps_its_last_mebibyte_and_never_waits_once_detached() {
+        let (frames, mut queued) = mpsc::unbounded_channel();
+        let output = Output::new(3, frames.clone(), true);
+        // Attached, the window applies as to any terminal, and the ring fills too.
+        assert!(flows(output.send(&vec![b'a'; HIGH_WATER])).await);
+        let send = output.send(b"b");
+        tokio::pin!(send);
+        assert!(waits(&mut send).await);
+        // Another connection's queue going does not detach it.
+        let (other, _other_queued) = mpsc::unbounded_channel();
+        output.detach(&other);
+        assert!(waits(&mut send).await);
+        // Its app going does: the waiting pump goes on, and nothing more is queued.
+        output.detach(&frames);
+        assert!(flows(send).await);
+        let sent = std::iter::from_fn(|| queued.try_recv().ok()).count();
+        assert_eq!(sent, 2);
+        output.control(&hive_protocol::Control::CloseTerminal);
+        // Detached, the program writes on past the window and the ring keeps the last 1 MiB.
+        for byte in *b"cde" {
+            assert!(flows(output.send(&vec![byte; RING])).await);
+        }
+        assert!(queued.try_recv().is_err());
+        let total = (HIGH_WATER + 1 + 3 * RING) as u64;
+        let span = output.kept(|ring| (ring.start(), ring.end()));
+        assert_eq!(span, Some((total - RING as u64, total)));
+        let held = output
+            .kept(|ring| ring.since(ring.start()))
+            .flatten()
+            .unwrap();
+        assert_eq!(held, vec![b'e'; RING]);
+        // Attached again (26.16), output reaches the new app, under the window afresh.
+        let (again, mut requeued) = mpsc::unbounded_channel();
+        output.attach(again);
+        assert!(flows(output.send(&vec![b'f'; HIGH_WATER])).await);
+        output.control(&hive_protocol::Control::CloseTerminal);
+        let send = output.send(b"g");
+        tokio::pin!(send);
+        assert!(waits(&mut send).await);
+        let kinds: Vec<_> = std::iter::from_fn(|| requeued.try_recv().ok())
+            .map(|frame| (frame.kind, frame.channel))
+            .collect();
+        let terminal = (hive_protocol::FrameType::Terminal, 3);
+        let control = (hive_protocol::FrameType::Control, 3);
+        assert_eq!(kinds, [terminal, control, terminal]);
+        // A kept terminal whose app's queue is gone writes on into its ring.
+        drop(requeued);
+        assert!(flows(output.send(b"h")).await);
+        assert_eq!(output.kept(Ring::end), Some(total + HIGH_WATER as u64 + 2));
+    }
+
+    #[tokio::test]
+    async fn an_output_that_is_not_kept_has_no_ring_and_stops_without_its_app() {
+        let (frames, queued) = mpsc::unbounded_channel();
+        let output = Output::new(1, frames.clone(), false);
+        assert_eq!(output.kept(Ring::end), None);
+        drop(queued);
+        assert!(!output.send(b"x").await);
+        output.detach(&frames);
+        assert!(!output.send(b"x").await);
     }
 
     #[test]

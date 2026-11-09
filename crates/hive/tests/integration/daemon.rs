@@ -112,6 +112,8 @@ async fn protocol_version_mismatch_is_refused() {
         protocol: PROTOCOL_VERSION + 1,
         version: hive::VERSION.into(),
         role: Role::App,
+        keep_secs: None,
+        app_id: None,
     };
     conn.send(0, hello).await;
     assert!(matches!(

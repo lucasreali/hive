@@ -39,6 +39,9 @@ mod groups;
 mod hook;
 #[cfg(unix)]
 #[cfg(test)]
+mod keep;
+#[cfg(unix)]
+#[cfg(test)]
 mod locale;
 #[cfg(unix)]
 #[cfg(test)]
