@@ -1,6 +1,5 @@
 # A tag `v*` (made by scripts/release.sh) publishes a GitHub release: the Windows installer
-# with the Linux `hive` and `hive.exe` (12.5.4) inside it, the macOS app (.dmg) with the macOS `hive` inside it, and
-# the static Linux `hive-linux-x86_64` and `hive-linux-aarch64` for remote hosts (26.13), their
+# with the Linux `hive` and `hive.exe` (12.5.4) inside it, the macOS app (.dmg) with the macOS `hive` inside it, their
 # updater signatures and `latest.json`, which the app's updater reads (TODO 4.17–4.19, 5.3).
 # Windows and macOS build in parallel; only `publish` touches the release, so `latest.json` is
 # written once, with every platform, in the shape tauri-action used to produce.
@@ -113,10 +112,13 @@ jobs:
           if-no-files-found: error
 
   # The remote Linux `hive` (TODO 26.13): static x86_64 and aarch64 builds, each run in an
-  # old-glibc container, for the macOS app to carry.
+  # old-glibc container, for the macOS app to carry: they ship only inside the .dmg, never as
+  # release assets. Built without the cargo cache, from a clean tree.
   linux-remote:
     needs: ci-green
     uses: ./.github/workflows/linux-remote.yml
+    with:
+      cache: false
 
   macos:
     needs: [ci-green, linux-remote]

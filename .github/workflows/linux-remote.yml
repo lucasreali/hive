@@ -10,6 +10,11 @@ name: linux-remote
 
 on:
   workflow_call:
+    inputs:
+      cache:
+        description: Restore and save the cargo cache (release.yml passes false).
+        type: boolean
+        default: true
 
 env:
   CARGO_TERM_COLOR: always
@@ -29,16 +34,22 @@ jobs:
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
       - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
         with:
           toolchain: stable
           targets: ${{ matrix.arch }}-unknown-linux-musl
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      # Not for a release: its binaries build from a clean tree.
+      - if: inputs.cache
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           key: musl
+      # Its prebuilt release only, never a fallback that builds or fetches it elsewhere.
       - uses: taiki-e/install-action@4cef1412cce204788f482e778a0b9187f9626a29 # v2.87.21
         with:
           tool: cargo-zigbuild@0.23.4
+          fallback: none
       # Zig from its release, checked against the digest ziglang.org publishes for it.
       - env:
           ARCH: ${{ matrix.arch }}
@@ -58,10 +69,12 @@ jobs:
           ls -l out
       - env:
           ARCH: ${{ matrix.arch }}
+        # Only the binary and the script go in, read-only. debian:10's image index, by digest.
         run: |
           version=$(jq -r .version src-tauri/tauri.conf.json)
-          docker run --rm -v "$PWD:/hive:ro" -w /hive debian:10 \
-            scripts/linux-smoke.sh "out/hive-linux-$ARCH" "$version"
+          docker run --rm -v "$PWD/out:/out:ro" -v "$PWD/scripts/linux-smoke.sh:/linux-smoke.sh:ro" \
+            debian:10@sha256:58ce6f1271ae1c8a2006ff7d3e54e9874d839f573d8009c20154ad0f2fb0a225 \
+            /linux-smoke.sh "/out/hive-linux-$ARCH" "$version"
       - uses: actions/upload-artifact@v6
         with:
           name: hive-linux-${{ matrix.arch }}
