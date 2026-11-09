@@ -1053,7 +1053,7 @@ mod tests {
     }
 
     #[test]
-    fn the_shown_pages_title_is_reported_and_a_title_alone_moves_no_titled() {
+    fn the_shown_pages_title_is_reported_and_a_title_alone_moves_no_page() {
         let mut screen = Screen::default();
         let created = titled("Target.targetCreated", "a", "https://a.test/", None);
         let out = screen.message(&created);
