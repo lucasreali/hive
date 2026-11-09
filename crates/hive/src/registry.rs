@@ -510,6 +510,23 @@ mod tests {
             .is_ok()
     }
 
+    /// Whether an event counted within [`NEVER`] is about anything but `echoes`: FSEvents may
+    /// report a path made a moment ago again, long after, as `files::tests::changes_but` says.
+    /// Each event until the first that counts is seen, as [`Registry::changed`] would.
+    async fn changes_but(registry: &mut Registry, echoes: &[PathBuf]) -> bool {
+        let fresh = async {
+            let mut fresh = false;
+            while !fresh {
+                let event = registry.events.recv().await;
+                let echo = matches!(&event, Some(Ok(event)) if !event.paths.is_empty()
+                    && event.paths.iter().all(|path| echoes.contains(path)));
+                // A closed queue counts too: the watcher is gone.
+                fresh = !echo & event.is_none_or(|event| registry.saw(event));
+            }
+        };
+        tokio::time::timeout(NEVER, fresh).await.is_ok()
+    }
+
     #[tokio::test]
     async fn a_repository_made_or_removed_in_a_group_is_seen_but_not_its_files() {
         let (_tmp, group) = group_of(2);
@@ -528,10 +545,15 @@ mod tests {
             std::fs::write(src.join(format!("{i}.rs")), "").unwrap();
         }
         std::fs::write(group.join("r0/.git/index"), "").unwrap();
-        assert!(!changes(&mut registry).await, "files written");
+        // Only what the group was made of may still come in (`changes_but`).
+        let made = ["", "r0", "r0/.git", "r1", "r1/.git"].map(|path| group.join(path));
+        assert!(!changes_but(&mut registry, &made).await, "files written");
         // A `git init` in a folder already there, and a `.git` removed.
         std::fs::create_dir(group.join("r1/sub")).unwrap();
-        assert!(!changes(&mut registry).await, "a folder in a repository");
+        assert!(
+            !changes_but(&mut registry, &made).await,
+            "a folder in a repository"
+        );
         std::fs::remove_dir(group.join("r1/.git")).unwrap();
         assert!(changes(&mut registry).await, ".git removed");
         std::fs::create_dir(group.join("r1/.git")).unwrap();
@@ -540,7 +562,7 @@ mod tests {
         std::fs::create_dir_all(group.join("new/.git")).unwrap();
         assert!(changes(&mut registry).await, "repository made");
         std::fs::remove_dir_all(group.join("new")).unwrap();
-        assert!(changes(&mut registry).await, "repository removed");
+        assert!(changes_but(&mut registry, &[]).await, "repository removed");
     }
 
     #[test]
