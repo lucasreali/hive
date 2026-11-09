@@ -1,5 +1,6 @@
-import type { ChangedFile, Changes, ServiceMessage, WorktreeFiles } from "./protocol";
+import type { ChangedFile, Changes, FileText, ServiceMessage, WorktreeFiles } from "./protocol";
 import {
+  type BrowserTab,
   type FileTab,
   type HiveState,
   inCurrentSpace,
@@ -8,6 +9,7 @@ import {
   owner,
   type Question,
   runsKey,
+  type Split,
   selected,
   spacePlace,
   type Terminal,
@@ -16,8 +18,27 @@ import {
   within,
   withNotice,
 } from "./store";
-import { dropFile, editFor, fileKey, fileTabState, opened, tabsPlace } from "./tabs";
-import { type EditBuffer, failed, isDirty, isFor, saved } from "./viewer/buffer";
+import {
+  browserKey,
+  dropFile,
+  editFor,
+  fileKey,
+  fileTabState,
+  opened,
+  paneBrowser,
+  splitOf,
+  tabsPlace,
+  withKey,
+} from "./tabs";
+import {
+  type EditBuffer,
+  failed,
+  fromDisk,
+  isDirty,
+  isFor,
+  saved,
+  startEdit,
+} from "./viewer/buffer";
 
 // How service data enters the store: `apply` stores what the service sent without deriving
 // anything (#37).
@@ -55,6 +76,13 @@ function patchDialog(s: HiveState, patch: Partial<WorktreeDialog>): Partial<Hive
   return { worktreeDialog: { ...s.worktreeDialog, ...patch } };
 }
 
+/** Keeps a pair unless one of its panes is a browser's tab no longer in `tabs`. */
+const liveBrowsers = (tabs: BrowserTab[]) => (split: Split) =>
+  [split.left, split.right].every((pane) => {
+    const browser = paneBrowser(pane);
+    return browser === null || tabs.some((t) => t.browser === browser);
+  });
+
 /**
  * What goes with a project the service stopped following (9.28): its rows and sessions, its
  * file tabs (their unsaved edits too: the question said so), the panel state of its worktrees,
@@ -87,7 +115,12 @@ function removedProject(s: HiveState, id: string): Partial<HiveState> {
     projects,
     selection: inside(s.selection) || gone.includes(s.selection ?? "") ? null : s.selection,
     collapsed: Object.fromEntries(Object.entries(s.collapsed).filter(([key]) => !own(key))),
-    tabOrder: (files.tabOrder ?? s.tabOrder).filter((key) => !own(key)),
+    tabOrder: (files.tabOrder ?? s.tabOrder).filter(
+      (key) => !own(key) && !places.some((p) => key === browserKey(p)),
+    ),
+    browserTabs: s.browserTabs.filter((t) => !inside(t.browser)),
+    splits: s.splits.filter(liveBrowsers(s.browserTabs.filter((t) => !inside(t.browser)))),
+    browserShown: inside(s.browserShown) ? null : s.browserShown,
     agentOrder: s.agentOrder.filter((a) => !gone.includes(a)),
     sessions: s.sessions?.filter((x) => x.project !== id) ?? null,
     worktreeFiles: inside(s.worktreeFiles?.path ?? null) ? null : s.worktreeFiles,
@@ -137,6 +170,13 @@ function reduce(s: HiveState, m: ServiceMessage): Partial<HiveState> {
       return { uninstallFailed: m.failed };
     case "notification_permission":
       return { notificationPermission: m.permission };
+    case "terminal_permissions":
+      return {
+        terminalPermissions: {
+          screenRecording: m.screen_recording,
+          accessibility: m.accessibility,
+        },
+      };
     case "update_ready":
       return { update: { version: m.version, installing: false } };
     case "translocated":
@@ -210,7 +250,26 @@ function reduce(s: HiveState, m: ServiceMessage): Partial<HiveState> {
       return { subagentWorktrees: m.worktrees };
     case "browser_status": {
       const { type: _, worktree, ...status } = m;
-      return { browsers: { ...s.browsers, [worktree]: status } };
+      const started = status.running && !s.browsers[worktree]?.running;
+      // Stopped, a closed tab may come back with the next browser; a new one shows no old frame.
+      const { [worktree]: __, ...closed } = s.browserClosed;
+      return {
+        browsers: { ...s.browsers, [worktree]: status },
+        browserClosed: status.running ? s.browserClosed : closed,
+        browserFrame: started && s.browserFrame?.worktree === worktree ? null : s.browserFrame,
+      };
+    }
+    case "browser_action": {
+      const { worktree, agent, agent_title: agentTitle, action } = m;
+      const opens =
+        !s.browserClosed[worktree] && !s.browserTabs.some((t) => t.browser === worktree);
+      return {
+        browserActions: { ...s.browserActions, [worktree]: { agent, agentTitle, action } },
+        browserPulses: { ...s.browserPulses, [agent]: (s.browserPulses[agent] ?? 0) + 1 },
+        // At the bar's end, without the focus.
+        browserTabs: opens ? [...s.browserTabs, { browser: worktree }] : s.browserTabs,
+        tabOrder: opens ? withKey(s.tabOrder, browserKey(worktree)) : s.tabOrder,
+      };
     }
     case "browser_frame":
       return { browserFrame: { worktree: m.worktree, data: m.data } };
@@ -241,7 +300,24 @@ function reduce(s: HiveState, m: ServiceMessage): Partial<HiveState> {
           ([key]) => !key.startsWith("worktree:") || ids.has(key.slice("worktree:".length)),
         ),
       );
-      return { projects, selection, terminals, collapsed };
+      // A browser's tab goes with its worktree.
+      const browserTabs = s.browserTabs.filter((t) => ids.has(t.browser));
+      const tabsGone = s.browserTabs.length > browserTabs.length;
+      return {
+        projects,
+        selection,
+        terminals,
+        collapsed,
+        browserTabs,
+        browserShown: ids.has(s.browserShown as string) ? s.browserShown : null,
+        splits: tabsGone ? s.splits.filter(liveBrowsers(browserTabs)) : s.splits,
+        // The same order when nothing went: it is kept in the app's storage on each change.
+        tabOrder: tabsGone
+          ? s.tabOrder.filter(
+              (k) => !k.startsWith("browser:") || ids.has(k.slice("browser:".length)),
+            )
+          : s.tabOrder,
+      };
     }
     case "project_added":
       // Only the add-project dialog asks for this, so it has done its job.
@@ -427,11 +503,18 @@ function reduce(s: HiveState, m: ServiceMessage): Partial<HiveState> {
     case "file": {
       // An equal answer keeps its object, so the view is not rebuilt (19.12).
       const { type: _, ...file } = m;
+      // A pair's file that is not the open one (25.1): its tab keeps it, as its pane shows it.
+      if (aside(s, file)) {
+        return { openFiles: s.openFiles.map((t) => (isFor(t, file) ? withText(t, file) : t)) };
+      }
       const kept = s.file && sameFields(s.file, file) ? s.file : file;
       return { file: kept, edit: editFor(s, file) };
     }
     case "table": {
       const { type: _, ...table } = m;
+      if (aside(s, table)) {
+        return { openFiles: s.openFiles.map((t) => (isFor(t, table) ? { ...t, table } : t)) };
+      }
       return { table };
     }
     case "file_saved":
@@ -466,6 +549,10 @@ function reduce(s: HiveState, m: ServiceMessage): Partial<HiveState> {
         openFile: moved(s.openFile),
         openFiles: s.openFiles.map((f) => ({ ...(moved(f) as FileTab), edit: moved(f.edit) })),
         tabOrder: s.tabOrder.map(rekey),
+        splits: s.splits.map(({ left, right }) => ({
+          left: typeof left === "string" ? rekey(left) : left,
+          right: typeof right === "string" ? rekey(right) : right,
+        })),
         file: moved(s.file),
         edit: moved(s.edit),
         collapsed: Object.fromEntries(Object.entries(s.collapsed).map(([k, v]) => [rekey(k), v])),
@@ -530,6 +617,7 @@ function reduce(s: HiveState, m: ServiceMessage): Partial<HiveState> {
         agentStates: {},
         subagentWorktrees: [],
         worktreeFiles: null,
+        browsers: {},
       };
     case "error":
     case "session_located":
@@ -559,6 +647,17 @@ function reduce(s: HiveState, m: ServiceMessage): Partial<HiveState> {
       m satisfies never;
       return {};
   }
+}
+
+/** Whether file `f` is a pane of a pair and not the open file (25.1). */
+const aside = (s: HiveState, f: OpenFile) =>
+  !!splitOf(s, fileKey(f)) && !(s.openFile && isFor(f, s.openFile));
+
+/** Tab `t` with the service's answer `file` for its pane; an equal one keeps its object (19.12). */
+function withText(t: FileTab, file: FileText): FileTab {
+  const text = t.text && sameFields(t.text, file) ? t.text : file;
+  if (!t.editing) return { ...t, text };
+  return { ...t, text, edit: t.edit ? fromDisk(t.edit, file) : startEdit(file) };
 }
 
 /** `change` applied to the edit buffers of file `f`: the open one's and its tab's. */

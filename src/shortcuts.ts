@@ -3,6 +3,7 @@ import { closeFile } from "./shell/RightPanel";
 import { findInTerminal } from "./shell/TerminalSearch";
 import {
   activateTab,
+  closeBrowserTab,
   type HiveState,
   leaveSpace,
   markdownShown,
@@ -14,12 +15,13 @@ import {
   setOpenFile,
   setRendered,
   setRightPanel,
+  showBrowserTab,
   spaceOf,
   spaceProjects,
   terminalShown,
   useHive,
 } from "./store";
-import { barItems, fileVisible } from "./tabs";
+import { barItems, fileVisible, shownBrowser, shownPane } from "./tabs";
 import {
   closeTerminal,
   interceptKeys,
@@ -81,6 +83,7 @@ export function goToAgent(agent: Agent): void {
     selection: agent.id,
     activeTab: tab?.id ?? s.activeTab,
     fileShown: tab ? false : s.fileShown,
+    browserShown: tab ? null : s.browserShown,
   });
 }
 
@@ -89,7 +92,9 @@ function shownItem(s: HiveState): number {
   return barItems(s).findIndex((t) =>
     "path" in t
       ? s.fileShown && s.openFile?.worktree === t.worktree && s.openFile.path === t.path
-      : !s.fileShown && t.id === s.activeTab,
+      : "browser" in t
+        ? shownBrowser(s) === t.browser
+        : terminalShown(s) && t.id === s.activeTab,
   );
 }
 
@@ -98,6 +103,7 @@ export function showBarItem(i: number): void {
   const item = barItems(useHive.getState())[i];
   if (!item) return;
   if ("path" in item) setOpenFile(item);
+  else if ("browser" in item) showBrowserTab(item.browser);
   else activateTab(item);
 }
 
@@ -111,7 +117,9 @@ export function cycleTab(step: 1 | -1): void {
 /** ⌘W: closes the tab shown, as its × does (a file with unsaved edits asks first). */
 export function closeActiveTab(): void {
   const s = useHive.getState();
-  if (s.fileShown && s.openFile && fileVisible(s)) closeFile(s.openFile);
+  const browser = shownBrowser(s);
+  if (browser !== null) closeBrowserTab(browser);
+  else if (s.fileShown && s.openFile && fileVisible(s)) closeFile(s.openFile);
   else if (!s.fileShown && s.activeTab !== null) closeTerminal(s.activeTab);
 }
 
@@ -186,7 +194,7 @@ export const COMMANDS: readonly Command[] = [
     id: "split-terminal",
     label: "Split terminal",
     keys: "Ctrl+Shift+D",
-    run: () => showOpenFailure(splitTerminal(useHive.getState().activeTab)),
+    run: () => showOpenFailure(splitTerminal(shownPane(useHive.getState()))),
   },
   {
     id: "toggle-panel",

@@ -111,11 +111,27 @@ fn activity(tool: &str, payload: &Value) -> String {
     clip(&text.unwrap_or_else(|| tool.to_owned()), MAX_ACTIVITY)
 }
 
-/// Control characters, and the format and separator characters that would make shown text
-/// invisible or reorder it (zero-width, bidi controls, line/paragraph separators, BOM).
+/// Control characters, and the format, separator and filler characters that would make shown text
+/// invisible or reorder it (zero-width, bidi controls, line/paragraph separators, BOM, soft hyphen,
+/// variation selectors, blank Hangul fillers, interlinear annotations, tags).
 pub fn invisible(c: char) -> bool {
     c.is_control()
-        || matches!(c, '\u{200B}'..='\u{200F}' | '\u{2028}'..='\u{202E}' | '\u{2060}'..='\u{206F}' | '\u{FEFF}')
+        || matches!(
+            c,
+            '\u{00AD}'
+                | '\u{034F}'
+                | '\u{061C}'
+                | '\u{180B}'..='\u{180F}'
+                | '\u{200B}'..='\u{200F}'
+                | '\u{2028}'..='\u{202E}'
+                | '\u{2060}'..='\u{206F}'
+                | '\u{3164}'
+                | '\u{FE00}'..='\u{FE0F}'
+                | '\u{FEFF}'
+                | '\u{FFA0}'
+                | '\u{FFF9}'..='\u{FFFB}'
+                | '\u{E0000}'..='\u{E007F}'
+        )
 }
 
 /// Untrusted text made fit to show: control and invisible characters dropped, trimmed, and cut at `max`
@@ -321,6 +337,31 @@ mod tests {
             clip("a\u{202E}b\u{2066}c\u{200F}\u{206F}\u{2060}", 5),
             "abc"
         );
+        // Each end of each range the shown text cannot hold, alone: nothing is left of it.
+        for c in [
+            '\u{00AD}',
+            '\u{034F}',
+            '\u{061C}',
+            '\u{180B}',
+            '\u{180F}',
+            '\u{3164}',
+            '\u{FE00}',
+            '\u{FE0F}',
+            '\u{FFA0}',
+            '\u{FFF9}',
+            '\u{FFFB}',
+            '\u{E0000}',
+            '\u{E007F}',
+        ] {
+            assert_eq!(clip(&format!("{c}{c}"), 5), "", "{:X}", c as u32);
+            assert_eq!(clip(&format!("a{c}b"), 5), "ab", "{:X}", c as u32);
+        }
+        // Their neighbours are text.
+        for c in [
+            '\u{00AE}', '\u{034E}', '\u{1810}', '\u{3165}', '\u{FE10}', '\u{FFA1}',
+        ] {
+            assert_eq!(clip(&c.to_string(), 5), c.to_string(), "{:X}", c as u32);
+        }
     }
 
     #[test]

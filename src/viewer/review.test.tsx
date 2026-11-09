@@ -102,8 +102,13 @@ test("sending pastes the review without Enter, shows the terminal and drops the 
   const id = await act(() => openTerminal(wt));
   await act(() => new Promise((resolve) => setTimeout(resolve, 10)));
   const other = { path: "b.ts", from: 1, to: 1, text: "kept" };
-  useHive.setState({ comments: { [wt]: [a, b], "/other": [other] }, fileShown: true });
+  useHive.setState({
+    comments: { [wt]: [a, b], "/other": [other] },
+    fileShown: true,
+    browserShown: "/elsewhere",
+  });
   sendReview();
+  expect(useHive.getState().browserShown).toBeNull();
   // Not in bracketed paste mode, xterm turns newlines into carriage returns, as for Ctrl+Shift+V.
   expect(write).toHaveBeenCalledWith(id, reviewText([a, b]).replace("\n", "\r"));
   expect(write).not.toHaveBeenCalledWith(id, expect.stringContaining("typo\r"));

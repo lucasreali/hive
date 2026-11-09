@@ -570,6 +570,7 @@ impl State {
         if let Some(reply) = reply {
             self.to_app(0, &reply).await;
         }
+        self.browsers_unfollowed().await;
     }
 
     /// Gives the worktrees of the projects in a reply their status (git, so on a blocking
@@ -1044,6 +1045,7 @@ impl State {
             }
         };
         self.refollow.notify_one();
+        self.browsers_unfollowed().await;
         self.to_app(0, &self.projects.spaces_message()).await;
         if let Err(err) = tokio::task::block_in_place(|| self.ports.forget(&worktrees)) {
             eprintln!("hive: warning: cannot free the ports of {id}: {err}");

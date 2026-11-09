@@ -24,6 +24,7 @@ workspace = true
 
 [dev-dependencies]
 tempfile = "3.27.0"
+tokio = { version = "1.53.1", features = ["test-util"] }
 
 [[bench]]
 name = "hook_latency"

@@ -116,11 +116,15 @@ jobs:
     # Apple Silicon only (#39). macos-26 since GitHub retired macos-14 (the human, 2026-11-05).
     runs-on: macos-26
     environment: release
-    # Signing (TODO 17.11, D17.1): ad-hoc, unless the `release` environment holds every Developer
-    # ID secret (README "Release"); then the app and its nested `hive` are signed with that identity
-    # under the hardened runtime, and Tauri notarizes and staples the app (App Store Connect API
-    # key). Each secret reaches only the steps that need it, and only after every dependency is
-    # built (`--no-bundle`), so no build script runs with them or with the unlocked keychain.
+    # Signing (TODO 17.11, 25.5, D17.1): with every Developer ID secret of the `release` environment
+    # (README "Releasing") the app and its nested `hive` are signed with that identity under the
+    # hardened runtime, and Tauri notarizes and staples the app (App Store Connect API key); else
+    # with Hive's self-signed certificate (the HIVE_CERTIFICATE* secrets), so macOS's grants survive
+    # updates; else ad-hoc, with a warning. Each secret reaches only the steps that need it, and only
+    # after every dependency is built (`--no-bundle`), so a build script that has exited never saw
+    # them or the unlocked keychain; a process one left running could still reach that keychain.
+    outputs:
+      signing: ${{ steps.signing.outputs.mode }}
     env:
       # A dSYM per release (D18.6): line tables in `hive.dSYM` and `hive-app.dSYM`, beside the
       # stripped binaries (`strip = true` runs after `dsymutil`), so crash reports can be read.
@@ -135,7 +139,8 @@ jobs:
         # Pinned: a newer bun counts comment-only lines as uncovered.
         with:
           bun-version-file: .bun-version
-      # "developer-id" with all six secrets, "adhoc" with none; a partial set fails.
+      # "developer-id" with all six Apple secrets, else "self-signed" with all three of the
+      # certificate, "adhoc" with none; a partial set fails.
       - id: signing
         env:
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
@@ -144,7 +149,16 @@ jobs:
           APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
           APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
           APPLE_API_KEY_P8: ${{ secrets.APPLE_API_KEY_P8 }}
-        run: echo "mode=$(scripts/macos-bundle.sh signing-mode)" | tee -a "$GITHUB_OUTPUT"
+          HIVE_CERTIFICATE: ${{ secrets.HIVE_CERTIFICATE }}
+          HIVE_CERTIFICATE_PASSWORD: ${{ secrets.HIVE_CERTIFICATE_PASSWORD }}
+          HIVE_CERTIFICATE_SHA1: ${{ secrets.HIVE_CERTIFICATE_SHA1 }}
+        # On its own line: a partial set must stop here, which a pipe's exit status would hide.
+        run: |
+          mode=$(scripts/macos-bundle.sh signing-mode)
+          echo "mode=$mode" | tee -a "$GITHUB_OUTPUT"
+      # The release does not stop: it stays as it was, and says what that costs.
+      - if: steps.signing.outputs.mode == 'adhoc'
+        run: echo "::warning title=Hive is signed ad-hoc::No signing certificate in the release environment, so every update loses what macOS allowed Hive (Screen Recording, Accessibility, folders). README, Signing with Hive's certificate."
       - run: |
           cargo build --release --locked -p hive
           mkdir -p src-tauri/resources
@@ -159,25 +173,18 @@ jobs:
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-      # The certificate in a keychain of this job only, and the API key in a file (Tauri reads a path).
+      # The certificate in a keychain of this job only.
+      - if: steps.signing.outputs.mode == 'developer-id' || steps.signing.outputs.mode == 'self-signed'
+        env:
+          SIGNING_CERTIFICATE: ${{ steps.signing.outputs.mode == 'developer-id' && secrets.APPLE_CERTIFICATE || secrets.HIVE_CERTIFICATE }}
+          SIGNING_CERTIFICATE_PASSWORD: ${{ steps.signing.outputs.mode == 'developer-id' && secrets.APPLE_CERTIFICATE_PASSWORD || secrets.HIVE_CERTIFICATE_PASSWORD }}
+        run: scripts/macos-bundle.sh import-certificate "$RUNNER_TEMP/signing.keychain-db"
+      # The API key in a file (Tauri reads a path).
       - if: steps.signing.outputs.mode == 'developer-id'
         env:
-          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
-          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
           APPLE_API_KEY_P8: ${{ secrets.APPLE_API_KEY_P8 }}
         run: |
           umask 077
-          keychain=$RUNNER_TEMP/signing.keychain-db
-          password=$(uuidgen)
-          printf '%s' "$APPLE_CERTIFICATE" | base64 --decode > "$RUNNER_TEMP/certificate.p12"
-          security create-keychain -p "$password" "$keychain"
-          security set-keychain-settings -lut 21600 "$keychain"
-          security unlock-keychain -p "$password" "$keychain"
-          security import "$RUNNER_TEMP/certificate.p12" -k "$keychain" -P "$APPLE_CERTIFICATE_PASSWORD" \
-            -T /usr/bin/codesign
-          rm -f "$RUNNER_TEMP/certificate.p12"
-          security set-key-partition-list -S apple-tool:,apple: -s -k "$password" "$keychain" > /dev/null
-          security list-keychains -d user -s "$keychain" $(security list-keychains -d user | tr -d '"')
           printf '%s\n' "$APPLE_API_KEY_P8" > "$RUNNER_TEMP/api-key.p8"
       # The nested `hive` with the app's identity (notarization needs every binary signed); Tauri
       # notarizes because the APPLE_API_* variables are set (the ad-hoc step above has none).
@@ -193,15 +200,35 @@ jobs:
           scripts/macos-bundle.sh sign-hive src-tauri/resources/hive
           bun tauri bundle --config src-tauri/tauri.release.macos.conf.json \
             --config "$(jq -cn --arg id "$APPLE_SIGNING_IDENTITY" '{bundle: {macOS: {signingIdentity: $id}}}')"
+      # The nested `hive` and the app with the certificate, by its SHA-1. No APPLE_* variable is
+      # set, so Tauri neither imports a certificate nor notarizes.
+      - if: steps.signing.outputs.mode == 'self-signed'
+        env:
+          HIVE_CERTIFICATE_SHA1: ${{ secrets.HIVE_CERTIFICATE_SHA1 }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: |
+          scripts/macos-bundle.sh sign-hive src-tauri/resources/hive
+          bun tauri bundle --config src-tauri/tauri.release.macos.conf.json \
+            --config "$(jq -cn --arg id "$HIVE_CERTIFICATE_SHA1" '{bundle: {macOS: {signingIdentity: $id}}}')"
       - if: always()
         run: |
           security delete-keychain "$RUNNER_TEMP/signing.keychain-db" 2>/dev/null || true
-          rm -f "$RUNNER_TEMP/certificate.p12" "$RUNNER_TEMP/api-key.p8"
+          rm -f "$RUNNER_TEMP/signing.keychain-db.p12" "$RUNNER_TEMP/api-key.p8"
       # codesign --verify --deep --strict, the nested `hive`'s signer, entitlements, Info.plist;
-      # with the Developer ID also `spctl -a` and the stapled ticket.
-      - run: |
-          scripts/macos-bundle.sh check target/release/bundle/macos/Hive.app \
-            ${{ steps.signing.outputs.mode == 'developer-id' && '--developer-id' || '' }}
+      # with the Developer ID also `spctl -a` and the stapled ticket; with the certificate also a
+      # designated requirement that names it.
+      - env:
+          MODE: ${{ steps.signing.outputs.mode }}
+          HIVE_CERTIFICATE_SHA1: ${{ secrets.HIVE_CERTIFICATE_SHA1 }}
+        run: |
+          case $MODE in
+            developer-id) identity=(--developer-id) ;;
+            self-signed) identity=(--self-signed "$HIVE_CERTIFICATE_SHA1") ;;
+            adhoc) identity=() ;;
+            *) echo "unknown signing mode: '$MODE'" >&2; exit 1 ;;
+          esac
+          scripts/macos-bundle.sh check target/release/bundle/macos/Hive.app "${identity[@]}"
       # Each dSYM's UUID is the shipped binary's (`dwarfdump --uuid`).
       - run: scripts/macos-bundle.sh dsyms target/release/bundle/macos/Hive.app target/release
       # The asset names tauri-action gave the updater tarball (`Hive_aarch64.app.tar.gz`); the
@@ -255,9 +282,17 @@ jobs:
           cat out/latest.json
           ls -l out
           echo "TAG=$tag" >> "$GITHUB_ENV"
+      # The first self-signed release says to allow Hive once more (25.5); every other has no notes.
+      - name: notes
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          MODE: ${{ needs.macos.outputs.signing }}
+        run: |
+          gh api --paginate "repos/${{ github.repository }}/releases" --jq '.[].body // empty' > earlier-notes
+          scripts/macos-bundle.sh release-notes "$MODE" < earlier-notes | tee notes.md
       # `gh release create` uploads every file before it publishes the release, so the
       # updater never sees a `latest.json` whose files are missing.
       - if: github.event_name == 'push'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh release create "$TAG" --verify-tag --title "Hive $TAG" --notes "" out/*
+        run: gh release create "$TAG" --verify-tag --title "Hive $TAG" --notes-file notes.md out/*
