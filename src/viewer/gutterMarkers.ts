@@ -11,7 +11,7 @@ export type MarkerKind = "added" | "modified" | "deleted";
 
 /** The ids of distinct lines: UTF-16 code units below the surrogates, which `diff` keeps paired. */
 const LINE_IDS = 0xd800;
-/** Changed lines the line diff compares exactly; past that it is coarser, never slower. */
+/** Lines added and removed (a rewritten one is both) it compares exactly; past that, coarser. */
 const LINE_SCAN_LIMIT = 2000;
 /** The limit `@codemirror/merge`'s own views diff characters with. */
 const CHAR_SCAN_LIMIT = 500;
@@ -26,19 +26,23 @@ const CHAR_SCAN_LIMIT = 500;
 export function lineDiff(a: string, b: string): readonly Change[] {
   const ids = new Map<string, string>();
   const encode = (text: string) => {
+    // Each line with its newline; what follows the last newline is a line only if it has text.
+    const parts = text.split("\n");
+    const tail = parts.pop() as string;
+    const lines = parts.map((part) => `${part}\n`);
+    if (tail) lines.push(tail);
     const starts = [0];
     const codes: string[] = [];
-    for (let at = 0; at < text.length; at = starts[starts.length - 1] as number) {
-      const end = text.indexOf("\n", at);
-      const to = end < 0 ? text.length : end + 1;
-      const line = text.slice(at, to);
+    let at = 0;
+    for (const line of lines) {
       let id = ids.get(line);
       if (id === undefined) {
         id = String.fromCharCode(ids.size % LINE_IDS);
         ids.set(line, id);
       }
       codes.push(id);
-      starts.push(to);
+      at += line.length;
+      starts.push(at);
     }
     return { starts, codes: codes.join("") };
   };

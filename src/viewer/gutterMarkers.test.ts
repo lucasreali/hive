@@ -136,7 +136,7 @@ const longLines = (lines: number, size: number, tag: string) =>
 test("a 250 KB file of 5 KB lines gets its exact markers, without a diff of its characters", () => {
   const before = longLines(50, 5000, "x");
   const after = [...before];
-  // A task ticked, four rewritten and two new: the characters' diff took 10 s on these (25.7).
+  // A task ticked, four rewritten and two new: the characters' diff takes 2-4 s on these (25.7).
   after[10] = (after[10] as string).replace("x10w5", "x10w5!");
   for (const i of [15, 25, 35, 45]) after[i] = longLines(1, 5000, `n${i}`)[0] as string;
   after.splice(30, 0, ...longLines(2, 5000, "new"));
@@ -153,8 +153,18 @@ test("a 250 KB file of 5 KB lines gets its exact markers, without a diff of its 
     { line: 38, kind: "modified" },
     { line: 48, kind: "modified" },
   ]);
-  // Far above what it takes (under 1 ms, so load cannot reach it), far below the characters' 10 s.
+  // Only a backstop, near the characters' 2-4 s; the line diff takes a few ms, so load cannot reach
+  // it. The next test is what tells the two apart.
   expect(performance.now() - started).toBeLessThan(2000);
+});
+
+test("the markers' chunks hold whole lines, not the changed characters", () => {
+  const [chunk] = Chunk.build(
+    toText("one\ntwo\nthree\n"),
+    toText("one\ntwO\nthree\n"),
+    MARKER_DIFF,
+  );
+  expect(chunk?.changes.map((c) => [c.fromA, c.toA, c.fromB, c.toB])).toEqual([[0, 4, 0, 4]]);
 });
 
 test("the editor's markers diff by lines, when built and when typed", () => {
@@ -185,9 +195,30 @@ test("more distinct lines than ids fall back to the characters, and stay right",
   const changed = [...lines];
   changed[20] = "line twenty";
   expect(marks(base, `${changed.join("\n")}\n`)).toEqual([{ line: 21, kind: "modified" }]);
+  // Line 4 becomes a line sharing its id: only the characters tell them apart.
+  const collision = [...lines];
+  collision[3] = lines[3 + 0xd800] as string;
+  expect(marks(base, `${collision.join("\n")}\n`)).toEqual([{ line: 4, kind: "modified" }]);
   // Exactly as many as there are ids, the new line among them, still goes by lines (whole-line
   // offsets).
   const fit = `${lines.slice(0, 0xd800 - 1).join("\n")}\n`;
   const at = fit.indexOf("line 20\n");
   expect(changes(fit, fit.replace("line 20\n", "line 2O\n"))).toEqual([[at, at + 8, at, at + 8]]);
+});
+
+test("the line diff is exact up to its limit, and one change past it", () => {
+  /** `count` lines with every other one rewritten: `count / 2` changes when exact. */
+  const alternate = (count: number) => {
+    const lines = Array.from({ length: count }, (_, i) => `line ${i}`);
+    const text = lines.map((line, i) => (i % 2 ? line : `${line} new`));
+    return [`${lines.join("\n")}\n`, `${text.join("\n")}\n`] as const;
+  };
+  expect(lineDiff(...alternate(2000))).toHaveLength(1000);
+  expect(lineDiff(...alternate(2500))).toHaveLength(1);
+});
+
+test("the fallback to the characters is limited too: far-apart rewrites become one change", () => {
+  const lines = Array.from({ length: 0xd800 + 10 }, (_, i) => `line ${i}`);
+  const text = lines.map((line, i) => (i >= 1000 && i % 10000 === 1000 ? "Z".repeat(300) : line));
+  expect(lineDiff(`${lines.join("\n")}\n`, `${text.join("\n")}\n`)).toHaveLength(1);
 });
