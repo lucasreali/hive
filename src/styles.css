@@ -681,6 +681,14 @@ label:has(> input[type="checkbox"]:disabled) {
   font-style: italic;
 }
 
+/* A page's title or address, the page's own text: cut when long, so its × stays in reach. */
+.tab-name[data-browser] {
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 /* A session's name, not a path: prose, cut when long. */
 .tab-name[data-agent] {
   max-width: 220px;

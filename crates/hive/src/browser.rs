@@ -51,7 +51,7 @@ const MAX_URL: usize = 2048;
 /// The longest page title shown, in characters.
 const MAX_TITLE: usize = 256;
 /// The longest text of a tool's input quoted in a caption, in characters.
-const MAX_QUOTE: usize = 120;
+pub(crate) const MAX_QUOTE: usize = 120;
 /// The longest caption of an action, in characters.
 const MAX_CAPTION: usize = 300;
 /// What the names of the `hive-browser` MCP server's tools start with, in hook payloads.
@@ -334,6 +334,12 @@ async fn connect(
 }
 
 impl Process {
+    /// A process for a test of what happens around it.
+    #[cfg(test)]
+    pub(crate) fn of(child: tokio::process::Child, profile: PathBuf) -> Self {
+        Self { child, profile }
+    }
+
     /// Ends the browser (SIGTERM to its group, SIGKILL after [`STOP_GRACE`]) and deletes its
     /// profile.
     pub async fn stop(mut self) {
@@ -1082,6 +1088,10 @@ mod tests {
         let out = screen.message(&titled(changed, "a", "https://a.test/", Some("Shop 2")));
         assert_eq!(out.events, []);
         assert_eq!(screen.pages[0].title, "Shop 2");
+        // Blank fillers are no title, so the tab falls back to the address.
+        let blank = titled(changed, "b", "https://b.test/", Some("\u{3164}\u{3164}"));
+        assert_eq!(screen.message(&blank).events, [Event::Title(None)]);
+        screen.message(&titled(changed, "b", "https://b.test/", Some("Other")));
         // An empty title is none; a long one is capped.
         let out = screen.message(&titled(changed, "b", "https://b.test/", Some("")));
         assert_eq!(out.events, [Event::Title(None)]);
@@ -1105,6 +1115,13 @@ mod tests {
         ));
         // A message with no id, before any picture is asked for, is no answer.
         assert_eq!(screen.message(&json!({})).events, []);
+        // Of two pages, the one shown: the last opened.
+        screen.message(&titled(
+            "Target.targetCreated",
+            "q",
+            "https://b.test/",
+            None,
+        ));
         let attach = screen.command(Command::Capture).cdp.remove(0);
         assert_eq!(attach["method"], "Target.attachToTarget");
         // Another answer while the attach is awaited is not it, and it is still awaited.
@@ -1113,7 +1130,7 @@ mod tests {
         assert_eq!((out.cdp, out.events), (vec![], vec![]));
         assert_eq!(
             attach["params"],
-            json!({ "targetId": "p", "flatten": true })
+            json!({ "targetId": "q", "flatten": true })
         );
         let attached = json!({ "id": attach["id"], "result": { "sessionId": "s" } });
         let shot = screen.message(&attached).cdp.remove(0);

@@ -384,8 +384,10 @@ function BrowserTab(props: { worktree: string; onMenu: (menu: TabMenu) => void; 
       onClose={() => closeBrowserTab(worktree)}
     >
       {pair?.side === "left" && <SquareSplitHorizontalIcon className="tab-split" {...ICON} />}
-      <GlobeIcon {...ICON} />
-      <span className="tab-name">{label}</span>
+      <GlobeIcon className="tab-globe" {...ICON} />
+      <span className="tab-name" data-browser>
+        {label}
+      </span>
     </TabItem>
   );
 }

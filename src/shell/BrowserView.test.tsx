@@ -1,12 +1,15 @@
 import { afterEach, expect, spyOn, test } from "bun:test";
+import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { App } from "../App";
+import type { Agent } from "../protocol";
 import { apply } from "../reduce";
-import { closeActiveTab, cycleTab, showBarItem } from "../shortcuts";
+import { closeActiveTab, cycleTab, goToAgent, showBarItem } from "../shortcuts";
 import {
   activateTab,
   addTab,
   closeBrowserTab,
+  focusPane,
   initialState,
   removeTab,
   select,
@@ -28,7 +31,7 @@ afterEach(() => {
 });
 
 const [shop] = MOCK_REPOS;
-const [main, login] = shop.worktrees;
+const [main, login, checkout] = shop.worktrees;
 const s = () => useHive.getState();
 
 /** The app with shop and fix-login selected. */
@@ -102,7 +105,7 @@ test("the tab: a globe, the page's title else its URL, its URL as the tooltip", 
   const tab = () => within(bar()).getByRole("tab");
   expect(tab().textContent).toBe("Browser");
   expect(tab().closest(".tab")?.getAttribute("title")).toBe("Browser");
-  expect(tab().querySelector("svg")).not.toBeNull();
+  expect(tab().querySelector(".tab-globe")).not.toBeNull();
   status(login.id, true, "https://a.test/");
   expect(tab().textContent).toBe("https://a.test/");
   status(login.id, true, "https://a.test/", null, "Shop");
@@ -130,6 +133,25 @@ test("the screencast runs only while the tab is shown and the window visible", (
   act(() => addTab(1, login.path));
   expect(watch.mock.calls.at(-1)).toEqual([null]);
   expect(shownBrowser(s())).toBeNull();
+  watch.mockRestore();
+});
+
+test("the screencast follows the worktree: another one selected, and between two worktrees' tabs", () => {
+  const watch = spyOn(transport, "watchBrowser").mockResolvedValue();
+  show();
+  action("clicked 'A'");
+  action("clicked 'B'", main.id, "s2");
+  act(() => showBrowserTab(login.id));
+  expect(watch.mock.calls).toEqual([[login.id]]);
+  // Another worktree selected, where its tab is all there is: that browser's, the first's stopped.
+  act(() => select(main.id));
+  expect(watch.mock.calls.slice(1)).toEqual([[null], [main.id]]);
+  // Back to the first's tab: that one's.
+  act(() => showBrowserTab(login.id));
+  expect(watch.mock.calls.slice(3)).toEqual([[null], [login.id]]);
+  // A worktree without a tab: none.
+  act(() => select(checkout.id));
+  expect(watch.mock.calls.slice(5)).toEqual([[null]]);
   watch.mockRestore();
 });
 
@@ -179,9 +201,31 @@ test('"Open in my browser" offers only a web page', () => {
   }
   status(login.id, true, "https://a.test/x");
   expect(open().disabled).toBe(false);
-  // Outside the app nothing opens, and it says so with the URL only.
+  // An address cut for showing is not the page's: it is not offered.
+  status(login.id, true, `https://a.test/${"x".repeat(2031)}…`);
+  expect(open().disabled).toBe(true);
+  // A URL with "…" inside is not cut.
+  status(login.id, true, "https://a.test/…/x");
+  expect(open().disabled).toBe(false);
+  status(login.id, true, "https://a.test/x");
+  // Outside the app nothing opens, and it says so.
   fireEvent.click(open());
-  expect(JSON.stringify(s().notices ?? s())).toContain("https://a.test/x");
+  expect(s().notices.map((n) => n.text)).toEqual([
+    "Only the Hive app opens links: https://a.test/x",
+  ]);
+  // In the app the system's opener gets that URL, and nothing else of the page.
+  const opened: unknown[] = [];
+  mockIPC((cmd, args) => {
+    opened.push([cmd, args]);
+  });
+  Object.assign(globalThis, { isTauri: true });
+  try {
+    fireEvent.click(open());
+    expect(opened).toEqual([["plugin:opener|open_url", { url: "https://a.test/x" }]]);
+  } finally {
+    Object.assign(globalThis, { isTauri: undefined });
+    clearMocks();
+  }
 });
 
 test("stopped, the tab stays with its frame, URL and caption; a new browser takes the same tab", () => {
@@ -515,4 +559,35 @@ test("a pair goes with its browser's tab, when its worktree or its project does"
   expect(s().splits).toEqual([{ left: 2, right: browserKey(main.id) }]);
   act(() => apply({ type: "project_removed", id: shop.id }));
   expect(s().splits).toEqual([]);
+});
+
+test("going to an agent, or focusing a terminal's pane, puts the terminal in front of the browser", () => {
+  show();
+  const key = browserKey(login.id);
+  act(() => {
+    addTab(1, login.path);
+    apply({
+      type: "agent_detected",
+      channel: 1,
+      id: "s1",
+      project: shop.id,
+      worktree: login.id,
+      cwd: login.path,
+    });
+  });
+  action("clicked 'A'");
+  act(() => showBrowserTab(login.id));
+  expect(shownBrowser(s())).toBe(login.id);
+  act(() => goToAgent(s().agents.s1 as Agent));
+  expect([s().browserShown, shownPane(s())]).toEqual([null, 1]);
+  // The browser beside its terminal, focused: a click in the terminal focuses that.
+  act(() => setSplit({ left: 1, right: key }));
+  expect(shownPane(s())).toBe(key);
+  act(() => focusPane(1));
+  expect([s().browserShown, shownPane(s()), shownPanes(s())]).toEqual([null, 1, [1, key]]);
+  // Going to an agent without a terminal changes nothing that shows.
+  act(() => showBrowserTab(login.id));
+  const elsewhere = { id: "x", project: null, worktree: null, cwd: null, terminal: 99 };
+  act(() => goToAgent(elsewhere as unknown as Agent));
+  expect(s().browserShown).toBe(login.id);
 });

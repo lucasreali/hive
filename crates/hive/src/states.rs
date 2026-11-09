@@ -1083,13 +1083,44 @@ mod tests {
     }
 
     #[test]
-    fn a_subagent_waiting_for_you_alone_leaves_the_globe() {
-        let now = Instant::now();
-        let mut agent = Agent::new(1, now, 0);
+    fn a_subagent_settling_leaves_the_globe_of_its_agent_still_in_its_turn() {
+        let start = Instant::now();
+        let mut agent = Agent::new(1, start, 0);
         let click = json!({"tool_name": "mcp__hive-browser__browser_click"});
-        agent.feed("s", &hook("PreToolUse", None, click), now);
-        agent.settle(|state| state == AgentState::Idle);
+        agent.feed("s", &hook("PreToolUse", None, click), start);
+        // The agent asks for a permission, its subagent works, then goes silent.
+        let asks = json!({"tool_name": "Bash"});
+        agent.feed("s", &hook("PermissionRequest", None, asks), start);
+        let work = json!({"tool_name": "Read"});
+        agent.feed("s", &hook("SubagentStart", Some("a"), json!({})), start);
+        agent.feed("s", &hook("PreToolUse", Some("a"), work), start);
+        assert_eq!(agent.subagents[0].state, Working);
+        agent.reconcile("s", SILENCE, start, start + SILENCE);
+        assert_eq!(agent.subagents[0].state, WaitingYou);
+        assert_eq!(agent.state, WaitingPermission);
         assert!(agent.browsing);
+    }
+
+    #[test]
+    fn silence_ends_the_globe_of_an_agent_that_stopped_saying_so() {
+        let start = Instant::now();
+        let mut agent = Agent::new(1, start, 0);
+        let click = json!({"tool_name": "mcp__hive-browser__browser_click"});
+        agent.feed("s", &hook("PreToolUse", None, click), start);
+        assert!(agent.browsing);
+        // Not silent long enough: it goes on.
+        let early = start + SILENCE - Duration::from_millis(1);
+        assert_eq!(agent.reconcile("s", SILENCE, start, early), None);
+        assert!(agent.browsing);
+        let sent = agent.reconcile("s", SILENCE, start, start + SILENCE);
+        assert!(matches!(
+            sent,
+            Some(Control::AgentState {
+                browsing: false,
+                ..
+            })
+        ));
+        assert!(!agent.browsing);
     }
 
     /// The alert of a message `apply` sent, and whether its state may be writing files.

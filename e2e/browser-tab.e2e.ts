@@ -33,6 +33,21 @@ async function agent(page: import("@playwright/test").Page) {
   ).toBeVisible();
 }
 
+/** Gives the shown browser a frame `width` pixels wide; that width. */
+const frameOf = (page: import("@playwright/test").Page, width: number) =>
+  page.evaluate(async (width) => {
+    const canvas = document.createElement("canvas");
+    canvas.width = width;
+    canvas.height = 100;
+    const data = canvas.toDataURL("image/jpeg").split(",")[1];
+    const reduce = "/src/reduce.ts";
+    const { apply } = await import(/* @vite-ignore */ reduce);
+    const store = "/src/store.ts";
+    const { useHive } = await import(/* @vite-ignore */ store);
+    apply({ type: "browser_frame", worktree: useHive.getState().browserShown, data });
+    return width;
+  }, width);
+
 const call = async (page: import("@playwright/test").Page, line: string) => {
   await page.locator(".xterm-helper-textarea").first().focus();
   await page.keyboard.type(`${line}\n`);
@@ -60,6 +75,10 @@ test("an agent's browser calls open the tab unfocused; the frame fits it; closed
   await expect(globe).toBeVisible();
   await globe.click();
   await expect(tab).toHaveAttribute("aria-selected", "true");
+  // Shown now, so the spy has recorded the screencast's start: its empty list above meant none.
+  await expect
+    .poll(async () => (await watched()).at(-1))
+    .toBe("/home/user/projects/shop/.claude/worktrees/fix-login");
   await expect(view.locator(".browser-caption")).toHaveText("Claude · clicked 'Learn more'");
   await expect(view.locator(".browser-url")).toHaveText("http://localhost:5173/");
   await expect(page.getByRole("button", { name: "Open in my browser" })).toBeEnabled();
@@ -141,8 +160,49 @@ test("the tab's menu shows it beside the agent's terminal, both in view", async 
   expect((left?.x as number) + (left?.width as number)).toBeLessThanOrEqual(
     (right?.x as number) + 1,
   );
-  // The frame fits its half.
+  // A frame wider than its half is scaled to fit it.
   const img = view.getByRole("img", { name: "The agent's browser" });
-  await expect(img).toBeVisible();
-  expect((await img.boundingBox())?.width as number).toBeLessThanOrEqual(right?.width as number);
+  const wide = await frameOf(page, Math.ceil((right?.width as number) * 2));
+  await expect.poll(() => img.evaluate((el: HTMLImageElement) => el.naturalWidth)).toBe(wide);
+  const shown = (await img.boundingBox())?.width as number;
+  expect(shown).toBeLessThanOrEqual(right?.width as number);
+  expect(shown).toBeLessThan(wide);
+});
+
+test("a very long address stays cut on its tab: its close button and the bar stay in reach", async ({
+  page,
+}) => {
+  await agent(page);
+  await call(page, "browser-call clicked 'Learn more'");
+  const tabs = page.getByRole("tablist", { name: "Open terminals and files" });
+  await expect(tabs.getByRole("tab", { name: "Mock shop" })).toBeVisible();
+  const long = `https://a.test/${"x".repeat(2031)}…`;
+  await page.evaluate(async (url) => {
+    const reduce = "/src/reduce.ts";
+    const { apply } = await import(/* @vite-ignore */ reduce);
+    const store = "/src/store.ts";
+    const { useHive } = await import(/* @vite-ignore */ store);
+    const { browserTabs } = useHive.getState();
+    apply({
+      type: "browser_status",
+      worktree: browserTabs[0].browser,
+      running: true,
+      url,
+      title: null,
+      error: null,
+    });
+  }, long);
+  const name = tabs.locator(".tab-name[data-browser]");
+  await expect(name).toHaveText(long);
+  expect((await name.boundingBox())?.width as number).toBeLessThanOrEqual(220);
+  // Its × and the "+" after it are inside the window, and the × still closes it.
+  const close = tabs.locator(".tab:has(.tab-name[data-browser]) .tab-close");
+  const width = page.viewportSize()?.width as number;
+  const box = await close.boundingBox();
+  expect((box?.x as number) + (box?.width as number)).toBeLessThanOrEqual(width);
+  const plus = await page.getByTitle("New terminal or file").boundingBox();
+  expect((plus?.x as number) + (plus?.width as number)).toBeLessThanOrEqual(width);
+  await close.hover();
+  await close.click();
+  await expect(name).toHaveCount(0);
 });

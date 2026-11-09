@@ -26,8 +26,9 @@ export function BrowserView(props: { worktree: string; side?: "left" | "right" }
     return () => cancelAnimationFrame(drawn);
   }, [frame]);
   const url = status?.url ?? null;
-  // Only a web page: the page chose where it went, and never a local file or an app's scheme.
-  const link = url && /^https?:/i.test(url) ? url : "";
+  // Only a web page: the page chose where it went, and never a local file or an app's scheme. An
+  // address cut for showing (the service's "…"; a browser's own URLs escape that) is not the page's.
+  const link = url && /^https?:/i.test(url) && !url.endsWith("…") ? url : "";
   return (
     <section
       className="browser"
