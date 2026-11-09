@@ -4,17 +4,20 @@ import { App } from "../App";
 import { apply } from "../reduce";
 import { closeActiveTab, cycleTab, showBarItem } from "../shortcuts";
 import {
+  activateTab,
   addTab,
   closeBrowserTab,
   initialState,
   removeTab,
   select,
   setOpenFile,
+  setSplit,
   setVisible,
+  showBesideAgent,
   showBrowserTab,
   useHive,
 } from "../store";
-import { barItems, shownBrowser } from "../tabs";
+import { barItems, browserKey, fileKey, shownBrowser, shownPane, shownPanes } from "../tabs";
 import { transport } from "../transport";
 import { agentStatus, MOCK_REPOS } from "../transport/mock";
 import { paletteCommands } from "./Palette";
@@ -386,4 +389,130 @@ test("another project's tab stays when one project goes", () => {
   act(() => apply({ type: "project_removed", id: shop.id }));
   expect(s().browserTabs).toHaveLength(1);
   expect(s().browserShown).toBe(api.worktrees[0]?.id as string);
+});
+
+test('"Show beside the agent" pairs the tab with its last action\'s agent, only when asked', () => {
+  show();
+  act(() => {
+    addTab(1, login.path);
+    addTab(2, login.path);
+    apply({
+      type: "agent_detected",
+      channel: 1,
+      id: "s1",
+      project: shop.id,
+      worktree: login.id,
+      cwd: login.path,
+    });
+    apply({
+      type: "agent_detected",
+      channel: 2,
+      id: "s2",
+      project: shop.id,
+      worktree: login.id,
+      cwd: login.path,
+    });
+  });
+  const key = browserKey(login.id);
+  status(login.id, true);
+  // A browser tool call never pairs by itself.
+  action("clicked 'A'");
+  expect(s().splits).toEqual([]);
+  action("clicked 'B'", login.id, "s2");
+  const menu = () => fireEvent.contextMenu(within(bar()).getByRole("tab", { name: "Browser" }));
+  const item = (name: string) => screen.getByRole("menuitem", { name }) as HTMLButtonElement;
+  menu();
+  expect(screen.queryByRole("menuitem", { name: "Unsplit" })).toBeNull();
+  expect(screen.queryByRole("menuitem", { name: "Swap sides" })).toBeNull();
+  fireEvent.click(item("Show beside the agent"));
+  // The agent of the last action, the second one; both show, the browser focused.
+  expect(s().splits).toEqual([{ left: 2, right: key }]);
+  expect(shownPanes(s())).toEqual([2, key]);
+  expect(shownPane(s())).toBe(key);
+  expect(view().getAttribute("data-pane")).toBe("right");
+  // Its screencast still needs the tab in view: the pair shown from the terminal keeps it.
+  act(() => activateTab({ id: 2, cwd: login.path }));
+  expect(shownPanes(s())).toEqual([2, key]);
+  expect(view()).toBeDefined();
+  // A click in the page focuses its pane.
+  fireEvent.pointerDown(view());
+  expect(shownPane(s())).toBe(key);
+  // Already beside it: nothing more to do; the partner's name is on the tab.
+  menu();
+  expect(item("Show beside the agent").disabled).toBe(true);
+  fireEvent.click(item("Swap sides"));
+  expect(s().splits).toEqual([{ left: key, right: 2 }]);
+  menu();
+  fireEvent.click(item("Unsplit"));
+  expect(s().splits).toEqual([]);
+  // The agent gone: no terminal to pair with.
+  act(() => apply({ type: "agent_removed", channel: 2, id: "s2" }));
+  menu();
+  expect(item("Show beside the agent").disabled).toBe(true);
+  fireEvent.click(item("Close browser"));
+  expect(s().browserTabs).toEqual([]);
+  // Asked with no terminal, nothing happens.
+  act(() => showBesideAgent(login.id));
+  expect(s().splits).toEqual([]);
+});
+
+test("in a pair, closing either side leaves the other shown", () => {
+  show();
+  act(() => {
+    addTab(1, login.path);
+    addTab(2, login.path);
+  });
+  const key = browserKey(login.id);
+  action("clicked 'A'");
+  const pair = () => act(() => setSplit({ left: 1, right: key }));
+  // The browser's tab closes: the terminal beside it shows, not the tab next to it in the bar.
+  pair();
+  act(() => closeBrowserTab(login.id));
+  expect(s().splits).toEqual([]);
+  expect([shownPanes(s()), s().activeTab]).toEqual([[1], 1]);
+  // The terminal closes while it has the focus: the browser beside it shows.
+  action("clicked 'B'");
+  act(() => showBrowserTab(login.id));
+  status(login.id, false);
+  action("clicked 'C'");
+  pair();
+  act(() => activateTab({ id: 1, cwd: login.path }));
+  act(() => removeTab(1));
+  expect(s().splits).toEqual([]);
+  expect(shownBrowser(s())).toBe(login.id);
+  // A file paired with it closing shows it too.
+  act(() => setOpenFile({ worktree: login.id, path: "a.ts" }));
+  act(() =>
+    setSplit(
+      { left: fileKey({ worktree: login.id, path: "a.ts" }), right: key },
+      fileKey({ worktree: login.id, path: "a.ts" }),
+    ),
+  );
+  act(() => setOpenFile(null));
+  expect(shownBrowser(s())).toBe(login.id);
+  // Focus on a tab that is neither: a pair of a terminal and a file key leaves it alone.
+  act(() => setSplit({ left: 2, right: key }, 2));
+  expect([shownPane(s()), shownBrowser(s())]).toEqual([2, null]);
+  act(() => setSplit({ left: 2, right: key }, "unknown"));
+  expect(shownPane(s())).toBe(2);
+});
+
+test("a pair goes with its browser's tab, when its worktree or its project does", () => {
+  show();
+  action("clicked 'A'", main.id, "s2");
+  action("clicked 'B'");
+  act(() => {
+    addTab(1, login.path);
+    addTab(2, main.path);
+    setSplit({ left: 1, right: browserKey(login.id) });
+  });
+  act(() => select(main.id));
+  act(() => setSplit({ left: 2, right: browserKey(main.id) }));
+  // The list unchanged: the pairs stay.
+  act(() => apply({ type: "projects", projects: [shop] }));
+  expect(s().splits).toHaveLength(2);
+  act(() => apply({ type: "projects", projects: [{ ...shop, worktrees: [main] }] }));
+  expect(s().splits).toEqual([{ left: 2, right: browserKey(main.id) }]);
+  act(() => apply({ type: "project_removed", id: shop.id }));
+  expect(s().splits).toEqual([]);
 });

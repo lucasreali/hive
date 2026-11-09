@@ -122,3 +122,27 @@ test("stopped, the tab stays with its page and says so; the panel has no Browser
   await expect(panel.getByRole("tab", { name: "Files" })).toBeVisible();
   await expect(panel.getByRole("tab", { name: "Browser" })).toHaveCount(0);
 });
+
+test("the tab's menu shows it beside the agent's terminal, both in view", async ({ page }) => {
+  await agent(page);
+  await call(page, "browser-call clicked 'Learn more'");
+  const tabs = page.getByRole("tablist", { name: "Open terminals and files" });
+  const tab = tabs.getByRole("tab", { name: "Mock shop" });
+  await expect(tab).toBeVisible();
+  // Never by itself.
+  const view = page.getByRole("region", { name: "Agent's browser" });
+  await expect(view).toHaveCount(0);
+  await tab.click({ button: "right" });
+  await page.getByRole("menuitem", { name: "Show beside the agent" }).click();
+  await expect(view).toBeVisible();
+  const terminal = page.locator(".terminal-host");
+  await expect(terminal).toBeVisible();
+  const [left, right] = [await terminal.boundingBox(), await view.boundingBox()];
+  expect((left?.x as number) + (left?.width as number)).toBeLessThanOrEqual(
+    (right?.x as number) + 1,
+  );
+  // The frame fits its half.
+  const img = view.getByRole("img", { name: "The agent's browser" });
+  await expect(img).toBeVisible();
+  expect((await img.boundingBox())?.width as number).toBeLessThanOrEqual(right?.width as number);
+});

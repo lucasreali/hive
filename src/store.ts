@@ -58,11 +58,17 @@ import {
   dropFile,
   droppable,
   editFor,
+  fileKey,
   fileVisible,
   kept,
   opened,
+  paneBrowser,
+  paneFile,
+  paneIdOf,
+  paneKey,
   shownBrowser,
   shownInstead,
+  shownPane,
   shownSplit,
   splitOf,
   tabsPlace,
@@ -135,6 +141,9 @@ export type FileTab = OpenFile & {
    * it switches between text and rendered, so the other view starts at the same place.
    */
   place?: number;
+  /** In a pair, while another file is the open one (25.1): its pane's last answers. */
+  text?: FileText | null;
+  table?: TableText | null;
 };
 
 /** A session's context menu, at the pointer. */
@@ -233,8 +242,13 @@ export const DEFAULT_SETTINGS: Settings = {
 export type Tab = { id: number; cwd: string };
 /** The tab of a worktree's agent's browser (25.2), at most one per worktree. */
 export type BrowserTab = { browser: string };
-/** Two terminals side by side (6.11, a pair: 20.5), left and right, both of one worktree. */
-export type Split = { left: number; right: number };
+/**
+ * A tab as a pane of a pair: a terminal by its id, any other tab by its key in the bar (a file's
+ * `fileKey`, 25.1; a browser's `browserKey`, 25.2).
+ */
+export type PaneId = number | string;
+/** Two tabs side by side (6.11, a pair: 20.5, any kind: 25.1), left and right, of one worktree. */
+export type Split = { left: PaneId; right: PaneId };
 
 export type Modal =
   | "new-worktree"
@@ -359,7 +373,7 @@ export type HiveState = {
   tabs: Tab[];
   activeTab: number | null;
   /**
-   * The pairs of split terminals (6.11, 20.5), a tab in one at most: showing either tab of a pair
+   * The pairs of split tabs (6.11, 20.5, 25.1), a tab in one at most: showing either tab of a pair
    * shows the pair, that tab the focused pane; a tab outside every pair shows alone.
    */
   splits: Split[];
@@ -886,6 +900,11 @@ export const pinFile = (f: OpenFile) =>
 export const setEditorNotice = (editorNotice: string | null) => useHive.setState({ editorNotice });
 export const setSelectedLines = (selectedLines: Lines | null) =>
   useHive.setState({ selectedLines });
+/** What tells the selection in the view of file `f`: only the open file's counts (25.1). */
+export const selectIn = (f: OpenFile) => (lines: Lines | null) => {
+  const { openFile } = useHive.getState();
+  if (!openFile || isFor(openFile, f)) setSelectedLines(lines);
+};
 /**
  * Selects a project, worktree or agent. The tab bar then shows that place's tabs: the shown
  * terminal stays when it is one of them, else the last of them is shown (none when it has
@@ -961,23 +980,44 @@ export const showBrowserTab = (worktree: string) =>
   });
 
 /**
+ * "Show beside the agent" (25.2): the terminal of the agent of `worktree`'s browser's last action,
+ * when it is still open.
+ */
+export function browserAgentTerminal(s: HiveState, worktree: string): number | null {
+  const agent = s.agents[s.browserActions[worktree]?.agent ?? ""];
+  return agent && s.tabs.some((t) => t.id === agent.terminal) ? agent.terminal : null;
+}
+
+/** Pairs `worktree`'s browser's tab with its last action's agent's terminal; never by itself. */
+export function showBesideAgent(worktree: string): void {
+  const terminal = browserAgentTerminal(useHive.getState(), worktree);
+  if (terminal !== null) setSplit({ left: terminal, right: browserKey(worktree) });
+}
+
+/**
  * Closes `worktree`'s browser's tab; when it was shown, the tab beside it shows instead. While
  * that browser runs, it does not come back by itself (25.2).
  */
 export const closeBrowserTab = (worktree: string) =>
   useHive.setState((s) => {
+    const key = browserKey(worktree);
     const items = barItems(s);
     const i = items.findIndex((t) => "browser" in t && t.browser === worktree);
     const rest = items.filter((_, j) => j !== i);
+    const split = splitOf(s, key);
+    const other = split && (split.left === key ? split.right : split.left);
     const closed = {
       browserTabs: s.browserTabs.filter((t) => t.browser !== worktree),
-      tabOrder: s.tabOrder.filter((k) => k !== browserKey(worktree)),
+      tabOrder: s.tabOrder.filter((k) => k !== key),
+      splits: s.splits.filter((p) => p !== split),
       browserClosed: s.browsers[worktree]?.running
         ? { ...s.browserClosed, [worktree]: true as const }
         : s.browserClosed,
     };
     if (shownBrowser(s) !== worktree) return closed;
-    const next = rest[Math.min(i, rest.length - 1)];
+    // The other pane of its pair, else the tab beside it.
+    const next =
+      other !== null ? rest.find((t) => paneIdOf(t) === other) : rest[Math.min(i, rest.length - 1)];
     return { ...closed, browserShown: null, ...shownInstead({ ...s, ...closed }, next) };
   });
 /**
@@ -992,7 +1032,8 @@ export const removeTab = (id: number) =>
     const rest = shown.filter((t) => t.id !== id);
     const split = splitOf(s, id);
     const other = split && (split.left === id ? split.right : split.left);
-    const next = other ?? rest[Math.min(i, rest.length - 1)]?.id ?? null;
+    const terminal = typeof other === "number" ? other : null;
+    const next = terminal ?? rest[Math.min(i, rest.length - 1)]?.id ?? null;
     const items = barItems(s);
     const at = items.findIndex((t) => "id" in t && t.id === id);
     const beside = items.filter((_, j) => j !== at)[Math.min(at, items.length - 2)];
@@ -1005,14 +1046,18 @@ export const removeTab = (id: number) =>
       activeTab: s.activeTab === id ? next : s.activeTab,
       splits: s.splits.filter((p) => p !== split),
     };
-    return s.activeTab === id && !other && terminalShown(s) && beside && !("id" in beside)
-      ? { ...removed, ...shownInstead({ ...s, ...removed }, beside) }
+    // What takes over from the terminal shown: the other pane of its pair, else the tab beside it.
+    const instead = other === null ? beside : items.find((t) => paneIdOf(t) === other);
+    return s.activeTab === id && terminalShown(s) && instead && !("id" in instead)
+      ? { ...removed, ...shownInstead({ ...s, ...removed }, instead) }
       : removed;
   });
 
 /**
  * Makes `left` and `right` a pair, shown side by side with `focus` focused: each leaves the pair
- * it was in, and the right tab moves next to the left one in the bar (20.5).
+ * it was in, and the right tab moves next to the left one in the bar (20.5). Any two tabs of a
+ * worktree (25.1), as `paneIdOf` names them; a preview tab is kept (11.1), so opening another file
+ * does not replace a pane.
  */
 export const setSplit = (split: Split, focus = split.right) =>
   useHive.setState((s) => {
@@ -1022,19 +1067,29 @@ export const setSplit = (split: Split, focus = split.right) =>
     const splits = [...rest, split];
     const keys = barItems(s).map((item) => barKey(s, item));
     const tabOrder = inPlaces(s, keys, paired({ ...s, splits }, keys));
-    return { splits, tabOrder, activeTab: focus, fileShown: false, browserShown: null };
+    const openFiles = s.openFiles.map((f) =>
+      ids.includes(fileKey(f)) ? { ...f, preview: false } : f,
+    );
+    const pair = { splits, tabOrder, openFiles };
+    const file = paneFile({ ...s, ...pair }, focus);
+    if (file) return { ...pair, ...opened({ ...s, ...pair }, file, false) };
+    const browser = paneBrowser(focus);
+    if (browser !== null) return { ...pair, browserShown: browser, fileShown: false };
+    return typeof focus === "number"
+      ? { ...pair, activeTab: focus, fileShown: false, browserShown: null }
+      : pair;
   });
 
 /** Ends the pair tab `id` is in; the other tab stays, alone. */
-export const unsplit = (id: number) =>
+export const unsplit = (id: PaneId) =>
   useHive.setState((s) => ({ splits: s.splits.filter((p) => p.left !== id && p.right !== id) }));
 
 /** Swaps the panes of tab `id`'s pair; its focused pane stays focused (else `id` is). */
-export function swapSides(id: number): void {
+export function swapSides(id: PaneId): void {
   const s = useHive.getState();
   const split = splitOf(s, id);
   if (!split) return;
-  const focus = split === shownSplit(s) ? (s.activeTab as number) : id;
+  const focus = split === shownSplit(s) ? (shownPane(s) as PaneId) : id;
   setSplit({ left: split.right, right: split.left }, focus);
 }
 
@@ -1042,7 +1097,7 @@ export function swapSides(id: number): void {
  * Puts tab `by` in tab `id`'s pane, focused: `id` stays in the bar alone, `by` leaves its own
  * pair; `by` already the other pane swaps the sides (20.5).
  */
-export function replacePane(id: number, by: number): void {
+export function replacePane(id: PaneId, by: PaneId): void {
   const split = splitOf(useHive.getState(), id);
   if (!split || by === id) return;
   if (by === split.left || by === split.right) swapSides(id);
@@ -1054,22 +1109,18 @@ export function replacePane(id: number, by: number): void {
 }
 
 /**
- * Bar tab `key` dropped on the terminals shown, on its `side` (20.5): onto a pane it takes that
- * pane; onto a terminal alone it makes a pair with it, on that side. Files and other worktrees'
- * tabs do nothing.
+ * Bar tab `key` dropped on the panes shown, on its `side` (20.5, 25.1): onto a pane it takes that
+ * pane; onto a tab alone it makes a pair with it, on that side. Other worktrees' tabs do nothing.
  */
 export function dropOnPane(key: string, side: "left" | "right"): void {
   const s = useHive.getState();
-  const tab = droppable(s, key);
-  if (!tab) return;
+  const pane = droppable(s, key);
+  if (pane === null) return;
   const split = shownSplit(s);
-  const shown = s.activeTab as number;
-  if (split) replacePane(split[side], tab.id);
-  else if (tab.id !== shown)
-    setSplit(
-      side === "left" ? { left: tab.id, right: shown } : { left: shown, right: tab.id },
-      tab.id,
-    );
+  const shown = shownPane(s) as PaneId;
+  if (split) replacePane(split[side], pane);
+  else if (pane !== shown)
+    setSplit(side === "left" ? { left: pane, right: shown } : { left: shown, right: pane }, pane);
 }
 
 /** Opens the search bar over the terminal shown (its active tab), when one is. */
@@ -1087,8 +1138,21 @@ export const terminalShown = (s: HiveState) =>
 export const focusPane = (id: number) =>
   useHive.setState((s) => {
     const split = shownSplit(s);
-    return split && (split.left === id || split.right === id) ? { activeTab: id } : {};
+    return split && (split.left === id || split.right === id)
+      ? { activeTab: id, fileShown: false, browserShown: null }
+      : {};
   });
+
+/**
+ * A click or the keyboard's focus in the pane of file `f` (25.1) focuses it: it becomes the open
+ * file, so the store's edit buffer, Save and the keys act on it.
+ */
+export const focusFilePane = (f: OpenFile) =>
+  useHive.setState((s) =>
+    s.fileShown && s.openFile && isFor(f, s.openFile)
+      ? {}
+      : { ...opened(s, f, false), selectedLines: null },
+  );
 
 /**
  * Moves the bar's tab `id` next to its tab `target` (after it when `after`), both `barKey`s:
@@ -1119,9 +1183,8 @@ function inPlaces(s: HiveState, keys: string[], moved: string[]): string[] {
  * the left one, except when it is the one `dragged`, which the left one then follows.
  */
 function paired(s: HiveState, keys: string[], dragged?: string): string[] {
-  const key = (id: number) => barKey(s, { id, cwd: "" });
   return s.splits.reduce((list, { left, right }) => {
-    const [l, r] = [key(left), key(right)];
+    const [l, r] = [paneKey(s, left), paneKey(s, right)];
     return r === dragged ? moveNextTo(list, l, r, false) : moveNextTo(list, r, l, true);
   }, keys);
 }

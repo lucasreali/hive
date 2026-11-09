@@ -628,10 +628,15 @@ test("a paired tab's menu replaces its pane with another tab of the worktree, or
   expect(replace.getAttribute("aria-expanded")).toBe("false");
   fireEvent.keyDown(replace, { key: "ArrowDown" });
   fireEvent.keyDown(replace, { key: "ArrowRight" });
-  // Its submenu: the worktree's terminals in no other pane of this pair, the first focused.
+  // Its submenu: the worktree's other tabs, those of this pair left out, the first focused.
   const sub = screen.getByRole("menu", { name: "Replace with" });
   const others = within(sub).getAllByRole("menuitem");
-  expect(others.map((i) => i.textContent)).toEqual(["fix-login", "fix-login", "fix-login"]);
+  // Of the same name, they say their place in the bar (25.1).
+  expect(others.map((i) => i.textContent)).toEqual([
+    "fix-login (tab 1)",
+    "fix-login (tab 2)",
+    "fix-login (tab 5)",
+  ]);
   expect(document.activeElement).toBe(others[0] as HTMLElement);
   fireEvent.click(replace);
   expect(screen.queryByRole("menu", { name: "Replace with" })).toBeNull();
@@ -685,7 +690,8 @@ test("the submenu opens on the menu's left when the window has no room on its ri
 test("a tab dragged onto the terminals highlights the pane it would take and takes it (20.5)", () => {
   const { boxes } = twoPairs();
   const host = document.querySelector(".terminal-host") as HTMLElement;
-  spyOn(host, "getBoundingClientRect").mockReturnValue({ left: 0, width: 200 } as DOMRect);
+  const body = host.parentElement as HTMLElement;
+  spyOn(body, "getBoundingClientRect").mockReturnValue({ left: 0, width: 200 } as DOMRect);
   const data = { setData() {}, effectAllowed: "", dropEffect: "" };
   const drag = (type: "dragStart" | "dragOver" | "drop" | "dragLeave", el: HTMLElement, x = 0) => {
     const event = createEvent[type](el);

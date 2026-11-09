@@ -1,5 +1,5 @@
 import { useEffect } from "react";
-import { useHive } from "../store";
+import { showBrowserTab, useHive } from "../store";
 import { transport } from "../transport";
 import { openLink } from "./Markdown";
 
@@ -9,7 +9,8 @@ import { openLink } from "./Markdown";
  * width. Its screencast runs only while the tab is shown and the window visible; each frame is
  * acknowledged once drawn, so the next comes. Stopped, it stays with what it last showed.
  */
-export function BrowserView({ worktree }: { worktree: string }) {
+export function BrowserView(props: { worktree: string; side?: "left" | "right" }) {
+  const { worktree, side } = props;
   const visible = useHive((s) => s.visible);
   const status = useHive((s) => s.browsers[worktree]);
   const action = useHive((s) => s.browserActions[worktree]);
@@ -28,7 +29,12 @@ export function BrowserView({ worktree }: { worktree: string }) {
   // Only a web page: the page chose where it went, and never a local file or an app's scheme.
   const link = url && /^https?:/i.test(url) ? url : "";
   return (
-    <section className="browser" aria-label="Agent's browser">
+    <section
+      className="browser"
+      aria-label="Agent's browser"
+      data-pane={side}
+      onPointerDown={() => showBrowserTab(worktree)}
+    >
       <div className="browser-bar">
         <span className="browser-url" title={url ?? undefined}>
           {url ?? "No page"}

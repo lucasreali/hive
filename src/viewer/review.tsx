@@ -142,8 +142,8 @@ export function ReviewList({ worktree }: { worktree: string }) {
 }
 
 /** The file view header's "Comment" button. */
-export function CommentButton() {
-  const why = useHive((s) => (s.selectedLines ? null : "Select lines to comment on them"));
+export function CommentButton({ live = true }: { live?: boolean }) {
+  const why = useHive((s) => (live && s.selectedLines ? null : "Select lines to comment on them"));
   return (
     <button
       type="button"

@@ -835,13 +835,15 @@ label:has(> input[type="checkbox"]:disabled) {
 /* 17.26: in a split, the pane whose agent is pending on a dialog (🟡) or an error (🔴) is
    outlined in its state's colour. An outline, so the terminal keeps its size; it stays clear of
    the divider's line, 6px away. */
-.terminal-host[data-split] > .terminal-pane[data-attention] {
+.terminal-host[data-split] > .terminal-pane[data-attention],
+.terminal-host[data-half] > .terminal-pane[data-attention] {
   outline: 2px solid var(--state-permission);
   outline-offset: 2px;
   border-radius: var(--radius-md);
 }
 
-.terminal-host[data-split] > .terminal-pane[data-attention="error"] {
+.terminal-host[data-split] > .terminal-pane[data-attention="error"],
+.terminal-host[data-half] > .terminal-pane[data-attention="error"] {
   outline-color: var(--state-error);
 }
 
@@ -849,6 +851,23 @@ label:has(> input[type="checkbox"]:disabled) {
   order: 1;
   flex: 1 1 0;
   min-width: 0;
+}
+
+/* A file in a pair (25.1): each side of the divider at --split, a terminal's host too. */
+.file-view[data-pane="left"],
+.browser[data-pane="left"],
+.terminal-host[data-half="left"] {
+  right: calc((1 - var(--split)) * 100%);
+}
+
+.file-view[data-pane="right"],
+.browser[data-pane="right"],
+.terminal-host[data-half="right"] {
+  left: calc(var(--split) * 100%);
+}
+
+.file-view:focus {
+  outline: none;
 }
 
 /* Right panel */
@@ -4738,11 +4757,11 @@ button.link:hover {
 
 /* The agent's browser's tab (25.2): its address, the last action, then the page, fit to its width. */
 .browser {
-  flex: 1 1 0;
-  min-width: 0;
-  min-height: 0;
+  position: absolute;
+  inset: 0;
   display: flex;
   flex-direction: column;
+  background: var(--bg);
 }
 
 .browser-bar {

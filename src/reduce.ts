@@ -1,5 +1,6 @@
-import type { ChangedFile, Changes, ServiceMessage, WorktreeFiles } from "./protocol";
+import type { ChangedFile, Changes, FileText, ServiceMessage, WorktreeFiles } from "./protocol";
 import {
+  type BrowserTab,
   type FileTab,
   type HiveState,
   inCurrentSpace,
@@ -8,6 +9,7 @@ import {
   owner,
   type Question,
   runsKey,
+  type Split,
   selected,
   spacePlace,
   type Terminal,
@@ -23,10 +25,20 @@ import {
   fileKey,
   fileTabState,
   opened,
+  paneBrowser,
+  splitOf,
   tabsPlace,
   withKey,
 } from "./tabs";
-import { type EditBuffer, failed, isDirty, isFor, saved } from "./viewer/buffer";
+import {
+  type EditBuffer,
+  failed,
+  fromDisk,
+  isDirty,
+  isFor,
+  saved,
+  startEdit,
+} from "./viewer/buffer";
 
 // How service data enters the store: `apply` stores what the service sent without deriving
 // anything (#37).
@@ -64,6 +76,13 @@ function patchDialog(s: HiveState, patch: Partial<WorktreeDialog>): Partial<Hive
   return { worktreeDialog: { ...s.worktreeDialog, ...patch } };
 }
 
+/** Keeps a pair unless one of its panes is a browser's tab no longer in `tabs`. */
+const liveBrowsers = (tabs: BrowserTab[]) => (split: Split) =>
+  [split.left, split.right].every((pane) => {
+    const browser = paneBrowser(pane);
+    return browser === null || tabs.some((t) => t.browser === browser);
+  });
+
 /**
  * What goes with a project the service stopped following (9.28): its rows and sessions, its
  * file tabs (their unsaved edits too: the question said so), the panel state of its worktrees,
@@ -100,6 +119,7 @@ function removedProject(s: HiveState, id: string): Partial<HiveState> {
       (key) => !own(key) && !places.some((p) => key === browserKey(p)),
     ),
     browserTabs: s.browserTabs.filter((t) => !inside(t.browser)),
+    splits: s.splits.filter(liveBrowsers(s.browserTabs.filter((t) => !inside(t.browser)))),
     browserShown: inside(s.browserShown) ? null : s.browserShown,
     agentOrder: s.agentOrder.filter((a) => !gone.includes(a)),
     sessions: s.sessions?.filter((x) => x.project !== id) ?? null,
@@ -283,6 +303,7 @@ function reduce(s: HiveState, m: ServiceMessage): Partial<HiveState> {
         collapsed,
         browserTabs,
         browserShown: ids.has(s.browserShown as string) ? s.browserShown : null,
+        splits: tabsGone ? s.splits.filter(liveBrowsers(browserTabs)) : s.splits,
         // The same order when nothing went: it is kept in the app's storage on each change.
         tabOrder: tabsGone
           ? s.tabOrder.filter(
@@ -475,11 +496,18 @@ function reduce(s: HiveState, m: ServiceMessage): Partial<HiveState> {
     case "file": {
       // An equal answer keeps its object, so the view is not rebuilt (19.12).
       const { type: _, ...file } = m;
+      // A pair's file that is not the open one (25.1): its tab keeps it, as its pane shows it.
+      if (aside(s, file)) {
+        return { openFiles: s.openFiles.map((t) => (isFor(t, file) ? withText(t, file) : t)) };
+      }
       const kept = s.file && sameFields(s.file, file) ? s.file : file;
       return { file: kept, edit: editFor(s, file) };
     }
     case "table": {
       const { type: _, ...table } = m;
+      if (aside(s, table)) {
+        return { openFiles: s.openFiles.map((t) => (isFor(t, table) ? { ...t, table } : t)) };
+      }
       return { table };
     }
     case "file_saved":
@@ -514,6 +542,10 @@ function reduce(s: HiveState, m: ServiceMessage): Partial<HiveState> {
         openFile: moved(s.openFile),
         openFiles: s.openFiles.map((f) => ({ ...(moved(f) as FileTab), edit: moved(f.edit) })),
         tabOrder: s.tabOrder.map(rekey),
+        splits: s.splits.map(({ left, right }) => ({
+          left: typeof left === "string" ? rekey(left) : left,
+          right: typeof right === "string" ? rekey(right) : right,
+        })),
         file: moved(s.file),
         edit: moved(s.edit),
         collapsed: Object.fromEntries(Object.entries(s.collapsed).map(([k, v]) => [rekey(k), v])),
@@ -608,6 +640,17 @@ function reduce(s: HiveState, m: ServiceMessage): Partial<HiveState> {
       m satisfies never;
       return {};
   }
+}
+
+/** Whether file `f` is a pane of a pair and not the open file (25.1). */
+const aside = (s: HiveState, f: OpenFile) =>
+  !!splitOf(s, fileKey(f)) && !(s.openFile && isFor(f, s.openFile));
+
+/** Tab `t` with the service's answer `file` for its pane; an equal one keeps its object (19.12). */
+function withText(t: FileTab, file: FileText): FileTab {
+  const text = t.text && sameFields(t.text, file) ? t.text : file;
+  if (!t.editing) return { ...t, text };
+  return { ...t, text, edit: t.edit ? fromDisk(t.edit, file) : startEdit(file) };
 }
 
 /** `change` applied to the edit buffers of file `f`: the open one's and its tab's. */

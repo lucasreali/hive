@@ -21,7 +21,7 @@ import {
   terminalShown,
   useHive,
 } from "./store";
-import { barItems, fileVisible, shownBrowser } from "./tabs";
+import { barItems, fileVisible, shownBrowser, shownPane } from "./tabs";
 import {
   closeTerminal,
   interceptKeys,
@@ -194,7 +194,7 @@ export const COMMANDS: readonly Command[] = [
     id: "split-terminal",
     label: "Split terminal",
     keys: "Ctrl+Shift+D",
-    run: () => showOpenFailure(splitTerminal(useHive.getState().activeTab)),
+    run: () => showOpenFailure(splitTerminal(shownPane(useHive.getState()))),
   },
   {
     id: "toggle-panel",
