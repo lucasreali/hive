@@ -280,7 +280,7 @@ use login_shell as shell;
 fn login_shell(bin_dir: &Path) -> pty_process::Command {
     let var = std::env::var_os;
     let path = var("PATH");
-    let shell = login::usable(var("SHELL"), path.as_deref());
+    let shell = login::user_shell(path.as_deref());
     let launch = login::launch(shell, var("ZDOTDIR"), path, bin_dir);
     pty_process::Command::new(launch.program)
         .args(launch.args)
@@ -313,6 +313,18 @@ pub mod login {
     pub const DEFAULT_SHELL: &str = "/bin/zsh";
     #[cfg(not(target_os = "macos"))]
     pub const DEFAULT_SHELL: &str = "/bin/sh";
+
+    /// The `$SHELL` to start: on Linux only when it can run ([`usable`]); on macOS as it is,
+    /// as before 26.14.
+    #[cfg(unix)]
+    pub fn user_shell(path: Option<&OsStr>) -> Option<OsString> {
+        let shell = std::env::var_os("SHELL");
+        #[cfg(target_os = "linux")]
+        let shell = usable(shell, path);
+        #[cfg(target_os = "macos")]
+        let _ = path;
+        shell
+    }
 
     /// `shell` (`$SHELL`) when it can run: a path to an executable file, or a name found as
     /// one in the absolute folders of `path` (the service's `PATH`). None otherwise, so that

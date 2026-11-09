@@ -199,8 +199,7 @@ pub use login_shell as path_shell;
 #[cfg(unix)]
 pub fn login_shell() -> (OsString, Vec<OsString>) {
     use crate::terminal::login;
-    let var = std::env::var_os;
-    let shell = login::usable(var("SHELL"), var("PATH").as_deref());
+    let shell = login::user_shell(std::env::var_os("PATH").as_deref());
     let program = login::launch(shell, None, None, Path::new("")).program;
     (program, vec!["-l".into(), "-c".into(), PRINT_PATH.into()])
 }
@@ -377,10 +376,20 @@ mod tests {
         assert_eq!((program, args.clone()), login_shell());
         // The login shell (macOS, a remote Linux service): `$SHELL` when it can run.
         let (login, login_args) = login_shell();
-        let var = std::env::var_os;
-        let usable = crate::terminal::login::usable(var("SHELL"), var("PATH").as_deref());
+        let path = std::env::var_os("PATH");
+        let shell = crate::terminal::login::user_shell(path.as_deref());
         let default = crate::terminal::login::DEFAULT_SHELL;
-        assert_eq!(login, usable.unwrap_or_else(|| default.into()));
+        assert_eq!(login, shell.unwrap_or_else(|| default.into()));
+        #[cfg(target_os = "linux")]
+        assert_eq!(
+            crate::terminal::login::user_shell(path.as_deref()),
+            crate::terminal::login::usable(std::env::var_os("SHELL"), path.as_deref())
+        );
+        #[cfg(target_os = "macos")]
+        assert_eq!(
+            crate::terminal::login::user_shell(None),
+            std::env::var_os("SHELL")
+        );
         assert_eq!(login_args, ["-l", "-c", PRINT_PATH]);
         let service = std::env::var_os("PATH").unwrap();
         let sh = ("sh".into(), args[args.len() - 2..].to_vec());
