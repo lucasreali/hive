@@ -4,6 +4,7 @@ use futures_util::SinkExt;
 use hive::file::{PDF_LIMIT, SERVE_LIMIT, TEXT_LIMIT, version};
 use hive_protocol::{
     Control, DiffBase, Frame, FrameType, HTML_TYPE as HTML, Media, READ_LIMIT, Role, SaveError,
+    TableEdit,
 };
 
 use crate::common::{Conn, stop};
@@ -347,6 +348,50 @@ async fn an_html_page_has_media_and_its_files_their_types_by_name() {
             "{path}: {range:?}"
         );
     }
+    drop(conn);
+    stop(daemon);
+}
+
+#[tokio::test]
+async fn a_table_edit_answers_the_new_text_and_leaves_the_disk_to_the_save() {
+    let repo = Repo::new();
+    let text = "id,\"name\"\r\n1,Ann\r\n";
+    repo.write("a.csv", text);
+    let root = repo.root.display().to_string();
+    let daemon = repo.env.daemon();
+    let mut conn = repo.env.connect(Role::App).await;
+    follow(&mut conn, &root).await;
+
+    let edit = Control::EditTable {
+        worktree: root.clone(),
+        path: "a.csv".into(),
+        content: text.into(),
+        edit: Some(TableEdit::SetCell {
+            row: 1,
+            column: 1,
+            value: "Doe, Jane".into(),
+        }),
+    };
+    conn.send(0, edit).await;
+    let Control::TableEdited {
+        worktree,
+        path,
+        content,
+        sheet,
+        error,
+    } = conn.control().await.1
+    else {
+        panic!("expected table_edited");
+    };
+    assert_eq!((worktree, path, error), (root, "a.csv".to_owned(), None));
+    let content = content.unwrap();
+    assert_eq!(content, "id,\"name\"\r\n1,\"Doe, Jane\"\r\n");
+    assert_eq!(sheet.unwrap().rows[1], ["1", "Doe, Jane"]);
+    // Nothing is written until it is saved.
+    assert_eq!(
+        std::fs::read_to_string(repo.root.join("a.csv")).unwrap(),
+        text
+    );
     drop(conn);
     stop(daemon);
 }

@@ -1,5 +1,5 @@
-import { afterEach, expect, spyOn, test } from "bun:test";
-import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { afterEach, expect, mock, spyOn, test } from "bun:test";
+import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { asMac } from "../../test/mac";
 import type { ChangedFile, FileText } from "../protocol";
 import { apply } from "../reduce";
@@ -13,6 +13,7 @@ import { TerminalArea } from "./TerminalArea";
 // 11.2: a Markdown file's tab shows rendered or as text.
 
 afterEach(() => {
+  mock.restore();
   cleanup();
   useHive.setState(initialState, true);
 });
@@ -174,4 +175,104 @@ test("a Markdown file that cannot be shown says why, rendered too", () => {
   fireEvent.click(eye() as HTMLElement);
   expect(body().textContent).toContain("Binary file not shown.");
   expect(body().querySelector(".markdown")).toBeNull();
+});
+
+// 25.4: a block of the preview edited as its source.
+
+const blockBox = () => body().querySelector<HTMLTextAreaElement>(".md-block-editor");
+const DOC = "# Title\n\nA paragraph\nof two lines.\n\n- one\n- two\n\nEnd [link](https://x.dev)\n";
+
+function preview() {
+  panel();
+  open("README.md");
+  answer("README.md", DOC);
+  fireEvent.click(eye() as HTMLElement);
+}
+
+test("a click on a block opens its source; only its lines change, and the save is as the text's", () => {
+  const save = spyOn(transport, "saveFile").mockImplementation(async () => {});
+  save.mockClear();
+  preview();
+  const dirty = () =>
+    screen.queryByRole("button", { name: "Close file README.md (unsaved changes)" });
+  fireEvent.click(screen.getByText(/A paragraph/));
+  expect(blockBox()?.value).toBe("A paragraph\nof two lines.");
+  expect(dirty()).toBeNull();
+  fireEvent.input(blockBox() as HTMLElement, { target: { value: "A *new* one." } });
+  expect(dirty()).not.toBeNull();
+  const edited = "# Title\n\nA *new* one.\n\n- one\n- two\n\nEnd [link](https://x.dev)\n";
+  expect(useHive.getState().edit?.doc.toString()).toBe(edited);
+
+  // ⌘S: saved, and it stays here, the block still open.
+  fireEvent.keyDown(window, { key: "s", ctrlKey: true });
+  expect(save.mock.calls).toEqual([[refactor.path, "README.md", edited, "v"]]);
+  expect(pressed()).toBe("true");
+  expect(blockBox()).not.toBeNull();
+  // Escape renders it again; every other block as it was.
+  fireEvent.keyDown(blockBox() as HTMLElement, { key: "Escape" });
+  expect(blockBox()).toBeNull();
+  expect(body().querySelector(".markdown em")?.textContent).toBe("new");
+  expect(body().querySelector("h1")?.textContent).toBe("Title");
+  expect(body().querySelectorAll("li")).toHaveLength(2);
+});
+
+test("a click on a list opens the whole list; on its link, nothing", () => {
+  preview();
+  const link = screen.getByRole("link", { name: "link" });
+  fireEvent.click(link);
+  expect(blockBox()).toBeNull();
+  fireEvent.click(screen.getByText("two"));
+  expect(blockBox()?.value).toBe("- one\n- two");
+});
+
+test("a change on disk under edits made in the preview shows the banner, without View diff", () => {
+  preview();
+  fireEvent.click(screen.getByText("Title"));
+  fireEvent.input(blockBox() as HTMLElement, { target: { value: "# New" } });
+  answer("README.md", "agent\n");
+  const banner = screen.getByRole("alert");
+  expect(banner.textContent).toContain("Changed on disk.");
+  expect(within(banner).queryByRole("button", { name: "View diff" })).toBeNull();
+});
+
+test("Ctrl+S with no block edited still shows the text (11.2)", () => {
+  spyOn(transport, "saveFile").mockImplementation(async () => {});
+  preview();
+  fireEvent.keyDown(window, { key: "s", ctrlKey: true });
+  expect(pressed()).toBe("false");
+});
+
+test("Ctrl+S with a block opened but not typed in still shows the text (25.4)", () => {
+  spyOn(transport, "saveFile").mockImplementation(async () => {});
+  preview();
+  fireEvent.click(screen.getByText("Title"));
+  expect(blockBox()).not.toBeNull();
+  fireEvent.keyDown(window, { key: "s", ctrlKey: true });
+  expect(pressed()).toBe("false");
+});
+
+test("Diff from a preview being edited shows the diff", () => {
+  panel();
+  act(() =>
+    apply({
+      type: "changes",
+      path: refactor.path,
+      base: "head",
+      branch: null,
+      base_error: null,
+      files: [{ path: "README.md", status: "modified", old_path: null, added: 1, removed: 0 }],
+      added: 1,
+      removed: 0,
+      error: null,
+    }),
+  );
+  open("README.md");
+  answer("README.md", DOC);
+  fireEvent.click(eye() as HTMLElement);
+  fireEvent.click(screen.getByText("Title"));
+  fireEvent.keyDown(blockBox() as HTMLElement, { key: "Escape" });
+  expect(pressed()).toBe("true");
+  fireEvent.click(screen.getByRole("button", { name: "Diff" }));
+  expect(pressed()).toBe("false");
+  expect(useHive.getState().editing).toBe(false);
 });

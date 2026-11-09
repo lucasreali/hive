@@ -11,7 +11,23 @@ import { type EditBuffer, fromDisk, isDirty, isFor, startEdit } from "./viewer/b
  */
 export function editFor(s: HiveState, file: FileText | null): EditBuffer | null {
   if (!s.editing || !file || !s.openFile || !isFor(file, s.openFile)) return s.edit;
-  return s.edit ? fromDisk(s.edit, file) : startEdit(file);
+  return s.edit ? fromDisk(s.edit, file, asksPending(s, file)) : startEdit(file);
+}
+
+/** The service is still to answer a table's edit of file `f` (25.4). */
+export const asksPending = (s: HiveState, f: OpenFile) => s.tableAsks.some((a) => isFor(a, f));
+
+/** `change` on file `f`'s edit buffer, live or kept in its tab. */
+export function patchEdits(
+  s: HiveState,
+  f: OpenFile,
+  change: (b: EditBuffer) => EditBuffer,
+): Pick<HiveState, "edit" | "openFiles"> {
+  const mine = (b: EditBuffer | null): b is EditBuffer => !!b && isFor(b, f);
+  return {
+    edit: mine(s.edit) ? change(s.edit) : s.edit,
+    openFiles: s.openFiles.map((t) => (mine(t.edit) ? { ...t, edit: change(t.edit) } : t)),
+  };
 }
 
 /** The key of a file's tab in `tabOrder`. */

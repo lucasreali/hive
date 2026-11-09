@@ -2,8 +2,8 @@ import { afterEach, beforeAll, expect, spyOn, test } from "bun:test";
 import { SearchQuery } from "@codemirror/search";
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { asMac } from "../../test/mac";
-import type { Sheet, TableText } from "../protocol";
-import { columns, findCells, findText, rowsNote, TableView } from "./TableView";
+import type { Sheet, TableEdit, TableText } from "../protocol";
+import { columns, findCells, findText, NOT_WHOLE, rowsNote, TableView } from "./TableView";
 
 beforeAll(() => {
   // happy-dom has no layout: give the scroller a height so the virtualizer shows rows.
@@ -335,4 +335,264 @@ test("the find bar stays open across a workbook's sheets, over the one shown", (
   act(() => fireEvent.click(screen.getByRole("tab", { name: "Veg" })));
   expect(findField().value).toBe("pe");
   expect(status()).toBe("2 matches");
+});
+
+// 25.4: cells, rows and columns edited.
+
+function editing(rows = [["a", "b"], ["1"], ["3", "4"]], patch: Partial<Sheet> = {}) {
+  const edits: TableEdit[] = [];
+  render(<TableView table={table([sheet(rows, patch)])} onEdit={(e) => edits.push(e)} />);
+  return edits;
+}
+
+const view = () => document.querySelector(".table-view") as HTMLElement;
+const cellInput = () => document.querySelector<HTMLTextAreaElement>(".table-cell-input");
+const at = (row: number, column: number) =>
+  document.querySelector<HTMLElement>(
+    `tr[aria-rowindex="${row + 1}"] [data-column="${column}"]`,
+  ) as HTMLElement;
+const selected = () => {
+  const cell = document.querySelector<HTMLElement>(".table-cursor");
+  if (!cell) return null;
+  const row = cell.closest("tr")?.getAttribute("aria-rowindex");
+  return [Number(row) - 1, Number(cell.dataset.column)];
+};
+const key = (target: HTMLElement, init: object) => fireEvent.keyDown(target, init);
+
+test("a double click edits a cell, the header's too, and Enter keeps the text", () => {
+  const edits = editing();
+  fireEvent.doubleClick(at(1, 0));
+  expect(cellInput()?.value).toBe("1");
+  expect(document.activeElement).toBe(cellInput());
+  fireEvent.input(cellInput() as HTMLElement, { target: { value: "x" } });
+  key(cellInput() as HTMLElement, { key: "Enter" });
+  expect(cellInput()).toBeNull();
+  expect(edits).toEqual([{ op: "set_cell", row: 1, column: 0, value: "x" }]);
+  expect(document.activeElement).toBe(view());
+
+  fireEvent.doubleClick(at(0, 1));
+  fireEvent.input(cellInput() as HTMLElement, { target: { value: "h" } });
+  key(cellInput() as HTMLElement, { key: "Enter" });
+  expect(edits[1]).toEqual({ op: "set_cell", row: 0, column: 1, value: "h" });
+});
+
+test("a padded cell is edited too; left as it was, it is no edit", () => {
+  const edits = editing();
+  fireEvent.doubleClick(at(1, 1));
+  expect(cellInput()?.value).toBe("");
+  key(cellInput() as HTMLElement, { key: "Enter" });
+  expect(edits).toEqual([]);
+  fireEvent.doubleClick(at(1, 1));
+  fireEvent.input(cellInput() as HTMLElement, { target: { value: "new" } });
+  key(cellInput() as HTMLElement, { key: "Enter" });
+  expect(edits).toEqual([{ op: "set_cell", row: 1, column: 1, value: "new" }]);
+});
+
+test("a cell's line breaks: ⇧Enter adds one, and a CRLF left alone is no edit", () => {
+  const edits = editing([["a\r\nb", "c"]]);
+  fireEvent.doubleClick(at(0, 0));
+  expect(Number(cellInput()?.rows)).toBe(2);
+  // The text area reads it with "\n" only.
+  fireEvent.input(cellInput() as HTMLElement, { target: { value: "a\nb" } });
+  key(cellInput() as HTMLElement, { key: "Enter" });
+  expect(edits).toEqual([]);
+
+  fireEvent.doubleClick(at(0, 1));
+  expect(Number(cellInput()?.rows)).toBe(1);
+  key(cellInput() as HTMLElement, { key: "Enter", shiftKey: true });
+  expect(cellInput()).not.toBeNull();
+  fireEvent.input(cellInput() as HTMLElement, { target: { value: "c\nd\ne" } });
+  expect(Number(cellInput()?.rows)).toBe(3);
+  key(cellInput() as HTMLElement, { key: "Enter" });
+  expect(edits).toEqual([{ op: "set_cell", row: 0, column: 1, value: "c\nd\ne" }]);
+});
+
+test("Escape drops the text; leaving the cell keeps it, once", () => {
+  const edits = editing();
+  fireEvent.doubleClick(at(1, 0));
+  fireEvent.input(cellInput() as HTMLElement, { target: { value: "gone" } });
+  key(cellInput() as HTMLElement, { key: "Escape" });
+  expect(cellInput()).toBeNull();
+  expect(edits).toEqual([]);
+  expect(document.activeElement).toBe(view());
+
+  fireEvent.doubleClick(at(1, 0));
+  const box = cellInput() as HTMLElement;
+  fireEvent.input(box, { target: { value: "kept" } });
+  fireEvent.blur(box);
+  fireEvent.blur(box);
+  expect(edits).toEqual([{ op: "set_cell", row: 1, column: 0, value: "kept" }]);
+});
+
+test("Tab keeps the text and selects the next cell, ⇧Tab the one before, within the table", () => {
+  const edits = editing();
+  fireEvent.doubleClick(at(2, 0));
+  key(cellInput() as HTMLElement, { key: "Tab" });
+  expect(selected()).toEqual([2, 1]);
+  expect(cellInput()).toBeNull();
+  key(view(), { key: "Enter" });
+  key(cellInput() as HTMLElement, { key: "Tab" });
+  expect(selected()).toEqual([2, 1]);
+  key(view(), { key: "Enter" });
+  fireEvent.input(cellInput() as HTMLElement, { target: { value: "z" } });
+  key(cellInput() as HTMLElement, { key: "Tab", shiftKey: true });
+  expect(selected()).toEqual([2, 0]);
+  expect(edits).toEqual([{ op: "set_cell", row: 2, column: 1, value: "z" }]);
+});
+
+test("a click selects a cell, the arrows move it within the table, Enter edits it", () => {
+  editing();
+  expect(selected()).toBeNull();
+  // Nothing selected: the arrows are the scroller's.
+  const unselected = key(view(), { key: "ArrowDown" });
+  expect(unselected).toBe(true);
+  expect(selected()).toBeNull();
+  key(view(), { key: "Enter" });
+  expect(cellInput()).toBeNull();
+
+  fireEvent.click(at(1, 0));
+  expect(selected()).toEqual([1, 0]);
+  expect(at(1, 0).classList.contains("table-cursor")).toBe(true);
+  const moves: [string, number[]][] = [
+    ["ArrowUp", [0, 0]],
+    ["ArrowUp", [0, 0]],
+    ["ArrowLeft", [0, 0]],
+    ["ArrowRight", [0, 1]],
+    ["ArrowRight", [0, 1]],
+    ["ArrowDown", [1, 1]],
+    ["ArrowDown", [2, 1]],
+    ["ArrowDown", [2, 1]],
+  ];
+  for (const [name, place] of moves) {
+    expect(key(view(), { key: name })).toBe(false); // Taken from the scroller.
+    expect(selected()).toEqual(place);
+  }
+  // Another key is left alone.
+  expect(key(view(), { key: "a" })).toBe(true);
+  expect(cellInput()).toBeNull();
+  key(view(), { key: "Enter" });
+  expect(cellInput()?.value).toBe("4");
+  // Its keys are the editor's, not the table's.
+  key(cellInput() as HTMLElement, { key: "ArrowUp" });
+  expect(selected()).toEqual([2, 1]);
+});
+
+test("a click on a row's number selects its first cell, outside the rows nothing", () => {
+  editing();
+  fireEvent.click(document.querySelector('tr[aria-rowindex="2"] .table-number') as HTMLElement);
+  expect(selected()).toEqual([1, 0]);
+  fireEvent.click(view());
+  expect(selected()).toEqual([1, 0]);
+});
+
+test("moving the selection far down scrolls its row in", () => {
+  const spy = spyOn(HTMLElement.prototype, "scrollTo").mockImplementation(() => {});
+  editing(many(200));
+  fireEvent.click(at(1, 0));
+  for (let i = 0; i < 12; i++) key(view(), { key: "ArrowDown" });
+  expect(selected()).toEqual([13, 0]);
+  expect(spy).toHaveBeenCalled();
+  spy.mockRestore();
+});
+
+test("the row being edited stays rendered when the table scrolls away from it", async () => {
+  editing(many(200));
+  fireEvent.doubleClick(at(1, 0));
+  fireEvent.input(cellInput() as HTMLElement, { target: { value: "typed" } });
+  await act(async () => {
+    view().scrollTop = 3000;
+    fireEvent.scroll(view());
+    await Bun.sleep(0);
+  });
+  expect(cellInput()?.value).toBe("typed");
+  const shown = [...document.querySelectorAll("tbody tr")].map((r) =>
+    Number(r.getAttribute("aria-rowindex")),
+  );
+  expect(shown[0]).toBe(2);
+  expect(shown.length).toBeGreaterThan(1);
+  expect(shown[1]).toBeGreaterThan(100);
+});
+
+const menu = () => screen.queryByRole("menu", { name: "Table" });
+const item = (name: string) => screen.getByRole("menuitem", { name }) as HTMLButtonElement;
+
+test("the context menu adds and removes rows and columns at the cell", () => {
+  const edits = editing();
+  const expected: [string, TableEdit][] = [
+    ["Insert Row Above", { op: "insert_row", at: 1 }],
+    ["Insert Row Below", { op: "insert_row", at: 2 }],
+    ["Delete Row", { op: "remove_row", at: 1 }],
+    ["Insert Column Left", { op: "insert_column", at: 1 }],
+    ["Insert Column Right", { op: "insert_column", at: 2 }],
+    ["Delete Column", { op: "remove_column", at: 1 }],
+  ];
+  for (const [name, edit] of expected) {
+    const unhandled = fireEvent.contextMenu(at(1, 1));
+    expect(unhandled).toBe(false);
+    expect(selected()).toEqual([1, 1]);
+    fireEvent.click(item(name));
+    expect(menu()).toBeNull();
+    expect(edits.at(-1)).toEqual(edit);
+  }
+  expect(edits).toHaveLength(6);
+});
+
+test("a table's only column cannot be removed; the menu closes without an edit", () => {
+  const edits = editing([["a"], ["b"]]);
+  fireEvent.contextMenu(at(1, 0));
+  expect(item("Delete Column").disabled).toBe(true);
+  expect(item("Delete Row").disabled).toBe(false);
+  key(menu() as HTMLElement, { key: "Escape" });
+  expect(menu()).toBeNull();
+  expect(edits).toEqual([]);
+});
+
+test("the Menu key's event, on the table itself, opens at the selected cell, or not at all", () => {
+  const edits = editing();
+  expect(fireEvent.contextMenu(view())).toBe(true);
+  expect(menu()).toBeNull();
+  fireEvent.click(at(2, 1));
+  expect(fireEvent.contextMenu(view())).toBe(false);
+  fireEvent.click(item("Delete Row"));
+  expect(edits).toEqual([{ op: "remove_row", at: 2 }]);
+});
+
+test("a table not read whole cannot be edited and says to use the text", () => {
+  const edits = editing(many(3), { total: 25_000 });
+  fireEvent.doubleClick(at(1, 0));
+  expect(cellInput()).toBeNull();
+  expect(fireEvent.contextMenu(at(1, 0))).toBe(true);
+  expect(menu()).toBeNull();
+  fireEvent.click(at(1, 0));
+  expect(selected()).toBeNull();
+  expect(edits).toEqual([]);
+  expect(document.querySelector(".table-note")?.textContent).toBe(
+    "Showing 4 of 25,000 rows Read-only: not all of the file was read. Edit it in the text.",
+  );
+  cleanup();
+  editing(many(1), { partial: true });
+  expect(document.querySelector(".table-note")?.textContent).toContain(NOT_WHOLE);
+});
+
+test("without onEdit nothing is edited and no note is added; `readOnly` says why", () => {
+  render(<TableView table={table([sheet(many(1))])} />);
+  fireEvent.doubleClick(at(1, 0));
+  fireEvent.click(at(1, 0));
+  key(view(), { key: "Enter" });
+  expect(cellInput()).toBeNull();
+  expect(selected()).toBeNull();
+  expect(fireEvent.contextMenu(at(1, 0))).toBe(true);
+  expect(document.querySelector(".table-note")).toBeNull();
+  cleanup();
+  render(<TableView table={table([sheet(many(1))])} readOnly="Read-only: why." />);
+  expect(document.querySelector(".table-note")?.textContent).toBe("Read-only: why.");
+});
+
+test("an empty file offers a first row where it can be edited", () => {
+  const edits = editing([]);
+  fireEvent.click(screen.getByRole("button", { name: "Add a row" }));
+  expect(edits).toEqual([{ op: "insert_row", at: 0 }]);
+  cleanup();
+  render(<TableView table={table([sheet([])])} />);
+  expect(screen.queryByRole("button", { name: "Add a row" })).toBeNull();
 });

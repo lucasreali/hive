@@ -180,6 +180,14 @@ export type ServiceMessage =
       error: string | null;
     }
   | ({ type: "table" } & TableText)
+  | {
+      type: "table_edited";
+      worktree: string;
+      path: string;
+      content: string | null;
+      sheet: Sheet | null;
+      error: string | null;
+    }
   | ({ type: "search_results" } & SearchResults)
   | ({ type: "dirs" } & Dirs)
   | { type: "sessions"; sessions: Session[]; error: string | null; truncated: boolean }
@@ -476,6 +484,11 @@ export type Sheet = { name: string; rows: string[][]; total: number; partial: bo
 
 /** Mirrors `Control::Table`: a table file's sheets, none when `error` says why. */
 export type TableText = { worktree: string; path: string; sheets: Sheet[]; error: string | null };
+
+/** Mirrors `hive_protocol::TableEdit` (25.4): one change to a CSV or TSV text's table. */
+export type TableEdit =
+  | { op: "set_cell"; row: number; column: number; value: string }
+  | { op: "insert_row" | "remove_row" | "insert_column" | "remove_column"; at: number };
 
 /** Mirrors `hive_protocol::SaveError`. */
 export type SaveError = "conflict" | "too_large" | "invalid_path" | "io";

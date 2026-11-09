@@ -44,6 +44,7 @@ pub mod spaces;
 pub mod states;
 pub mod statusline;
 pub mod table;
+pub mod table_edit;
 pub mod terminal;
 pub mod transcript;
 pub mod uninstall;

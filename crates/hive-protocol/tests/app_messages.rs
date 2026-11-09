@@ -78,6 +78,7 @@ sort! {
         | OpenFile
         | ReadFile
         | OpenTable
+        | EditTable
         | SaveFile
         | CreateFile
         | RenameFile
@@ -167,6 +168,7 @@ sort! {
         | File
         | FileRange
         | Table
+        | TableEdited
         | FileSaved
         | SaveFailed
         | FileCreated
@@ -579,6 +581,18 @@ fn samples() -> Vec<Control> {
                 total: 3,
                 partial: false,
             }],
+            error: None,
+        },
+        TableEdited {
+            worktree: "/r".into(),
+            path: "a.csv".into(),
+            content: Some("a\n".into()),
+            sheet: Some(Sheet {
+                name: String::new(),
+                rows: vec![vec!["a".into()]],
+                total: 1,
+                partial: false,
+            }),
             error: None,
         },
         FileSaved {

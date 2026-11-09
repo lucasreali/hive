@@ -1,3 +1,4 @@
+import type { Text } from "@codemirror/state";
 import { create } from "zustand";
 import {
   clampWidth,
@@ -41,6 +42,7 @@ import type {
   Settings,
   Shared,
   Space,
+  TableEdit,
   TableText,
   UninstallFailure,
   UninstallList,
@@ -66,6 +68,7 @@ import {
   paneFile,
   paneIdOf,
   paneKey,
+  patchEdits,
   shownBrowser,
   shownInstead,
   shownPane,
@@ -502,6 +505,15 @@ export type HiveState = {
   file: FileText | null;
   /** The last `table` the service sent (23.6); shown only while it is the open file's. */
   table: TableText | null;
+  /**
+   * What the service is asked of a table being edited (25.4), in order, one at a time: each is
+   * applied to the text the last one left, the first is on its way (`followTableEdits`).
+   */
+  tableAsks: TableAsk[];
+  /** The text `tableAsks`' first was sent from: its answer applies to that text only. */
+  tableSentFrom: Text | null;
+  /** The file whose save waits for its `tableAsks` to be answered, so it holds their edits. */
+  saveAfterAsks: OpenFile | null;
   /** The open file shows as editable text (UI state), not as its read-only diff. */
   editing: boolean;
   /** The open file's edit buffer while editing (UI state, kept when the panel closes). */
@@ -630,6 +642,9 @@ export const initialState: HiveState = {
   diffBases: {},
   file: null,
   table: null,
+  tableAsks: [],
+  tableSentFrom: null,
+  saveAfterAsks: null,
   editing: false,
   edit: null,
   editorNotice: null,
@@ -861,6 +876,9 @@ export const setRendered = (rendered: boolean) =>
     ),
   }));
 
+/** A table's buffer asked of the service (25.4): after `edit`, or with none as it is. */
+export type TableAsk = OpenFile & { edit: TableEdit | null };
+
 /**
  * A table file (23.6), by its name: the service reads it as a table (`hive::table`): CSV and
  * TSV, and the workbooks of 23.7.
@@ -884,6 +902,50 @@ export const setTableShown = (shown: boolean) =>
       s.openFile && isFor(t, s.openFile) ? { ...t, asText: !shown } : t,
     ),
   }));
+
+/** The table of a file's buffer as it is asked of the service (25.4), once. */
+export const askBufferTable = (f: OpenFile) =>
+  useHive.setState((s) =>
+    s.tableAsks.some((a) => isFor(a, f) && !a.edit)
+      ? {}
+      : { tableAsks: [...s.tableAsks, { worktree: f.worktree, path: f.path, edit: null }] },
+  );
+
+/**
+ * Drops what is asked of `f`'s table, which nothing will answer, and a save waiting on it: it
+ * would write the text without them. `error` says why, under the header, until the next save.
+ */
+export const dropTableAsks = (f: OpenFile, error?: string) =>
+  useHive.setState((s) => ({
+    tableAsks: s.tableAsks.filter((a) => !isFor(a, f)),
+    tableSentFrom: s.tableAsks[0] && isFor(s.tableAsks[0], f) ? null : s.tableSentFrom,
+    saveAfterAsks: s.saveAfterAsks && isFor(s.saveAfterAsks, f) ? null : s.saveAfterAsks,
+    ...(error ? patchEdits(s, f, (b) => ({ ...b, error })) : {}),
+  }));
+
+/** Nothing more will answer: the connection is gone. */
+export const clearTableAsks = () =>
+  useHive.setState({ tableAsks: [], tableSentFrom: null, saveAfterAsks: null });
+
+/** The first of `tableAsks` goes to the service with the text `from`. */
+export const setTableSentFrom = (tableSentFrom: Text) => useHive.setState({ tableSentFrom });
+
+/** File `f`'s save waits for its table's edits (`tableAsks`), or none does. */
+export const setSaveAfterAsks = (saveAfterAsks: OpenFile | null) =>
+  useHive.setState({ saveAfterAsks });
+
+/**
+ * An edit of the open file's table (25.4), starting its buffer on the first one: the buffer
+ * takes the new text from the answer, and saves as any edit.
+ */
+export const editOpenTable = (edit: TableEdit) =>
+  useHive.setState((s) => {
+    // A buffer there is newer than the last answer: a save may not have been answered by one yet.
+    const buffer = s.edit ?? editFor({ ...s, editing: true }, s.file);
+    if (!s.openFile || !buffer) return {};
+    const ask = { worktree: s.openFile.worktree, path: s.openFile.path, edit };
+    return { editing: true, edit: buffer, tableAsks: [...s.tableAsks, ask] };
+  });
 
 /** Ctrl+Shift+V (11.2): only while the shown tab is a Markdown file's. */
 export const markdownShown = (s: HiveState) =>
