@@ -96,7 +96,7 @@ The first frame from every client is `Hello { protocol, version, role, keep_secs
 - If both `protocol` (`PROTOCOL_VERSION`) and `version` (the `hive` binary version) match, the service answers `Welcome { version, distro }`. `distro` is the service's `WSL_DISTRO_NAME` (null when unset), shown in the app's status bar: the service knows its distribution, so Windows never has to guess it from `wsl.exe`. It was added as an optional field (`#[serde(default)]`), which old decoders ignore and new decoders default, so `PROTOCOL_VERSION` stayed 1.
 - Otherwise it answers `VersionMismatch { protocol, version }` with its own values and closes the connection. This is a hard error: the app must block and tell the user.
 - Any other first message gets `Error` and the connection is closed.
-- **One app at a time.** An app connecting while another is attached gets `Error` ("another app is already connected") and is closed, unless both gave the same `app_id` (26.15): the new connection then takes over, and the old one, stale after a silent drop that sshd has not noticed yet, is closed.
+- **One app at a time.** An app connecting while another is attached gets `Error` ("another app is already connected") and is closed, unless both gave the same `app_id` and both gave `keep_secs` (26.15: a remote link's; one without `keep_secs` is the local app, never taken over): the new connection then takes over, and the old one, stale after a silent drop that sshd has not noticed yet, is closed.
 
 ### Message catalog
 

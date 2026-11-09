@@ -30,7 +30,9 @@ impl State {
     }
 
     /// Opens a terminal of `(cols, rows)` in `cwd`, as the `account` asked for (12.2; its
-    /// project's space's when `None`, 22.5).
+    /// project's space's when `None`, 22.5), its output going to `frames`; with a ring when
+    /// `kept`: the connection asking gave `keep_secs` (26.15). Decided by that connection, never
+    /// by the one attached when the spawn comes, which a takeover may change meanwhile.
     pub(super) async fn open(
         self: &Arc<Self>,
         channel: u32,
@@ -38,6 +40,7 @@ impl State {
         (cols, rows): (u16, u16),
         account: Option<AccountDir>,
         frames: mpsc::UnboundedSender<Frame>,
+        kept: bool,
     ) {
         // Never in a network or device folder: placing it would open it.
         #[cfg(windows)]
@@ -79,8 +82,6 @@ impl State {
         // never under the lock below.
         #[cfg(unix)]
         tokio::task::block_in_place(terminal::locale_env);
-        // A remote service's terminal keeps its last output (26.15).
-        let kept = self.link().keep.is_some();
         let opened = {
             let mut terminals = self.terminals.lock().await;
             match terminals.entry(channel) {

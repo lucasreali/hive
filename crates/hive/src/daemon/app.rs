@@ -216,8 +216,11 @@ where
         let mut app = state.app.lock().await;
         let mut attached = state.link();
         // Only the same app launch takes over a connection still open (a stale one after a
-        // silent drop, 26.15); anyone else is refused as before.
-        let same = link.app_id.is_some() && attached.app_id == link.app_id;
+        // silent drop, 26.15), and only a remote one (`keep_secs`, both): a connection without
+        // it ends as the local app's does, and its terminals have no ring. Anyone else is
+        // refused as before.
+        let remote = link.keep.is_some() && attached.keep.is_some();
+        let same = remote && link.app_id.is_some() && attached.app_id == link.app_id;
         let refused = app.is_some() && !same;
         if !refused {
             if app.is_some() {
@@ -256,7 +259,7 @@ where
         let Some(Ok(frame)) = frame else {
             break Ended::Dropped;
         };
-        if let Some(end) = app_frame(state, frame, &terminal_tx).await {
+        if let Some(end) = app_frame(state, frame, (&terminal_tx, keep.is_some())).await {
             break Ended::Bye { end };
         }
     };
@@ -302,11 +305,12 @@ async fn resync(state: &Arc<State>) {
     state.send_usage().await;
 }
 
-/// Acts on one frame of the app's; `Some(end)` for its `bye {end}` (26.15), the last one.
+/// Acts on one frame of the app's, whose terminals' output goes to `output` (with a ring when
+/// `kept`, 26.15); `Some(end)` for its `bye {end}`, the last one.
 async fn app_frame(
     state: &Arc<State>,
     frame: Frame,
-    output: &mpsc::UnboundedSender<Frame>,
+    (output, kept): (&mpsc::UnboundedSender<Frame>, bool),
 ) -> Option<bool> {
     // Hive is being uninstalled: nothing more is done for the app.
     if state.uninstalling().is_some() {
@@ -331,7 +335,7 @@ async fn app_frame(
         }) => {
             let size = (cols, rows);
             state
-                .open(channel, &cwd, size, account, output.clone())
+                .open(channel, &cwd, size, account, output.clone(), kept)
                 .await;
         }
         Ok(Control::Resize { cols, rows }) => state.input(channel, Input::Resize { cols, rows }),

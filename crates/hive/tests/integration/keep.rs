@@ -48,6 +48,13 @@ async fn closes(conn: &mut Conn) {
     while conn.next().await.is_some() {}
 }
 
+/// The processes of this environment other than the daemon: its terminals'.
+fn terminals(env: &Env, daemon: &common::Daemon) -> Vec<hive::procs::Proc> {
+    let service = i32::try_from(daemon.0.id()).unwrap();
+    let all = env.processes().into_iter();
+    all.filter(|proc| proc.pid != service).collect()
+}
+
 /// Whether the daemon is still running after `wait`.
 fn alive_after(daemon: &mut common::Daemon, wait: Duration) -> bool {
     std::thread::sleep(wait);
@@ -100,9 +107,10 @@ async fn bye_with_end_ends_at_once_and_bye_without_keeps() {
     let mut app = app(&env, Some(3600), Some("a")).await;
     app.open_terminal(1, &env.path("home")).await;
     app.send(0, Control::Bye { end: false }).await;
-    // The service closes the connection, and keeps the terminal.
+    // The service closes the connection, and keeps the terminal: its shell still runs.
     closes(&mut app).await;
     assert!(alive_after(&mut daemon, Duration::from_millis(500)));
+    assert!(!terminals(&env, &daemon).is_empty());
     let mut app = self::app(&env, Some(3600), Some("b")).await;
     app.send(0, Control::Bye { end: true }).await;
     closes(&mut app).await;
@@ -153,6 +161,35 @@ async fn the_same_app_takes_over_a_stale_connection_and_another_is_refused() {
     drop(taken);
     let other = app(&env, Some(60), Some("b")).await;
     drop(other);
+    stop(daemon);
+}
+
+#[tokio::test]
+async fn only_a_remote_connection_takes_over_or_is_taken_over() {
+    let env = Env::new();
+    let mut daemon = env.daemon();
+    let refused = Control::Error {
+        message: "another app is already connected".into(),
+    };
+    // An `app_id` without `keep_secs` is the local app: never taken over, even by itself...
+    let mut local = app(&env, None, Some("a")).await;
+    local.open_terminal(1, &env.path("home")).await;
+    for keep in [None, Some(60)] {
+        let mut again = welcomed(&env, keep, Some("a")).await;
+        assert_eq!(again.control().await, (0, refused.clone()));
+        closes(&mut again).await;
+    }
+    // ...so its terminals end with it (#18).
+    drop(local);
+    assert!(daemon.wait_exit().success());
+    common::wait_until(|| env.processes().is_empty());
+    // A remote connection is not taken over by one without `keep_secs`.
+    let env = Env::new();
+    let daemon = env.daemon();
+    let _remote = app(&env, Some(60), Some("a")).await;
+    let mut local = welcomed(&env, None, Some("a")).await;
+    assert_eq!(local.control().await, (0, refused));
+    closes(&mut local).await;
     stop(daemon);
 }
 

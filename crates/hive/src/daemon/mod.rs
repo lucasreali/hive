@@ -1791,7 +1791,9 @@ mod tests {
         let (app, mut sent) = mpsc::unbounded_channel();
         *state.app.lock().await = Some(app);
         let (frames, _) = mpsc::unbounded_channel();
-        state.open(1, r"\\host\share", (80, 24), None, frames).await;
+        state
+            .open(1, r"\\host\share", (80, 24), None, frames, false)
+            .await;
         let frame = sent.try_recv().unwrap();
         let message = r"\\host\share: network and device paths are not supported: use a drive path such as C:\…";
         let error = Control::Error {
