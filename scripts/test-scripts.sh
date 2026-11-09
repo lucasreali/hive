@@ -8,6 +8,7 @@
 #     alone above
 #   - energy.sh: its argument checks, and finding Hive's processes in and parsing canned `ps` and
 #     `top` output
+#   - release-notes.sh: the notes of a scratch repository's commits since its previous tag
 #   - macos-bundle.sh (macOS only): its bundle check passes a correctly signed bundle and fails
 #     each broken one (TODO 17.11)
 # Never touches the real environment: a temporary HOME, a scratch repository outside this one.
@@ -301,6 +302,166 @@ check "release-notes: other earlier notes do not silence it" \
   '[ "$(notes self-signed "something else")" = "$first" ]'
 check "release-notes: an ad-hoc release has none" '[ -z "$(notes adhoc "")" ]'
 check "release-notes: a Developer ID release has none" '[ -z "$(notes developer-id "")" ]'
+
+# --- release-notes.sh ---------------------------------------------------------------------------
+# Each case builds a scratch repository: `rn_new`, `c <subject> [body]`, `tagged <tag>`, then
+# `rn <tag> [mode] [earlier notes]`; `section` is one heading's lines.
+rn_dir=$tmp/release-notes
+rn_new() {
+  rm -rf "$rn_dir"
+  git init -q "$rn_dir"
+  git -C "$rn_dir" config user.name test
+  git -C "$rn_dir" config user.email test@example.invalid
+}
+c() { git -C "$rn_dir" commit -q --allow-empty -m "$1" ${2:+-m "$2"}; }
+tagged() { git -C "$rn_dir" tag "$1"; }
+rn() { (cd "$rn_dir" && printf '%s' "${3:-}" | "$repo/scripts/release-notes.sh" "$1" "${2:-adhoc}"); }
+section() { awk -v head="## $2" '/^## /{on = ($0 == head); next} on && /^- /' <<<"$1"; }
+link='[the first-launch steps](https://github.com/lucasreali/hive#macos)'
+
+# Commits since the previous tag, in their sections.
+rn_new; c "feat: before"; c "fix(old): before too"; tagged v1.0.0
+c "feat: a feature"; c "fix: a fix"; c "perf: faster"; c "feat: a newer feature"; tagged v1.1.0
+o=$(rn v1.1.0)
+check "notes: only the commits since the previous tag" '! holds "$o" "before"'
+check "notes: feat, newest first" '[ "$(section "$o" Features)" = "$(printf -- "- a newer feature\n- a feature")" ]'
+check "notes: fix" '[ "$(section "$o" Fixes)" = "- a fix" ]'
+check "notes: perf" '[ "$(section "$o" Performance)" = "- faster" ]'
+check "notes: the first-launch link comes last" '[ "$(tail -n 1 <<<"$o")" = "First install on a Mac: follow $link." ]'
+check "notes: no section stands empty" '! holds "$o" "## Breaking"'
+check "notes: the link's heading is in the README" 'grep -qx "### macOS" "$repo/README.md"'
+
+# Which tag is the previous one.
+rn_new; c "feat: first"; tagged v1.0.0; c "feat: second"; tagged v2.0.0; c "feat: third"
+o=$(rn v3.0.0)
+check "notes: a dry run, its tag not there yet, counts since the last tag" \
+  '[ "$(section "$o" Features)" = "- third" ]'
+git -C "$rn_dir" tag -a v3.0.0 -m "an annotated tag"; c "feat: fourth"; tagged v4.0.0
+o=$(rn v4.0.0)
+check "notes: an annotated previous tag" '[ "$(section "$o" Features)" = "- fourth" ]'
+tagged other-tag; c "feat: fifth"; tagged v5.0.0
+o=$(rn v5.0.0)
+check "notes: the tag at HEAD is not the previous one" '[ "$(section "$o" Features)" = "- fifth" ]'
+c "feat: sixth"; tagged not-a-release; tagged v6.0.0
+o=$(rn v6.0.0)
+check "notes: a tag not named v<digit> is no release" '[ "$(section "$o" Features)" = "- sixth" ]'
+rn_new; c "feat: base"; tagged v1.0.0
+git -C "$rn_dir" switch -q -c elsewhere; c "feat: on a branch"; tagged v9.0.0
+git -C "$rn_dir" switch -q -; c "feat: on main"; tagged v2.0.0
+o=$(rn v2.0.0)
+check "notes: a tag not in this history is not the previous one" \
+  '[ "$(section "$o" Features)" = "- on main" ]'
+
+# The first tag.
+rn_new; c "docs: the start"; c "feat: all there is"; tagged v0.1.0
+o=$(rn v0.1.0)
+check "notes: a first tag lists every commit" '[ "$(section "$o" Features)" = "- all there is" ]'
+rn_new; c "feat: untagged at all"
+check "notes: no tag at all, and none for it yet" '[ "$(section "$(rn v0.1.0)" Features)" = "- untagged at all" ]'
+
+# Scopes.
+rn_new; c "feat(viewer): edit a table"; c "fix(a b): two words"; c "feat(): an empty scope"; tagged v0.1.0
+o=$(rn v0.1.0)
+check "notes: a scope leads the line" '[ "$(section "$o" Features)" = "- **viewer:** edit a table" ]'
+check "notes: a scope of two words" '[ "$(section "$o" Fixes)" = "- **a b:** two words" ]'
+check "notes: an empty scope is not a Conventional Commit" '! holds "$o" "an empty scope"'
+
+# Breaking changes.
+rn_new; c "feat(api)!: a breaking feature"; c "fix!: a breaking fix"; c "refactor(core)!: a breaking refactor"
+c "feat: with a footer" "BREAKING CHANGE: it breaks"; c "docs: a dashed footer" "BREAKING-CHANGE: it breaks"
+c "fix: only says so in passing" "Not a BREAKING CHANGE: mid-line"; c "chore: !: no marker"; tagged v0.1.0
+o=$(rn v0.1.0)
+check "notes: every breaking change under its heading, whatever its type" \
+  '[ "$(section "$o" "Breaking changes")" = "$(printf -- "- a dashed footer\n- with a footer\n- **core:** a breaking refactor\n- a breaking fix\n- **api:** a breaking feature")" ]'
+check "notes: breaking changes come first" '[ "$(grep -m1 "^## " <<<"$o")" = "## Breaking changes" ]'
+check "notes: a breaking feature is not a feature too" '[ -z "$(section "$o" Features)" ]'
+check "notes: BREAKING CHANGE counts only at the start of a line" \
+  '[ "$(section "$o" Fixes)" = "- only says so in passing" ]'
+check "notes: a chore that only holds \"!:\" stays out" '! holds "$o" "no marker"'
+
+# Merges.
+rn_new; c "docs: base"; tagged v1.0.0; git -C "$rn_dir" switch -q -c topic; c "feat: from the branch"
+git -C "$rn_dir" switch -q -; c "fix: on main"
+git -C "$rn_dir" merge -q --no-ff -m "chore(merge): task/1-topic" topic
+git -C "$rn_dir" switch -q -c other; c "fix: from another"; git -C "$rn_dir" switch -q -
+git -C "$rn_dir" merge -q --no-ff -m "feat: a merge commit called a feature" other
+c "chore(merge): not even a merge"; tagged v1.1.0
+o=$(rn v1.1.0)
+check "notes: a merged branch's commits are listed" 'holds "$o" "- from the branch" "- from another" "- on main"'
+check "notes: chore(merge) and merge commits are left out" '! holds "$o" "merge"'
+
+# Everything else.
+rn_new
+for subject in "docs: d" "chore: e" "test: f" "refactor: g" "build: h" "ci: i" "style: j" "chore(release): v1.0.0" \
+  "feature: k" "fixes: l" "perfect: m" "Fix: n" "FEAT: o" "feat:p" "feat : q" "feat(r: s" "feat(t)(u): v" "fix the thing" \
+  "Merge branch 'main' into task/1"; do
+  c "$subject"
+done
+tagged v0.1.0
+o=$(rn v0.1.0)
+check "notes: other types and lookalikes leave only the link" '[ "$o" = "First install on a Mac: follow $link." ]'
+
+# Reverts.
+rn_new; c "docs: base"; tagged v1.0.0
+c "feat(a): kept"; c "feat(b): gone"; c 'Revert "feat(b): gone"'
+c "fix: back again"; c 'Revert "fix: back again"'; c 'Revert "Revert "fix: back again""'
+c "perf: also back"; c 'Revert "perf: also back"'; c 'Reapply "perf: also back"'
+c 'Revert "feat: from an earlier release"'; tagged v1.1.0
+o=$(rn v1.1.0)
+check "notes: a reverted commit and its revert are left out" \
+  '[ "$(section "$o" Features)" = "- **a:** kept" ] && ! holds "$o" "Revert"'
+check "notes: a reverted revert is listed once" '[ "$(section "$o" Fixes)" = "- back again" ]'
+check "notes: a reapplied commit is listed once" \
+  '[ "$(section "$o" Performance)" = "- also back" ] && ! holds "$o" "Reapply"'
+
+# Untrusted subjects: data all the way, into the JSON too.
+rn_new; evaluated=$tmp/evaluated
+nasty='a $(touch '$evaluated') `touch '$evaluated'` "quoted" \back ${HOME} ; touch '$evaluated' | <b>'
+c "fix: $nasty"; c "feat($nasty): in a scope"; c "$(printf 'perf: a \033[31mred\033[0m\ttabbed\177 one')"; tagged v0.1.0
+o=$(rn v0.1.0)
+check "notes: a subject comes through unchanged" '[ "$(section "$o" Fixes)" = "- $nasty" ]'
+check "notes: control characters are removed" '[ "$(section "$o" Performance)" = "- a [31mred[0mtabbed one" ]'
+check "notes: jq --arg carries them unchanged" \
+  '[ "$(jq -n --arg notes "$o" "{notes: \$notes}" | jq -r .notes)" = "$o" ]'
+check "notes: nothing in a subject is evaluated" '[ ! -e "$evaluated" ]'
+
+# 25.5's one-time note joins them.
+rn_new; c "feat: a feature"; tagged v0.1.0
+o=$(rn v0.1.0 self-signed)
+check "notes: the first self-signed release says to allow Hive once more, first" \
+  '[ "${o:0:${#first}}" = "$first" ] && holds "$o" "- a feature" "$link"'
+check "notes: the note and the changes keep a blank line" 'holds "$o" "$first
+
+## Features"'
+check "notes: a later self-signed release, given those notes, stays silent" \
+  '! holds "$(rn v0.2.0 self-signed "$o")" "signed with its own certificate"'
+check "notes: other signing modes have only the changes" \
+  '! holds "$(rn v0.1.0 adhoc)" "signed with its own certificate" &&
+   ! holds "$(rn v0.1.0 developer-id)" "signed with its own certificate"'
+
+# What stops it.
+check "notes: a wrong call fails" '! (cd "$rn_dir" && "$repo/scripts/release-notes.sh" v0.1.0 </dev/null 2>/dev/null)'
+c "feat: more"; git clone -q --depth 1 "file://$rn_dir" "$tmp/shallow" 2>/dev/null
+check "notes: a shallow clone fails, so no release says the wrong thing" \
+  '! (cd "$tmp/shallow" && "$repo/scripts/release-notes.sh" v0.2.0 adhoc </dev/null >/dev/null 2>&1)'
+mkdir "$tmp/no-repository"
+check "notes: outside a repository it fails" \
+  '! (cd "$tmp/no-repository" && GIT_CEILING_DIRECTORIES=$tmp "$repo/scripts/release-notes.sh" v0.2.0 adhoc </dev/null >/dev/null 2>&1)'
+
+# The size GitHub and an argument take: whole lines out, and counted.
+rn_new; c "fix: a short one"; c "fix: $(head -c 100000 /dev/zero | tr '\0' x)"; c "perf: another short one"; tagged v0.1.0
+o=$(rn v0.1.0)
+check "notes: past the limit, lines are left out and counted" \
+  'holds "$o" "- a short one" "- another short one" "And 1 more, left out for length." && [ "${#o}" -lt 1000 ]'
+
+# The workflow: the history for it, and the same text in both places.
+publish=$(awk '/^  publish:/,0' "$repo/.github/workflows/release.yml")
+check "notes: the publish job checks out the whole history" \
+  'grep -A2 "actions/checkout" <<<"$publish" | grep -q "fetch-depth: 0"'
+check "notes: latest.json takes them with --arg, and after they are made" \
+  'holds "$publish" "--arg notes \"\$notes\"" "notes: \$notes" &&
+   [ "$(grep -n "name: notes" <<<"$publish" | cut -d: -f1)" -lt "$(grep -n "name: latest.json" <<<"$publish" | cut -d: -f1)" ]'
+check "notes: the release takes the same file" 'holds "$publish" "> notes.md" "--notes-file notes.md"'
 
 # --- macos-bundle.sh check (macOS only: codesign) -----------------------------------------------
 # A small bundle shaped like Hive.app, with the real Info.plist keys and entitlements, signed
