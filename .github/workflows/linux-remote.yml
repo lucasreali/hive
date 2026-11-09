@@ -1,0 +1,70 @@
+# The `hive` a remote Linux host runs over SSH (TODO 26.13, spike Q4, Q5): static musl builds for
+# x86_64 and aarch64, which the macOS app carries as `hive-linux-<arch>` and uploads. Each is built
+# with cargo-zigbuild (Zig links musl and cross-compiles; approved by the human, 2026-11-09) on a
+# runner of its own architecture, so the smoke test runs it natively: `--version` is the app's
+# version, and `hive daemon` starts, listens and ends on SIGTERM in an old-glibc container
+# (debian:10, glibc 2.28), where a binary needing a newer glibc, or any libc, fails.
+# Called by ci.yml (checked on every branch), macos.yml (the bundle carries them) and release.yml.
+# Each artifact `hive-linux-<arch>` holds the file of that name.
+name: linux-remote
+
+on:
+  workflow_call:
+
+env:
+  CARGO_TERM_COLOR: always
+  ZIG_VERSION: 0.16.0
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        include:
+          - arch: x86_64
+            runner: ubuntu-latest
+            zig-sha256: 70e49664a74374b48b51e6f3fdfbf437f6395d42509050588bd49abe52ba3d00
+          - arch: aarch64
+            runner: ubuntu-24.04-arm
+            zig-sha256: ea4b09bfb22ec6f6c6ceac57ab63efb6b46e17ab08d21f69f3a48b38e1534f17
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+        with:
+          toolchain: stable
+          targets: ${{ matrix.arch }}-unknown-linux-musl
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          key: musl
+      - uses: taiki-e/install-action@4cef1412cce204788f482e778a0b9187f9626a29 # v2.87.21
+        with:
+          tool: cargo-zigbuild@0.23.4
+      # Zig from its release, checked against the digest ziglang.org publishes for it.
+      - env:
+          ARCH: ${{ matrix.arch }}
+          SHA256: ${{ matrix.zig-sha256 }}
+        run: |
+          zig=zig-$ARCH-linux-$ZIG_VERSION
+          curl -sSfL --retry 3 -o "$RUNNER_TEMP/zig.tar.xz" "https://ziglang.org/download/$ZIG_VERSION/$zig.tar.xz"
+          echo "$SHA256  $RUNNER_TEMP/zig.tar.xz" | sha256sum -c -
+          tar -xJf "$RUNNER_TEMP/zig.tar.xz" -C "$RUNNER_TEMP"
+          echo "$RUNNER_TEMP/$zig" >> "$GITHUB_PATH"
+      - env:
+          ARCH: ${{ matrix.arch }}
+        run: |
+          cargo zigbuild --release --locked -p hive --target "$ARCH-unknown-linux-musl"
+          mkdir out
+          cp "target/$ARCH-unknown-linux-musl/release/hive" "out/hive-linux-$ARCH"
+          ls -l out
+      - env:
+          ARCH: ${{ matrix.arch }}
+        run: |
+          version=$(jq -r .version src-tauri/tauri.conf.json)
+          docker run --rm -v "$PWD:/hive:ro" -w /hive debian:10 \
+            scripts/linux-smoke.sh "out/hive-linux-$ARCH" "$version"
+      - uses: actions/upload-artifact@v6
+        with:
+          name: hive-linux-${{ matrix.arch }}
+          path: out/hive-linux-${{ matrix.arch }}
+          if-no-files-found: error
+          retention-days: 1

@@ -26,7 +26,11 @@
 #       Gatekeeper's verdict (`spctl -a`) and the stapled notarization ticket. With --self-signed
 #       the designated requirement of the app and of the nested `hive` names their identifier and that
 #       certificate, not a cdhash (what lets macOS's grants survive an update), under the hardened
-#       runtime.
+#       runtime. The remote Linux services are there too (TODO 26.13): `hive-linux-x86_64` and
+#       `hive-linux-aarch64`, each an executable ELF for its CPU with no interpreter (static, so it
+#       needs no libc on the host) that carries the app's version (CFBundleShortVersionString).
+#       They are data to codesign, sealed by the app's signature like any resource; a Mac cannot run
+#       them, so linux-remote.yml's smoke test is what runs them and checks their `--version`.
 #   macos-bundle.sh release-notes <signing mode>
 #       Given the earlier releases' notes on stdin: the one note of the first self-signed release
 #       (Hive's identity changes that once), else nothing. scripts/release-notes.sh puts it first.
@@ -115,6 +119,32 @@ signer() {
   echo "${chain:-adhoc} team=${team:-none}"
 }
 
+# The remote Linux services the app carries (TODO 26.13): each name and its ELF e_machine.
+LINUX_BUILDS="hive-linux-x86_64:62 hive-linux-aarch64:183"
+
+# le <file> <offset> <bytes>: the unsigned number stored there (little-endian, as `od` reads it on
+# the Macs and Linux machines this runs on).
+le() { od -An -tu"$3" -j "$2" -N "$3" "$1" | tr -d ' \n'; }
+
+# linux_build <path> <e_machine> <version>: an executable 64-bit little-endian ELF for that CPU,
+# with no PT_INTERP (static: no dynamic loader, so no libc of the host's), carrying <version>.
+linux_build() {
+  local bin=$1 machine=$2 version=$3 phoff size count i type load=
+  [ -f "$bin" ] || die "no ${bin##*/} in the app"
+  [ -x "$bin" ] || die "${bin##*/} is not executable"
+  [ "$(od -An -tx1 -N 6 "$bin" | tr -d ' \n')" = 7f454c460201 ] || die "${bin##*/} is not a 64-bit little-endian ELF"
+  [ "$(le "$bin" 18 2)" = "$machine" ] || die "${bin##*/} is not built for its CPU (e_machine $(le "$bin" 18 2), not $machine)"
+  phoff=$(le "$bin" 32 8) size=$(le "$bin" 54 2) count=$(le "$bin" 56 2)
+  [ -n "$count" ] && [ "$count" -le 64 ] || die "${bin##*/} has no readable program headers"
+  for ((i = 0; i < count; i++)); do
+    type=$(le "$bin" $((phoff + i * size)) 4)
+    [ "$type" != 3 ] || die "${bin##*/} is dynamically linked (it names an interpreter)"
+    [ "$type" != 1 ] || load=1
+  done
+  [ -n "$load" ] || die "${bin##*/} has nothing to load"
+  LC_ALL=C grep -aqE "(^|[^0-9])${version//./\\.}([^0-9]|$)" "$bin" || die "${bin##*/} does not carry version $version"
+}
+
 check() {
   local app=$1 option=${2:-} certificate=${3:-}
   [ -d "$app" ] || die "no such bundle: $app"
@@ -128,6 +158,13 @@ check() {
   esac
   local hive=$app/Contents/Resources/hive plist=$app/Contents/Info.plist
   [ -f "$hive" ] || die "no hive in $app"
+  local version build
+  version=$(plutil -extract CFBundleShortVersionString raw -o - "$plist" 2>/dev/null) ||
+    die "Info.plist has no CFBundleShortVersionString"
+  [[ $version =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || die "not a version: $version"
+  for build in $LINUX_BUILDS; do
+    linux_build "$app/Contents/Resources/${build%:*}" "${build#*:}" "$version"
+  done
 
   codesign --verify --deep --strict "$app" || die "the bundle does not validate"
   codesign --verify --strict "$hive" || die "the nested hive does not validate"

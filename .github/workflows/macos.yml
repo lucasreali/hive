@@ -42,7 +42,7 @@ jobs:
             grep -qvE '\.md$|^docs/|^\.claude/(skills|agents)/' <<< "$files" ||
               grep -qx 'docs/architecture\.md' <<< "$files" ||
               code=false
-            grep -qE '^(src-tauri/|([^/]*/)?tauri[^/]*\.json$|Cargo\.(toml|lock)$|package\.json$|bun\.lock$|scripts/macos-bundle\.sh$|\.github/workflows/macos\.yml$)' <<< "$files" ||
+            grep -qE '^(src-tauri/|([^/]*/)?tauri[^/]*\.json$|Cargo\.(toml|lock)$|package\.json$|bun\.lock$|scripts/macos-bundle\.sh$|scripts/linux-smoke\.sh$|\.github/workflows/(macos|linux-remote)\.yml$)' <<< "$files" ||
               bundle=false
           fi
           echo "code=$code" | tee -a "$GITHUB_OUTPUT"
@@ -111,8 +111,14 @@ jobs:
       # A second launch hands over to the running app and ends (TODO 17.18).
       - run: cargo build -p hive-app && scripts/second-launch.sh
 
-  bundle:
+  # The remote Linux `hive` the bundle carries (TODO 26.13), built and run as release.yml does.
+  linux-remote:
     needs: changes
+    if: needs.changes.outputs.bundle == 'true'
+    uses: ./.github/workflows/linux-remote.yml
+
+  bundle:
+    needs: [changes, linux-remote]
     if: needs.changes.outputs.bundle == 'true'
     # As release.yml builds the shipped app. GitHub retired macos-14; the human moved both to
     # macos-26 (2026-11-05), so the app links against the macOS 26 SDK (its new window style).
@@ -135,6 +141,13 @@ jobs:
           cargo build --release --locked -p hive
           mkdir -p src-tauri/resources
           cp target/release/hive src-tauri/resources/hive
+      - uses: actions/download-artifact@v7
+        with:
+          pattern: hive-linux-*
+          path: src-tauri/resources
+          merge-multiple: true
+      # An artifact keeps no file mode.
+      - run: chmod 755 src-tauri/resources/hive-linux-*
       - run: bun install --frozen-lockfile
       # Built, then bundled, as release.yml does (its signing secrets reach only the bundling).
       # No updater artifacts, so no signing key: that stays in release.yml's `release`

@@ -134,6 +134,13 @@ jobs:
           echo "code=$code" | tee -a "$GITHUB_OUTPUT"
           echo "windows=$windows" | tee -a "$GITHUB_OUTPUT"
 
+  # The remote Linux `hive` (TODO 26.13): the static x86_64 and aarch64 builds the macOS app
+  # carries, each run in an old-glibc container (linux-remote.yml).
+  linux-remote:
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
+    uses: ./.github/workflows/linux-remote.yml
+
   # The Linux `hive` the Windows installer carries, as release.yml's `linux` job builds it.
   linux-hive:
     needs: changes

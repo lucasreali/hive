@@ -1,5 +1,6 @@
 # A tag `v*` (made by scripts/release.sh) publishes a GitHub release: the Windows installer
-# with the Linux `hive` and `hive.exe` (12.5.4) inside it, the macOS app (.dmg) with the macOS `hive` inside it, their
+# with the Linux `hive` and `hive.exe` (12.5.4) inside it, the macOS app (.dmg) with the macOS `hive` inside it, and
+# the static Linux `hive-linux-x86_64` and `hive-linux-aarch64` for remote hosts (26.13), their
 # updater signatures and `latest.json`, which the app's updater reads (TODO 4.17–4.19, 5.3).
 # Windows and macOS build in parallel; only `publish` touches the release, so `latest.json` is
 # written once, with every platform, in the shape tauri-action used to produce.
@@ -111,8 +112,14 @@ jobs:
             target/release/bundle/nsis/*-setup.exe.sig
           if-no-files-found: error
 
-  macos:
+  # The remote Linux `hive` (TODO 26.13): static x86_64 and aarch64 builds, each run in an
+  # old-glibc container, for the macOS app to carry.
+  linux-remote:
     needs: ci-green
+    uses: ./.github/workflows/linux-remote.yml
+
+  macos:
+    needs: [ci-green, linux-remote]
     # Apple Silicon only (#39). macos-26 since GitHub retired macos-14 (the human, 2026-11-05).
     runs-on: macos-26
     environment: release
@@ -163,6 +170,14 @@ jobs:
           cargo build --release --locked -p hive
           mkdir -p src-tauri/resources
           cp target/release/hive src-tauri/resources/hive
+      # Data to codesign: the app's signature seals them as resources, nothing signs them.
+      - uses: actions/download-artifact@v7
+        with:
+          pattern: hive-linux-*
+          path: src-tauri/resources
+          merge-multiple: true
+      # An artifact keeps no file mode.
+      - run: chmod 755 src-tauri/resources/hive-linux-*
       - run: bun install --frozen-lockfile
       # The frontend and the app binary, without signing anything.
       - run: bun tauri build --no-bundle --config src-tauri/tauri.release.macos.conf.json
