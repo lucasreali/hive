@@ -28,8 +28,8 @@
 #       certificate, not a cdhash (what lets macOS's grants survive an update), under the hardened
 #       runtime.
 #   macos-bundle.sh release-notes <signing mode>
-#       The notes of a release, given the earlier releases' notes on stdin: the one note of the
-#       first self-signed release (Hive's identity changes that once), else nothing.
+#       Given the earlier releases' notes on stdin: the one note of the first self-signed release
+#       (Hive's identity changes that once), else nothing. scripts/release-notes.sh puts it first.
 #   macos-bundle.sh dsyms <Hive.app> <folder>
 #       The app's binary and its nested `hive` each have a dSYM in <folder> (`hive-app.dSYM`,
 #       `hive.dSYM`, as cargo makes them with `split-debuginfo = "packed"`) whose UUIDs are the
