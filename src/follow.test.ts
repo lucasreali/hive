@@ -525,12 +525,35 @@ test("a save waits for its own file's edits only, and saves that file's buffer",
   apply({ type: "file_saved", ...CSV, version: "w" });
   // Back on a.csv, another edit's wait does not hold b.md's save.
   save.mockClear();
-  setOpenFile(CSV);
+  setOpenFile(CSV, true);
   editOpenTable(edit);
-  setOpenFile(MD);
+  expect(useHive.getState().tableAsks).toHaveLength(1);
+  setOpenFile(MD, true);
   saveOpenFile();
   expect(save.mock.calls).toEqual([["/w", "b.md", "mine\n", "m"]]);
   expect(useHive.getState().saveAfterAsks).toBeNull();
+  stop();
+});
+
+test("a waiting save goes once its file's edits are answered, whatever other files wait", () => {
+  const save = spyOn(realTransport, "saveFile").mockImplementation(async () => {});
+  save.mockClear();
+  const { stop } = editedTable();
+  const other = { worktree: "/w", path: "c.csv" };
+  setOpenFile(other, true);
+  fileAnswer("c\n", "c", other);
+  setOpenFile(CSV, true);
+  fileAnswer("a\n");
+  welcome();
+  const edit = { op: "insert_row", at: 0 } as const;
+  editOpenTable(edit);
+  askBufferTable(other);
+  saveOpenFile();
+  expect(save).not.toHaveBeenCalled();
+  tableEdited("x\na\n");
+  // c.csv's is on its way now.
+  expect(useHive.getState().tableAsks).toEqual([{ ...other, edit: null }]);
+  expect(save.mock.calls).toEqual([["/w", "a.csv", "x\na\n", "v"]]);
   stop();
 });
 

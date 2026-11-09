@@ -726,13 +726,15 @@ mod tests {
 
     #[test]
     fn an_edit_past_the_text_limit_is_refused() {
+        // Short rows, so that only the text's size, not a row's, can refuse it.
         let limit = TEXT_LIMIT as usize;
-        // A cell that brings the text to the limit, line break included; one byte more.
-        let fits = set(0, 0, &"x".repeat(limit - 1));
-        let (text, _) = done("a\n", Some(&fits)).unwrap();
-        assert_eq!(text.len(), limit);
-        let over = set(0, 0, &"x".repeat(limit));
-        let refused = done("a\n", Some(&over)).err();
+        let row = format!("{}\n", "x".repeat(209));
+        let text = row.repeat(limit / row.len());
+        // A cell that brings the text to the limit, one byte more.
+        let cell = |extra: usize| set(0, 0, &"y".repeat(209 + limit - text.len() + extra));
+        let (next, _) = done(&text, Some(&cell(0))).unwrap();
+        assert_eq!(next.len(), limit);
+        let refused = done(&text, Some(&cell(1))).err();
         assert_eq!(refused.as_deref(), Some(TOO_LARGE));
     }
 
