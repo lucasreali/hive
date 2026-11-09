@@ -77,10 +77,11 @@ function BlockEditor(props: {
     el.style.height = "auto";
     el.style.height = `${el.scrollHeight + 2}px`;
   };
+  // biome-ignore lint/correctness/useExhaustiveDependencies: `fit` only reads the ref
   useLayoutEffect(() => {
     fit();
     box.current?.focus();
-  });
+  }, []);
   return (
     <textarea
       ref={box}

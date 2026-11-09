@@ -351,6 +351,21 @@ test("a table's edits go one at a time, each from the text the last one left", (
   stop();
 });
 
+test("an edit after a save starts from the saved text, not the last answer from disk", () => {
+  const { editTable, stop } = editedTable();
+  welcome();
+  editOpenTable({ op: "insert_row", at: 0 });
+  tableEdited("x\na\n");
+  useHive.setState((s) => ({ edit: s.edit && { ...s.edit, saving: s.edit.doc } }));
+  apply({ type: "file_saved", ...CSV, version: "w" });
+  // The file's answer for the save has not come: the last one still holds the old text.
+  const second = { op: "remove_row", at: 0 } as const;
+  editOpenTable(second);
+  expect(editTable.mock.calls.at(-1)).toEqual(["/w", "a.csv", "x\na\n", second]);
+  expect(useHive.getState().edit?.version).toBe("w");
+  stop();
+});
+
 test("no buffer to start from: no edit is asked", () => {
   const { editTable, stop } = editedTable();
   welcome();

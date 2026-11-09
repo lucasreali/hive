@@ -885,7 +885,8 @@ export const setSaveAfterAsks = (saveAfterAsks: boolean) => useHive.setState({ s
  */
 export const editOpenTable = (edit: TableEdit) =>
   useHive.setState((s) => {
-    const buffer = editFor({ ...s, editing: true }, s.file);
+    // A buffer there is newer than the last answer: a save may not have been answered by one yet.
+    const buffer = s.edit ?? editFor({ ...s, editing: true }, s.file);
     if (!s.openFile || !buffer) return {};
     const ask = { worktree: s.openFile.worktree, path: s.openFile.path, edit };
     return { editing: true, edit: buffer, tableAsks: [...s.tableAsks, ask] };
