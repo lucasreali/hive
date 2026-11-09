@@ -628,7 +628,7 @@ test("a paired tab's menu replaces its pane with another tab of the worktree, or
   expect(replace.getAttribute("aria-expanded")).toBe("false");
   fireEvent.keyDown(replace, { key: "ArrowDown" });
   fireEvent.keyDown(replace, { key: "ArrowRight" });
-  // Its submenu: the worktree's terminals in no other pane of this pair, the first focused.
+  // Its submenu: the worktree's other tabs, those of this pair left out, the first focused.
   const sub = screen.getByRole("menu", { name: "Replace with" });
   const others = within(sub).getAllByRole("menuitem");
   // Of the same name, they say their place in the bar (25.1).

@@ -20,11 +20,13 @@ import {
   focusFilePane,
   focusPane,
   initialState,
+  moveTab,
   pinFile,
   renderedShown,
   replacePane,
   select,
   selectIn,
+  setEdit,
   setOpenFile,
   setRendered,
   setSplit,
@@ -40,6 +42,7 @@ import {
   droppable,
   fileKey,
   paneFile,
+  paneIdOf,
   paneState,
   shownPane,
   shownPanes,
@@ -50,12 +53,12 @@ import { closeTerminal, splitTerminal } from "./terminals";
 import type { Transport } from "./transport";
 import { transport } from "./transport";
 import { MOCK_REPOS } from "./transport/mock";
-import { toText } from "./viewer/buffer";
+import { type EditBuffer, isDirty, startSave, toText } from "./viewer/buffer";
 
 // 25.1: any two tabs of a worktree can be a pair, a file with a terminal or two files.
 
 const [shop] = MOCK_REPOS;
-const [, fixLogin] = shop.worktrees;
+const [, fixLogin, checkout] = shop.worktrees;
 const W = fixLogin.path;
 const s = () => useHive.getState();
 const a = { worktree: W, path: "src/a.ts" };
@@ -91,11 +94,9 @@ const table = (path: string) =>
     type: "table",
     worktree: W,
     path,
-    rows: [["x"]],
-    total: 1,
-    truncated: false,
+    sheets: [],
     error: null,
-  } as never);
+  });
 
 /** `a` and `b` open with tabs of their own, `b` the open file. */
 function twoFiles(editing = false) {
@@ -181,10 +182,35 @@ test("two files pair: the focused one is the open file, the other keeps its stat
   expect(s().selectedLines).toBeNull();
   selectIn(a)({ from: 3, to: 3 });
   expect(s().selectedLines).toEqual({ from: 3, to: 3 });
+});
 
-  // A save's answer reaches the buffer of the pane without the focus too.
+test("a save's answer reaches the buffer of the pane that lost the focus meanwhile", () => {
+  twoFiles(true);
+  answer(b.path, "bee\n");
+  setSplit({ left: A, right: B }, B);
+  answer(a.path, "ay\n");
+  const buffer = () => paneFile(s(), B)?.edit as EditBuffer;
+  // `b` is sending its edits when the focus moves to `a`.
+  setEdit(startSave({ ...(s().edit as EditBuffer), doc: toText("bees\n") }));
+  focusFilePane(a);
+  expect(buffer().saving?.toString()).toBe("bees\n");
+  expect(isDirty(buffer())).toBe(true);
+
   apply({ type: "file_saved", worktree: W, path: b.path, version: "v2" });
-  expect(paneFile(s(), B)?.edit?.saving ?? null).toBeNull();
+  expect(buffer().saving).toBeNull();
+  expect(buffer().version).toBe("v2");
+  expect(buffer().saved?.toString()).toBe("bees\n");
+  expect(isDirty(buffer())).toBe(false);
+  // The open file's buffer is not touched.
+  expect(s().edit?.version).toBe("v:ay\n");
+
+  // A failure too.
+  focusFilePane(b);
+  setEdit(startSave({ ...(s().edit as EditBuffer), doc: toText("more\n") }));
+  focusFilePane(a);
+  apply({ type: "save_failed", worktree: W, path: b.path, error: "io", message: "disk full" });
+  expect([buffer().saving, buffer().error]).toEqual([null, "disk full"]);
+  expect(isDirty(buffer())).toBe(true);
 });
 
 test("a pane's answers and modes: a tab without a buffer yet, a read-only one, a table", () => {
@@ -331,20 +357,52 @@ test('"Split right" on a file: the next tab of its worktree in no pair, else a n
   await splitTerminal(B);
   expect(s().splits).toEqual([{ left: B, right: 1 }]);
   expect([s().activeTab, s().fileShown]).toEqual([1, false]);
-  // A pair is skipped; when no other tab is free, a new terminal opens there.
-  setSplit({ left: A, right: 2 });
-  const open = spyOn(transport, "openTerminal");
-  unsplit(A);
-  useHive.setState((x) => ({ ...x, ...dropFile(x, a) }));
-  closeTerminal(2);
-  unsplit(B);
-  closeTerminal(1);
-  await splitTerminal(B);
-  expect(open).toHaveBeenCalledTimes(1);
-  const pair = s().splits[0];
-  expect(pair?.left).toBe(B);
-  expect(typeof pair?.right).toBe("number");
-  open.mockRestore();
+});
+
+test('"Split right" on a file skips a tab in a pair', async () => {
+  for (const id of [1, 2, 3]) addTab(id, W);
+  twoFiles();
+  // `b`, the tab after `a`, goes in a pair with terminal 1: the bar is 2, 3, a, b, 1.
+  setSplit({ left: B, right: 1 });
+  expect(barItems(s()).map(paneIdOf)).toEqual([2, 3, A, B, 1]);
+  await splitTerminal(A);
+  // Past both, wrapping: terminal 2, and the other pair stays.
+  expect(s().splits).toEqual([
+    { left: B, right: 1 },
+    { left: A, right: 2 },
+  ]);
+});
+
+test('"Split right" on a file skips another worktree\'s tabs, files and terminals', async () => {
+  setOpenFile(a);
+  pinFile(a);
+  // Right after `a` in the order: a file and a terminal of another worktree.
+  const away = { worktree: checkout.path, path: "away.ts" };
+  setOpenFile(away);
+  pinFile(away);
+  addTab(9, checkout.path);
+  addTab(1, W);
+  select(fixLogin.id);
+  await splitTerminal(A);
+  expect(s().splits).toEqual([{ left: A, right: 1 }]);
+});
+
+test('"Split right" on a file opens a new terminal in its worktree when no tab is free', async () => {
+  // Ids the service will not give the new terminal.
+  addTab(101, W);
+  addTab(109, checkout.path);
+  twoFiles();
+  select(fixLogin.id);
+  setSplit({ left: B, right: 101 }, B);
+  const before = s().tabs.map((t) => t.id);
+  await splitTerminal(A);
+  const added = s().tabs.find((t) => !before.includes(t.id));
+  expect(added?.cwd).toBe(W);
+  expect(s().splits).toEqual([
+    { left: B, right: 101 },
+    { left: A, right: added?.id as number },
+  ]);
+  expect([s().activeTab, s().fileShown]).toEqual([added?.id as number, false]);
 });
 
 test("a pair's other file is followed as the open one is, its table too", () => {
@@ -378,7 +436,7 @@ test("a pair's other file is followed as the open one is, its table too", () => 
     added: 0,
     removed: 0,
     error: null,
-  } as never);
+  });
   expect(openFile.mock.calls.map((call) => call[1])).toEqual([d.path, c.path]);
   expect(openTable.mock.calls.map((call) => call[1])).toEqual([d.path, c.path]);
   // Something else: neither.
@@ -600,6 +658,30 @@ test("the file tab's and the pane header's menu split, replace and close; Replac
   fireEvent.contextMenu(fileTab("c.ts"));
   act(() => useHive.setState((x) => ({ ...x, ...dropFile(x, c) })));
   expect(screen.queryByRole("menu", { name: "File" })).toBeNull();
+});
+
+test("Replace with follows the bar's order and says a tab's place in it, not its id", () => {
+  for (const id of [1, 2, 3, 4]) addTab(id, W);
+  setOpenFile(a);
+  pinFile(a);
+  // The bar: a.ts, 4, 3, 1, 2.
+  moveTab("tab:3", "tab:1", false);
+  moveTab("tab:4", "tab:3", false);
+  moveTab(A, "tab:4", false);
+  setSplit({ left: 1, right: 2 });
+  expect(barItems(s()).map(paneIdOf)).toEqual([A, 4, 3, 1, 2]);
+  render(<TerminalArea />);
+  fireEvent.contextMenu(bar().getAllByRole("tab")[3] as HTMLElement);
+  fireEvent.click(screen.getByRole("menuitem", { name: "Replace with" }));
+  const sub = within(screen.getByRole("menu", { name: "Replace with" }));
+  expect(sub.getAllByRole("menuitem").map((i) => i.textContent)).toEqual([
+    "a.ts",
+    `${fixLogin.name} (tab 2)`,
+    `${fixLogin.name} (tab 3)`,
+  ]);
+  // The item at place 2 is terminal 4.
+  fireEvent.click(sub.getByRole("menuitem", { name: `${fixLogin.name} (tab 2)` }));
+  expect(s().splits).toEqual([{ left: 4, right: 2 }]);
 });
 
 test("Replace with says why it is off when the pair holds the worktree's only tabs", () => {
