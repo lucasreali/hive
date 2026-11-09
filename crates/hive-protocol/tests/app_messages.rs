@@ -273,6 +273,7 @@ fn samples() -> Vec<Control> {
             subagents: vec![SubagentState {
                 id: s("a"),
                 agent_type: Some(s("Explore")),
+                teammate_name: Some(s("researcher")),
                 state: hive_protocol::AgentState::Working,
                 worktree: None,
                 activity: None,

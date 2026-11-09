@@ -956,6 +956,7 @@ mod tests {
             subagent: Some(hive_protocol::Subagent {
                 id: "a".into(),
                 agent_type: None,
+                teammate_name: None,
             }),
             cwd: Some("/r/w".into()),
             kind: EventKind::SubagentStarted,

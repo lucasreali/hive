@@ -4,7 +4,7 @@ test("states: every agent and subagent shows the state icon the service sent", a
   await page.goto("/?mock=states");
   const tree = page.getByRole("navigation", { name: "Projects" });
   const rows = tree.locator(".tree-row.agent, .subagent-line");
-  await expect(rows).toHaveCount(11);
+  await expect(rows).toHaveCount(12);
   const shown = await rows.evaluateAll((els) =>
     els.map((el) => {
       const icon = el.querySelector(".state-icon") as SVGElement;
@@ -27,6 +27,7 @@ test("states: every agent and subagent shows the state icon the service sent", a
     ["subagent-line", "waiting for permission", "general-purpose", "11px", "11px"],
     ["subagent-line", "waiting for your answer", "Explore", "11px", "11px"],
     ["tree-row agent", "waiting for you", "Claude", "14px", "14px"],
+    ["subagent-line", "idle", "researcher", "11px", "11px"],
     ["tree-row agent", "error", "Claude", "14px", "14px"],
     ["tree-row agent", "ended", "Claude", "14px", "14px"],
     ["tree-row agent", "working", "Claude", "14px", "14px"],
@@ -138,6 +139,7 @@ test("states: a subagent's own worktree has no row; its path is the line's toolt
     ["56px", "18px"],
     ["56px", "9px"],
     ["56px", "18px"],
+    ["56px", "9px"],
     ["56px", "9px"],
   ]);
 });

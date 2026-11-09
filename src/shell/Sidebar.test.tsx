@@ -210,6 +210,7 @@ test("agents and their subagents show the state the service sent, named for scre
         {
           id: "a1",
           agent_type: "Explore",
+          teammate_name: null,
           state: "working",
           worktree: null,
           ...none,
@@ -217,6 +218,7 @@ test("agents and their subagents show the state the service sent, named for scre
         {
           id: "a2",
           agent_type: null,
+          teammate_name: null,
           state: "waiting_permission",
           worktree: null,
           ...none,
@@ -313,6 +315,7 @@ test("rows show the time in the state and the activity, all ticking on one timer
           {
             id: "a1",
             agent_type: "Explore",
+            teammate_name: null,
             state: "working",
             worktree: null,
             activity: "Reading src/y.ts",
@@ -321,6 +324,7 @@ test("rows show the time in the state and the activity, all ticking on one timer
           {
             id: "a2",
             agent_type: "Plan",
+            teammate_name: null,
             state: "idle",
             worktree: null,
             activity: null,
@@ -398,6 +402,7 @@ test("a tick renders only the rows whose time text changed (19.15)", () => {
           {
             id: "a1",
             agent_type: "Explore",
+            teammate_name: null,
             state: "working",
             worktree: null,
             activity: null,
@@ -588,6 +593,46 @@ test("arrow keys move in the tree and collapse or expand a project", () => {
   expect(document.activeElement).toBe(row("shop"));
 });
 
+test("a teammate's line shows its name, over its type", () => {
+  render(<App />);
+  const [main] = shop.worktrees;
+  const line = (id: string, teammate_name: string | null) =>
+    ({
+      id,
+      agent_type: "general-purpose",
+      teammate_name,
+      state: "idle",
+      worktree: null,
+      activity: null,
+      since_ms: 0,
+    }) as const;
+  act(() => {
+    apply({ type: "projects", projects: [shop] });
+    apply({
+      type: "agent_detected",
+      channel: 1,
+      id: "s1",
+      project: shop.id,
+      worktree: main.id,
+      cwd: main.path,
+    });
+    apply({
+      type: "agent_state",
+      id: "s1",
+      ...agentStatus("waiting_you"),
+      subagents: [line("t1", "researcher"), line("t2", null)],
+    });
+  });
+  const lines = [...tree().querySelectorAll(".subagent-line")].map((l) => [
+    l.querySelector(".state-icon")?.getAttribute("aria-label"),
+    l.querySelector(".subagent-type")?.textContent,
+  ]);
+  expect(lines).toEqual([
+    ["idle", "researcher"],
+    ["idle", "general-purpose"],
+  ]);
+});
+
 test("a subagent's own worktree has no row; its path is the subagent line's tooltip", () => {
   render(<App />);
   const [main, , featCheckout] = shop.worktrees;
@@ -595,6 +640,7 @@ test("a subagent's own worktree has no row; its path is the subagent line's tool
     ({
       id,
       agent_type: "Explore",
+      teammate_name: null,
       state: "working",
       worktree,
       activity: null,
