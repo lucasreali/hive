@@ -41,6 +41,9 @@ async fn login_shell_runs_with_hive_first(shell: Option<&str>, file: &str, first
         git.join("git").display()
     );
     script(&login, "git", &noted);
+    // Ubuntu's `/etc/zsh/zshrc` runs `compinit`, which on CI's runner asks about insecure
+    // folders and eats the typed command; a user's `.zshenv` may turn it off.
+    std::fs::write(env.path("home/.zshenv"), "skip_global_compinit=1\n").unwrap();
     let login_file = env.path(file);
     std::fs::create_dir_all(login_file.parent().unwrap()).unwrap();
     let line = first.replace("{login}", &login.display().to_string());
