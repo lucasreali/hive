@@ -15,13 +15,15 @@ pub(crate) const START_TIMEOUT: Duration = Duration::from_secs(5);
 /// tokio's default 8 KiB ones (D19.7).
 const BUFFER: usize = 64 * 1024;
 
-pub async fn run(paths: &Paths, hive: &Path) -> io::Result<()> {
+/// Connects stdio to the service; one it starts is a remote one (`hive daemon --remote`, 26.14)
+/// when `remote`.
+pub async fn run(paths: &Paths, hive: &Path, remote: bool) -> io::Result<()> {
     // Only to our own service (`Paths::connect`). A missing or insecure runtime directory goes
     // to `start_daemon`, whose `prepare_runtime` creates it or refuses it with a clear error.
     let stream = match paths.connect().await {
         Ok(stream) => stream,
         Err(_) => {
-            start_daemon(paths, hive)?;
+            start_daemon(paths, hive, remote)?;
             connect_when_ready(paths).await?
         }
     };
@@ -47,7 +49,7 @@ where
 
 /// Starts `hive daemon` in its own session so it outlives nothing but the app connection.
 /// Two bridges racing here is fine: the lockfile lets only one daemon run.
-fn start_daemon(paths: &Paths, hive: &Path) -> io::Result<()> {
+fn start_daemon(paths: &Paths, hive: &Path, remote: bool) -> io::Result<()> {
     paths.prepare_runtime()?;
     crate::mode::folder(std::fs::DirBuilder::new().recursive(true), 0o700).create(&paths.logs)?;
     let log = open_log(&paths.daemon_log())?;
@@ -58,6 +60,7 @@ fn start_daemon(paths: &Paths, hive: &Path) -> io::Result<()> {
     let mut daemon = Command::new(hive);
     daemon
         .arg("daemon")
+        .args(remote.then_some("--remote"))
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(log);

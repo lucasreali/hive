@@ -1,6 +1,6 @@
 //! What only macOS needs, kept apart from the portable code: the kernel's process table
-//! (through `libproc`, `proc_pidinfo` and the `KERN_PROCARGS2` sysctl), the terminal's login
-//! shell and native file paths. Tested on macOS.
+//! (through `libproc`, `proc_pidinfo` and the `KERN_PROCARGS2` sysctl) and native file
+//! paths. Tested on macOS.
 
 use std::collections::HashSet;
 use std::ffi::{CStr, CString, OsStr, OsString, c_char, c_int};
@@ -15,7 +15,7 @@ use nix::unistd::{Pid, getsid};
 
 use crate::git::Resolved;
 use crate::procs::Proc;
-use crate::terminal::{conpty, login};
+use crate::terminal::conpty;
 
 /// `MAXPATHLEN`.
 const PATH_MAX: usize = 1024;
@@ -251,15 +251,6 @@ fn confstr_path(len: usize, buf: &[c_char]) -> Option<PathBuf> {
     (!path.as_os_str().is_empty()).then_some(path)
 }
 
-/// The user's login shell (`$SHELL`), started as [`crate::terminal::login::launch`] says.
-pub fn shell(bin_dir: &Path) -> pty_process::Command {
-    let var = std::env::var_os;
-    let launch = login::launch(var("SHELL"), var("ZDOTDIR"), var("PATH"), bin_dir);
-    pty_process::Command::new(launch.program)
-        .args(launch.args)
-        .envs(launch.env)
-}
-
 /// The browsers looked for, in this order, in `/Applications` and `~/Applications`.
 const APPS: [&str; 4] = [
     "Google Chrome.app/Contents/MacOS/Google Chrome",
@@ -280,13 +271,6 @@ pub fn browser_candidates(home: Option<&Path>, _path: Option<&OsStr>) -> Vec<Pat
         .flatten()
         .flat_map(|root| APPS.iter().map(move |app| root.join(app)))
         .collect()
-}
-
-/// The user's login shell (`$SHELL`), as terminals start it, asked for its `PATH`.
-pub fn path_shell() -> (std::ffi::OsString, Vec<std::ffi::OsString>) {
-    let shell = login::launch(std::env::var_os("SHELL"), None, None, Path::new(""));
-    let print = crate::wrapper::PRINT_PATH;
-    (shell.program, vec!["-l".into(), "-c".into(), print.into()])
 }
 
 /// The command that prints the system locale (D18.2), `AppleLocale` in the global

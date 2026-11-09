@@ -24,9 +24,18 @@ struct Cli {
 #[derive(Debug, Subcommand)]
 enum Command {
     /// Run the service (started by `hive bridge`; lives as long as the app connection).
-    Daemon,
+    Daemon {
+        /// A remote service (over ssh): on Linux its terminals run the user's `$SHELL` as a
+        /// login shell, and its `PATH` is that shell's, instead of WSL's fish.
+        #[arg(long)]
+        remote: bool,
+    },
     /// Connect stdio to the service, starting it if needed (run by the app through `wsl.exe`).
-    Bridge,
+    Bridge {
+        /// Start a remote service (`hive daemon --remote`) if none is running.
+        #[arg(long)]
+        remote: bool,
+    },
     /// Forward one Claude Code hook call (JSON on stdin) to the service. Always exits 0.
     Hook {
         /// Hook event name, e.g. `SessionStart`.
@@ -113,7 +122,12 @@ pub fn run() -> ExitCode {
     // `hive statusline` exits with the user's statusline's code.
     let mut code = 0;
     let result = match cli.command {
-        Command::Daemon => {
+        Command::Daemon { remote } => {
+            // Before anything starts a shell. macOS terminals already run the login shell.
+            #[cfg(target_os = "linux")]
+            crate::terminal::set_remote(remote);
+            #[cfg(not(target_os = "linux"))]
+            let _ = remote;
             // A terminal's shell is forked (`setsid` and its PTY before `exec`). macOS's fork
             // runs libnotify's child handler, which aborts the child (SIGTRAP, "os_once_t is
             // corrupt") when another thread was setting libnotify up at that moment: set it up
@@ -126,9 +140,8 @@ pub fn run() -> ExitCode {
             }
             block_on(crate::daemon::run(&paths))
         }
-        Command::Bridge => {
-            std::env::current_exe().and_then(|hive| block_on(crate::bridge::run(&paths, &hive)))
-        }
+        Command::Bridge { remote } => std::env::current_exe()
+            .and_then(|hive| block_on(crate::bridge::run(&paths, &hive, remote))),
         Command::Hook { event, record } => {
             // Whatever happens, the agent must not see a failing hook.
             let stdin = tokio::io::stdin();

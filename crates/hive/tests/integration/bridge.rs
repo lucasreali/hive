@@ -16,9 +16,15 @@ struct Bridge {
 }
 
 fn bridge(env: &Env) -> Bridge {
+    bridge_with(env, &[])
+}
+
+/// `hive bridge` with `args`.
+fn bridge_with(env: &Env, args: &[&str]) -> Bridge {
     let mut cmd = tokio::process::Command::from(env.hive());
     let mut child = cmd
         .arg("bridge")
+        .args(args)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .kill_on_drop(true)
@@ -90,6 +96,33 @@ async fn bridge_starts_the_service_and_forwards_frames() {
     // The app connection ended, so the service it started ends too.
     wait_until(|| !env.socket().exists());
     assert_eq!(std::fs::read_to_string(log).unwrap(), "");
+}
+
+/// The arguments of the service `bridge` started (the `hive` of this environment that is not
+/// the bridge).
+fn daemon_args(env: &Env, bridge: &Bridge) -> Vec<String> {
+    let bridge_pid = bridge.child.id().unwrap() as i32;
+    let processes = env.processes();
+    let daemon = processes
+        .iter()
+        .find(|p| p.pid != bridge_pid && p.comm == "hive");
+    hive::procs::args(hive::procs::Source::System, daemon.unwrap().pid).unwrap()
+}
+
+#[tokio::test]
+async fn a_remote_bridge_starts_a_remote_service() {
+    for (args, daemon) in [
+        (&["--remote"][..], &["daemon", "--remote"][..]),
+        (&[], &["daemon"]),
+    ] {
+        let env = Env::new();
+        let mut bridge = bridge_with(&env, args);
+        bridge.send(Control::hello(Role::App, hive::VERSION)).await;
+        assert_eq!(bridge.next().await, Some(welcome()));
+        assert_eq!(daemon_args(&env, &bridge)[1..], *daemon, "{args:?}");
+        assert!(bridge.close().await.success());
+        wait_until(|| !env.socket().exists());
+    }
 }
 
 #[tokio::test]
