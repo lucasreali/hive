@@ -1,5 +1,5 @@
 import { expect, type Page, test } from "@playwright/test";
-import { keyLabel, mod } from "./host";
+import { keyLabel, mac, mod } from "./host";
 
 const LABELS = ["Files", "Diff", "Scripts", "PRs", "Actions", "Sessions"];
 const RAIL_WIDTH = 36;
@@ -139,13 +139,13 @@ test("the rail: one Tab stop, then ↑/↓, Home and End, on the keyboard", asyn
   await panel.getByRole("separator", { name: "Resize the side panel" }).focus();
   await page.keyboard.press("Tab");
   await expect(rail.getByRole("tab", { name: "Files" })).toBeFocused();
-  // The next Tab leaves the rail. WebKit's Tab skips a button with no tabindex by default, as
-  // Safari's does, so it goes past Collapse to the view's first field.
+  // The next Tab leaves the rail. On macOS, WebKit's Tab skips a button with no tabindex by
+  // default, as Safari's does, so it goes past Collapse to the view's first field.
   await page.keyboard.press("Tab");
-  if (browserName === "chromium") {
-    await expect(panel.getByTitle(keyLabel("Collapse (Ctrl+Shift+B)"))).toBeFocused();
-  } else {
+  if (browserName === "webkit" && mac) {
     await expect(panel.getByLabel("Find files")).toBeFocused();
+  } else {
+    await expect(panel.getByTitle(keyLabel("Collapse (Ctrl+Shift+B)"))).toBeFocused();
   }
   await rail.getByRole("tab", { name: "Files" }).focus();
   await page.keyboard.press("ArrowDown");
