@@ -263,12 +263,28 @@ jobs:
     permissions:
       contents: write
     steps:
+      # The whole history and every tag: the notes compare with the previous tag.
       - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
       - uses: actions/download-artifact@v7
         with:
           pattern: bundle-*
           path: out
           merge-multiple: true
+      # The commits since the previous tag and the first-launch link (26.6); the first self-signed
+      # release also says to allow Hive once more (25.5). On its own line: a failure must stop here,
+      # which a pipe's exit status would hide.
+      - name: notes
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          MODE: ${{ needs.macos.outputs.signing }}
+          # As `latest.json` below: a dry run names the release after the version.
+          TAG: ${{ github.event_name == 'push' && github.ref_name || '' }}
+        run: |
+          gh api --paginate "repos/${{ github.repository }}/releases" --jq '.[].body // empty' > earlier-notes
+          scripts/release-notes.sh "${TAG:-v$(jq -r .version src-tauri/tauri.conf.json)}" "$MODE" < earlier-notes > notes.md
+          cat notes.md
       - name: latest.json
         env:
           # A dry run names the release after the version it would publish.
@@ -282,10 +298,11 @@ jobs:
           # Separate assignments: `set -e` stops on a missing signature.
           win_sig=$(cat "out/$exe.sig")
           mac_sig=$(cat out/Hive_universal.app.tar.gz.sig)
-          jq -n --arg version "$version" --arg date "$(date -u +%Y-%m-%dT%H:%M:%S.%3NZ)" \
+          notes=$(cat notes.md)
+          jq -n --arg version "$version" --arg notes "$notes" --arg date "$(date -u +%Y-%m-%dT%H:%M:%S.%3NZ)" \
             --arg win_sig "$win_sig" --arg win_url "$base/$exe" \
             --arg mac_sig "$mac_sig" --arg mac_url "$base/Hive_universal.app.tar.gz" \
-            '{version: $version, notes: "", pub_date: $date, platforms: {
+            '{version: $version, notes: $notes, pub_date: $date, platforms: {
                 "windows-x86_64": {signature: $win_sig, url: $win_url},
                 "windows-x86_64-nsis": {signature: $win_sig, url: $win_url},
                 "darwin-aarch64": {signature: $mac_sig, url: $mac_url},
@@ -296,14 +313,6 @@ jobs:
           scripts/macos-bundle.sh check-updater out/latest.json
           ls -l out
           echo "TAG=$tag" >> "$GITHUB_ENV"
-      # The first self-signed release says to allow Hive once more (25.5); every other has no notes.
-      - name: notes
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          MODE: ${{ needs.macos.outputs.signing }}
-        run: |
-          gh api --paginate "repos/${{ github.repository }}/releases" --jq '.[].body // empty' > earlier-notes
-          scripts/macos-bundle.sh release-notes "$MODE" < earlier-notes | tee notes.md
       # `gh release create` uploads every file before it publishes the release, so the
       # updater never sees a `latest.json` whose files are missing.
       - if: github.event_name == 'push'

@@ -548,6 +548,8 @@ export type AgentState =
 export type Subagent = {
   id: string;
   agent_type: string | null;
+  /** An agent team teammate's name, once a hook said it; shown over `agent_type`. */
+  teammate_name: string | null;
   state: AgentState;
   worktree: string | null;
 } & Doing;

@@ -33,8 +33,8 @@
 #       `hive` answers `--version` the same under both architectures, and the app's Intel slice starts
 #       and stays up under Rosetta, with a temporary HOME.
 #   macos-bundle.sh release-notes <signing mode>
-#       The notes of a release, given the earlier releases' notes on stdin: the one note of the
-#       first self-signed release (Hive's identity changes that once), else nothing.
+#       Given the earlier releases' notes on stdin: the one note of the first self-signed release
+#       (Hive's identity changes that once), else nothing. scripts/release-notes.sh puts it first.
 #   macos-bundle.sh dsyms <Hive.app> <folder>
 #       The app's binary and its nested `hive` each have a dSYM in <folder> (`hive-app.dSYM`,
 #       `hive.dSYM`, as cargo makes them with `split-debuginfo = "packed"`) whose UUIDs are the
@@ -242,7 +242,12 @@ smoke() {
       die "the x86_64 app ended after $tick half seconds"
     fi
   done
-  kill "$pid"
+  # An app that quit between the last look and now did not stay up either: say so, never a bare
+  # `set -e` exit.
+  if ! kill "$pid" 2>/dev/null; then
+    rm -rf "$home"
+    die "the x86_64 app ended before it was stopped"
+  fi
   wait "$pid" 2>/dev/null || true
   rm -rf "$home" || true
   echo "ok    x86_64 app stayed up"

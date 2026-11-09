@@ -1,0 +1,21 @@
+{
+  "note": "SYNTHETIC: built by hand from the fields Claude Code's docs list (agent-teams, hooks), not recorded. A human's recorded session (TODO 26.10) replaces this file. The orders of SubagentStop and TeammateIdle are each of those the docs allow, one per teammate.",
+  "calls": [
+    ["SessionStart", {"session_id": "lead", "source": "startup"}],
+    ["UserPromptSubmit", {"session_id": "lead"}],
+    ["SubagentStart", {"session_id": "lead", "agent_id": "t-stop-first", "agent_type": "general-purpose"}],
+    ["SubagentStart", {"session_id": "lead", "agent_id": "t-idle-first", "agent_type": "general-purpose"}],
+    ["SubagentStart", {"session_id": "lead", "agent_id": "t-idle-only"}],
+    ["PreToolUse", {"session_id": "lead", "agent_id": "t-stop-first", "agent_type": "general-purpose", "tool_name": "Read", "tool_input": {"file_path": "/x/a.rs"}}],
+    ["Stop", {"session_id": "lead"}],
+    ["SubagentStop", {"session_id": "lead", "agent_id": "t-stop-first", "agent_type": "general-purpose", "stop_hook_active": false, "last_assistant_message": "Done."}],
+    ["TeammateIdle", {"session_id": "lead", "agent_id": "t-stop-first", "teammate_name": "researcher", "team_name": "session-lead"}],
+    ["TeammateIdle", {"session_id": "lead", "agent_id": "t-idle-first", "teammate_name": "tester", "team_name": "session-lead"}],
+    ["SubagentStop", {"session_id": "lead", "agent_id": "t-idle-first", "agent_type": "general-purpose", "stop_hook_active": false, "last_assistant_message": "Done."}],
+    ["TeammateIdle", {"session_id": "lead", "agent_id": "t-idle-only", "teammate_name": "writer", "team_name": "session-lead"}],
+    ["Stop", {"session_id": "lead"}],
+    ["SubagentStart", {"session_id": "lead", "agent_id": "t-idle-first", "agent_type": "general-purpose"}],
+    ["TeammateIdle", {"session_id": "lead", "agent_id": "t-idle-first", "teammate_name": "tester", "team_name": "session-lead"}],
+    ["SessionEnd", {"session_id": "lead", "reason": "prompt_input_exit"}]
+  ]
+}
