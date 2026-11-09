@@ -68,8 +68,6 @@ export const PlusIcon = ({ size = 12 }: { size?: number }) => (
 
 export const CheckIcon = () => <PhosphorCheckIcon size={12} aria-hidden="true" />;
 
-// The right panel's toggle: Phosphor's sidebar, mirrored so the panel is on the right.
-
 export const ChevronIcon = ({ open }: { open: boolean }) => (
   <CaretRightIcon
     size={10}
