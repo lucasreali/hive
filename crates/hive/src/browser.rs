@@ -1087,10 +1087,8 @@ mod tests {
         assert_eq!(out.events, [Event::Title(None)]);
         let long = "t".repeat(1000);
         let out = screen.message(&titled(changed, "b", "https://b.test/", Some(&long)));
-        let [Event::Title(Some(title))] = &out.events[..] else {
-            panic!("{:?}", out.events);
-        };
-        assert_eq!(title.chars().count(), MAX_TITLE);
+        let capped = "t".repeat(MAX_TITLE - 1) + "…";
+        assert_eq!(out.events, [Event::Title(Some(capped))]);
     }
 
     #[test]

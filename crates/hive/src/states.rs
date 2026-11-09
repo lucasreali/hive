@@ -1020,9 +1020,8 @@ mod tests {
 
     #[test]
     fn it_browses_from_its_last_browser_call_until_it_stops() {
-        let browsing = |sent: Option<Control>| match sent {
-            Some(Control::AgentState { browsing, .. }) => Some(browsing),
-            _ => None,
+        let browsing = |sent: Option<Control>| {
+            sent.map(|message| matches!(message, Control::AgentState { browsing: true, .. }))
         };
         let now = Instant::now();
         let mut agent = Agent::new(1, now, 0);

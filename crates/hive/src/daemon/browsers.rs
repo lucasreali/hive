@@ -405,10 +405,7 @@ mod tests {
             tokio::task::yield_now().await;
         }
         browsers.stopping(done);
-        let (_held, wait) = tokio::sync::oneshot::channel::<()>();
-        let pending = tokio::spawn(async move {
-            let _ = wait.await;
-        });
+        let pending = tokio::spawn(std::future::pending());
         let id = pending.id();
         browsers.stopping(pending);
         browsers.stopping(tokio::spawn(std::future::pending()));
