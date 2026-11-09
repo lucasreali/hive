@@ -1308,6 +1308,16 @@ async fn project_requests_go_to_the_service_and_answers_to_the_ui() {
         path: "a.csv".into(),
     };
     assert_eq!(service.control().await, (0, table));
+    let edit = TableEdit::InsertRow { at: 1 };
+    hive.edit_table("/r".into(), "a.csv".into(), "x".into(), Some(edit.clone()))
+        .unwrap();
+    let edit_table = Control::EditTable {
+        worktree: "/r".into(),
+        path: "a.csv".into(),
+        content: "x".into(),
+        edit: Some(edit),
+    };
+    assert_eq!(service.control().await, (0, edit_table));
     hive.save_file("/r".into(), "a".into(), "x".into(), Some("v".into()))
         .unwrap();
     let save = Control::SaveFile {
@@ -1772,6 +1782,10 @@ async fn bridge_exit_ends_terminals_then_disconnects() {
     );
     assert_eq!(hive.open_table("/r".into(), "a".into()), not_connected);
     assert_eq!(
+        hive.edit_table("/r".into(), "a".into(), "x".into(), None),
+        not_connected
+    );
+    assert_eq!(
         hive.save_file("/r".into(), "a".into(), "x".into(), None),
         not_connected
     );
@@ -2051,6 +2065,7 @@ fn commands_reach_the_managed_hive() {
             browser_drawn,
             open_file,
             open_table,
+            edit_table,
             search_files,
             list_dirs,
             list_sessions,
@@ -2152,6 +2167,12 @@ fn commands_reach_the_managed_hive() {
     let scripts = json!({"path": "/r"});
     let file = json!({"worktree": "/r", "path": "a", "base": "head"});
     let table = json!({"worktree": "/r", "path": "a.csv"});
+    let edit_table = json!({
+        "worktree": "/r",
+        "path": "a.csv",
+        "content": "a\n",
+        "edit": {"op": "remove_row", "at": 0},
+    });
     let editor = json!({"worktree": "/r", "path": "a", "reveal": true});
     let search = json!({"worktree": "/r", "query": "q"});
     let dirs = json!({"path": "", "windows": false, "hidden": false});
@@ -2197,6 +2218,7 @@ fn commands_reach_the_managed_hive() {
         ("browser_drawn", &json!({})),
         ("open_file", &file),
         ("open_table", &table),
+        ("edit_table", &edit_table),
         ("search_files", &search),
         ("list_dirs", &dirs),
         ("list_sessions", &json!({})),
@@ -2293,6 +2315,7 @@ fn commands_reach_the_managed_hive() {
         ("browser_drawn", json!({})),
         ("open_file", file.clone()),
         ("open_table", table),
+        ("edit_table", edit_table),
         ("search_files", search),
         ("list_dirs", dirs),
         ("list_sessions", json!({})),

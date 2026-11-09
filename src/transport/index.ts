@@ -8,6 +8,7 @@ import type {
   SessionTarget,
   Settings,
   SpaceEnv,
+  TableEdit,
 } from "../protocol";
 import type { PullAction } from "../pulls";
 import type { RunAction } from "../runs";
@@ -205,6 +206,11 @@ export interface Transport {
   openFile(worktree: string, path: string, base: DiffBase): Promise<void>;
   /** A CSV or TSV file of a followed worktree on disk as a table (23.6); answered by `table`. */
   openTable(worktree: string, path: string): Promise<void>;
+  /**
+   * `edit` on the table of `content`, the text of a CSV or TSV file being edited (25.4), or with
+   * none that text's table; answered by `table_edited`. Nothing is written on disk.
+   */
+  editTable(worktree: string, path: string, content: string, edit: TableEdit | null): Promise<void>;
   /**
    * Writes `content` over the file if its bytes on disk still have `version` (null: the file
    * must not exist); answered by `file_saved` or `save_failed`.

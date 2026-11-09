@@ -20,7 +20,7 @@ use super::State;
 use crate::VERSION;
 use crate::adapter::{self, Adapter, ClaudeCode};
 use crate::terminal::Input;
-use crate::{changes, dirs, file, procs, table, uninstall, worktree};
+use crate::{changes, dirs, file, procs, table, table_edit, uninstall, worktree};
 
 /// Longest `hive badge` label, in characters.
 const MAX_BADGE: usize = 40;
@@ -646,6 +646,13 @@ async fn app_frame(state: &Arc<State>, frame: Frame, output: &mpsc::UnboundedSen
         Ok(Control::OpenTable { worktree, path }) => {
             state.projects(move |projects| table::answer(projects, worktree, path))
         }
+        Ok(Control::EditTable {
+            worktree,
+            path,
+            content,
+            edit,
+        }) => state
+            .projects(move |projects| table_edit::answer(projects, worktree, path, &content, edit)),
         Ok(Control::SaveFile {
             worktree,
             path,

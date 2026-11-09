@@ -9,7 +9,7 @@ import {
   screen,
   within,
 } from "@testing-library/react";
-import { followOpenFile, followOpenTable } from "./follow";
+import { followOpenFile, followOpenTable, followTableEdits } from "./follow";
 import { apply } from "./reduce";
 import { TerminalArea } from "./shell/TerminalArea";
 import { showBarItem } from "./shortcuts";
@@ -17,6 +17,7 @@ import {
   activateTab,
   addTab,
   dropOnPane,
+  editOpenTable,
   focusFilePane,
   focusPane,
   initialState,
@@ -403,6 +404,66 @@ test('"Split right" on a file opens a new terminal in its worktree when no tab i
     { left: A, right: added?.id as number },
   ]);
   expect([s().activeTab, s().fileShown]).toEqual([added?.id as number, false]);
+});
+
+test("a pair's other table with unsaved edits (25.4) is its buffer's, in its tab", () => {
+  const asked = async (..._args: unknown[]) => {};
+  const [openTable, editTable] = [mock(asked), mock(asked)];
+  const follow = { openTable, editTable, openFile: mock(asked) } as unknown as Transport;
+  apply({ type: "welcome", version: "1", distro: null });
+  const stops = [followOpenTable(follow), followTableEdits(follow)];
+  const [c, d] = [
+    { worktree: W, path: "c.csv" },
+    { worktree: W, path: "d.csv" },
+  ];
+  setOpenFile(c);
+  pinFile(c);
+  answer(c.path, "a\n");
+  editOpenTable({ op: "insert_row", at: 0 });
+  const sheet = (rows: string[][]) => ({ name: "", rows, total: rows.length, partial: false });
+  const edited = (content: string, rows: string[][]) =>
+    apply({ type: "table_edited", ...c, content, sheet: sheet(rows), error: null });
+  edited("x\na\n", [["x"], ["a"]]);
+  editTable.mockClear();
+  openTable.mockClear();
+
+  setOpenFile(d);
+  pinFile(d);
+  setSplit({ left: fileKey(c), right: fileKey(d) }, fileKey(d));
+  // Asked from its buffer, not the disk; the open file from the disk.
+  expect(editTable.mock.calls).toEqual([[W, c.path, "x\na\n", null]]);
+  expect(openTable.mock.calls.map((call) => call[1])).toEqual([d.path]);
+  // Its answer goes to its tab, and the open file's table stays.
+  const open = s().table;
+  edited("x\na\n", [["x"], ["a"]]);
+  expect(paneState(s(), c).table?.sheets[0]?.rows).toEqual([["x"], ["a"]]);
+  expect(s().table).toBe(open);
+  expect(s().tableAsks).toEqual([]);
+  // What is on disk does not replace it, while a clean file's does.
+  apply({ type: "table", ...c, sheets: [sheet([["disk"]])], error: null });
+  expect(paneState(s(), c).table?.sheets[0]?.rows).toEqual([["x"], ["a"]]);
+  // Changes ask nothing of it; clean again, the disk's.
+  openTable.mockClear();
+  apply({
+    type: "changes",
+    path: W,
+    base: "head",
+    branch: null,
+    base_error: null,
+    files: [],
+    added: 0,
+    removed: 0,
+    error: null,
+  });
+  expect(openTable.mock.calls.map((call) => call[1])).toEqual([d.path]);
+  useHive.setState((state) => ({
+    openFiles: state.openFiles.map((t) =>
+      t.path === c.path && t.edit ? { ...t, edit: { ...t.edit, saving: t.edit.doc } } : t,
+    ),
+  }));
+  apply({ type: "file_saved", ...c, version: "w" });
+  expect(openTable.mock.calls.at(-1)).toEqual([W, c.path]);
+  for (const stop of stops) stop();
 });
 
 test("a pair's other file is followed as the open one is, its table too", () => {

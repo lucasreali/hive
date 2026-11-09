@@ -28,12 +28,15 @@ import type {
   Changes,
   DiffBase,
   FileStatus,
+  FileText,
   Project,
   SearchMatch,
+  TableText,
   Worktree,
 } from "../protocol";
 import {
   diffBase,
+  editOpenTable,
   type FileTarget,
   focusFilePane,
   type HiveState,
@@ -59,9 +62,10 @@ import {
 } from "../store";
 import { dropFile, fileTabState, paneState } from "../tabs";
 import { transport } from "../transport";
+import { useBlockEdit } from "../viewer/blockEdit";
 import { isDirty, isFor } from "../viewer/buffer";
 import { CodeView, notice } from "../viewer/CodeView";
-import { EditView, saveOpenFile } from "../viewer/EditView";
+import { BufferNotes, EditView, saveOpenFile } from "../viewer/EditView";
 import { openInEditor } from "../viewer/external";
 import { isPage, MediaView, PagePreview } from "../viewer/MediaView";
 import { useRenderedPlace } from "../viewer/place";
@@ -1114,7 +1118,11 @@ export function FileView(props: {
               className="ghost text"
               title={dirty ? "Save or reload the file first" : "Show the diff"}
               disabled={dirty}
-              onClick={() => setEditing(false)}
+              onClick={() => {
+                setRendered(false);
+                setTableShown(false);
+                setEditing(false);
+              }}
             >
               Diff
             </button>
@@ -1163,14 +1171,7 @@ export function FileView(props: {
             className="ghost"
             aria-label="Show as a table"
             aria-pressed={asTable}
-            title={
-              asTable
-                ? "Show the text"
-                : dirty
-                  ? "Save or reload the file first"
-                  : "Show as a table"
-            }
-            disabled={!asTable && dirty}
+            title={asTable ? "Show the text" : "Show as a table"}
             onClick={() => setTableShown(!asTable)}
           >
             <TableIcon />
@@ -1203,8 +1204,16 @@ export function FileView(props: {
       <CommentInput worktree={worktree} path={openFile.path} />
       {editorNotice && <div className="files-error">{editorNotice}</div>}
       <div className="file-view-body">
+        {edit && (asTable || (rendered && !page)) && <BufferNotes edit={edit} />}
         {asTable ? (
-          table && <TableView key={`${worktree}\n${openFile.path}`} table={table} />
+          table && (
+            <EditableTable
+              key={`${worktree}\n${openFile.path}`}
+              table={table}
+              text={text}
+              readOnly={why ? "Read-only: this file has no text to edit." : null}
+            />
+          )
         ) : rendered && page ? (
           <PagePreview media={page} path={openFile.path} />
         ) : rendered ? (
@@ -1243,30 +1252,69 @@ export function FileView(props: {
   );
 }
 
-/**
- * A Markdown file rendered (11.2), with its unsaved edits, by the sanitised renderer of #43.
- * Ctrl+S saves any unsaved edits and shows the text again.
- */
-function RenderedView({ file, text }: { file: OpenFile; text: string }) {
-  // Its scroll kept per file, and the text's place when switched (21.3).
-  const scroller = useRenderedPlace(file, text);
+/** ⌘S (Ctrl+S off a Mac) anywhere while a view with no editor of its own shows, if focused. */
+function useSaveKey(file: OpenFile, save: () => void) {
+  const latest = useRef({ file, save });
+  latest.current = { file, save };
   useEffect(() => {
     const onKeyDown = (event: globalThis.KeyboardEvent) => {
       if (!commandKey(event) || event.shiftKey || event.altKey) return;
       if (event.key.toUpperCase() !== "S") return;
       // Only the focused pane's (25.1).
       const s = useHive.getState();
-      if (!s.fileShown || !s.openFile || !isFor(s.openFile, file)) return;
+      if (!s.fileShown || !s.openFile || !isFor(s.openFile, latest.current.file)) return;
       event.preventDefault();
-      saveOpenFile();
-      setRendered(false);
+      latest.current.save();
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [file]);
+  }, []);
+}
+
+/**
+ * A table file's table (23.6), edited in place when it has text to save (25.4): never a workbook
+ * (23.7), which has none. ⌘S first closes a cell being edited, so the save holds it.
+ */
+function EditableTable(props: {
+  table: TableText;
+  text: FileText | null;
+  readOnly: string | null;
+}) {
+  const { table, text, readOnly } = props;
+  const editable = !isWorkbook(table.path) && !readOnly && text?.content != null;
+  useSaveKey(table, () => {
+    const active = document.activeElement;
+    if (active?.classList.contains("table-cell-input")) (active as HTMLElement).blur();
+    saveOpenFile();
+  });
   return (
-    <div className="markdown-view hive-scroll" ref={scroller}>
-      <Markdown text={text} document />
+    <TableView
+      table={table}
+      onEdit={editable ? editOpenTable : undefined}
+      readOnly={isWorkbook(table.path) ? null : readOnly}
+    />
+  );
+}
+
+/**
+ * A Markdown file rendered (11.2), with its unsaved edits, by the sanitised renderer of #43; a
+ * click on a block edits its source there (25.4). Ctrl+S saves any unsaved edits and shows the
+ * text again; after a block was edited here, it stays.
+ */
+function RenderedView({ file, text }: { file: OpenFile; text: string }) {
+  const { shown, used, onClick, editor } = useBlockEdit(text);
+  // Its scroll kept per file, and the text's place when switched (21.3).
+  const scroller = useRenderedPlace(file, shown);
+  useSaveKey(file, () => {
+    saveOpenFile();
+    if (!used()) setRendered(false);
+  });
+  return (
+    // biome-ignore lint/a11y/useKeyWithClickEvents: a block is edited with the mouse; the text view has the keys
+    // biome-ignore lint/a11y/noStaticElementInteractions: each block's click, as one
+    <div className="markdown-view hive-scroll" ref={scroller} onClick={onClick}>
+      <Markdown text={shown} document />
+      {editor}
     </div>
   );
 }

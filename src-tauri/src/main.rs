@@ -214,6 +214,7 @@ fn main() {
             commands::browser_drawn,
             commands::open_file,
             commands::open_table,
+            commands::edit_table,
             commands::search_files,
             commands::list_dirs,
             commands::list_sessions,

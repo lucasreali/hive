@@ -11,24 +11,11 @@ import {
   useHive,
 } from "../store";
 import { paneState } from "../tabs";
-import { transport } from "../transport";
-import { type EditBuffer, failed, isFor, resolve, startSave } from "./buffer";
+import { type EditBuffer, isFor, resolve } from "./buffer";
 import { createEditor, type Editor, restoreView, revealLine, snapshot } from "./editor";
+import { saveOpenFile } from "./save";
 
-/** Ctrl+S and the Save button: sends the buffer's text with the version it was based on. */
-export function saveOpenFile(): void {
-  const { edit } = useHive.getState();
-  const next = edit && startSave(edit);
-  if (!next) return;
-  setEdit(next);
-  transport
-    .saveFile(next.worktree, next.path, next.doc.toString(), next.version)
-    .catch((error: unknown) => {
-      // Never sent (e.g. not connected), so no answer will come.
-      const { edit } = useHive.getState();
-      if (edit && isFor(edit, next)) setEdit(failed(edit, "io", String(error)));
-    });
-}
+export { saveOpenFile };
 
 /**
  * The user's edits to file `f` reach the buffer; ignored once it is gone (the file closed) or
@@ -90,8 +77,30 @@ export function EditView({ edit }: { edit: EditBuffer }) {
   useEffect(() => editor.current?.setBase(base), [base]);
   const original = comparing && conflict ? (conflict.content ?? "") : null;
   useEffect(() => editor.current?.compare(original), [original]);
+  return (
+    <>
+      <BufferNotes edit={edit} comparing={comparing} onCompare={setComparing} />
+      <div className="code-view" ref={parent} />
+    </>
+  );
+}
+
+/**
+ * Over a view of the buffer: the conflict banner when the file changed on disk under unsaved
+ * edits (Reload, Keep mine and, where the text shows, View diff), and why a save failed.
+ */
+export function BufferNotes({
+  edit,
+  comparing = false,
+  onCompare,
+}: {
+  edit: EditBuffer;
+  comparing?: boolean;
+  onCompare?: (comparing: boolean) => void;
+}) {
+  const { conflict } = edit;
   const choose = (keepMine: boolean) => {
-    setComparing(false);
+    onCompare?.(false);
     setEdit(resolve(edit, keepMine));
   };
   return (
@@ -112,18 +121,19 @@ export function EditView({ edit }: { edit: EditBuffer }) {
           >
             Keep mine
           </button>
-          <button
-            type="button"
-            className="conflict-choice"
-            aria-pressed={comparing}
-            onClick={() => setComparing(!comparing)}
-          >
-            View diff
-          </button>
+          {onCompare && (
+            <button
+              type="button"
+              className="conflict-choice"
+              aria-pressed={comparing}
+              onClick={() => onCompare(!comparing)}
+            >
+              View diff
+            </button>
+          )}
         </div>
       )}
       {edit.error && <div className="files-error">{edit.error}</div>}
-      <div className="code-view" ref={parent} />
     </>
   );
 }

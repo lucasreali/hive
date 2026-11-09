@@ -2,16 +2,24 @@
 
 import type { DiffBase } from "./protocol";
 import {
+  askBufferTable,
+  clearTableAsks,
   diffBase,
+  dropTableAsks,
   type HiveState,
   type OpenFile,
   panelWorktree,
+  setSaveAfterAsks,
+  setTableSentFrom,
+  type TableAsk,
   tableShown,
   terminalShown,
   useHive,
 } from "./store";
-import { asideFile, fileKey, paneState } from "./tabs";
+import { asideFile, asksPending, fileKey, fileTabState, paneState } from "./tabs";
 import type { Transport } from "./transport";
+import { isDirty, isFor } from "./viewer/buffer";
+import { saveBuffer } from "./viewer/save";
 
 /**
  * Keeps the service watching the worktree the right panel shows (`panelWorktree`), none while it
@@ -105,28 +113,78 @@ export function followOpenFile(transport: Transport): () => void {
 }
 
 /**
- * Keeps the open table file's table current (23.6) while it shows as one: asks the service for
- * it when it shows, whenever a new list of its worktree's changes arrives and after a new
- * `welcome`. Returns the unsubscribe.
+ * Keeps the service sending the open table file's table (23.6) while it shows as one: when it
+ * starts showing, on each new `changes` of its worktree, after a new `welcome`, and once its
+ * buffer has no more unsaved edits. A table with unsaved edits (25.4) is its buffer's, not the
+ * disk's: asked only when it starts showing, from that text.
  */
 export function followOpenTable(transport: Transport): () => void {
   let asked: unknown[] = [];
   let askedAside: unknown[] = [];
   const sync = (s: HiveState) => {
     const connected = s.connection.status === "connected";
+    // A table with unsaved edits is its buffer's (25.4), asked only when it starts showing.
+    const ask = (file: OpenFile, dirty: boolean, shows: boolean) => {
+      if (!dirty) void transport.openTable(file.worktree, file.path);
+      else if (shows) askBufferTable(file);
+    };
     const open = connected && tableShown(s) ? s.openFile : null;
-    const reasons = [open, open && s.changesSeen[open.worktree], s.connection];
+    const dirty = !!open && !!s.edit && isFor(s.edit, open) && isDirty(s.edit);
+    const reasons = [open, open && !dirty && s.changesSeen[open.worktree], s.connection, dirty];
     if (!reasons.every((reason, i) => reason === asked[i])) {
+      const shows = open !== asked[0] || s.connection !== asked[2];
       asked = reasons;
-      if (open) void transport.openTable(open.worktree, open.path);
+      if (open) ask(open, dirty, shows);
     }
     // A pair's other file (25.1), shown as its table.
     const file = connected ? asideFile(s) : null;
     const aside = file && tableShown(paneState(s, file)) ? file : null;
-    const seen = [aside && fileKey(aside), aside && s.changesSeen[aside.worktree], s.connection];
+    const asideDirty = !!aside?.edit && isDirty(aside.edit);
+    const seen = [
+      aside && fileKey(aside),
+      aside && !asideDirty && s.changesSeen[aside.worktree],
+      s.connection,
+      asideDirty,
+    ];
     if (seen.every((reason, i) => reason === askedAside[i])) return;
+    const shows = seen[0] !== askedAside[0] || s.connection !== askedAside[2];
     askedAside = seen;
-    if (aside) void transport.openTable(aside.worktree, aside.path);
+    if (aside) ask(aside, asideDirty, shows);
+  };
+  sync(useHive.getState());
+  return useHive.subscribe(sync);
+}
+
+/**
+ * Sends what is asked of a table being edited (25.4), one at a time, each with the text the last
+ * answer left, noted so its answer applies to that text only; a save that waited for its file's
+ * then goes. A connection lost answers nothing, so they are dropped; one that cannot be sent (too
+ * large for a frame) says so through `transport` and under the header, and those of its file and
+ * a save waiting on them go with it.
+ */
+export function followTableEdits(transport: Transport): () => void {
+  let sent: TableAsk | null = null;
+  const sync = (s: HiveState) => {
+    if (s.connection.status !== "connected") {
+      if (s.tableAsks.length > 0 || s.saveAfterAsks) clearTableAsks();
+      return;
+    }
+    const waiting = s.saveAfterAsks;
+    if (waiting && !asksPending(s, waiting)) {
+      setSaveAfterAsks(null);
+      saveBuffer(waiting);
+    }
+    const next = s.tableAsks[0] ?? null;
+    if (next === sent) return;
+    sent = next;
+    if (!next) return;
+    const { edit } = fileTabState(s, next);
+    // The file was closed meanwhile.
+    if (!edit) return void dropTableAsks(next);
+    setTableSentFrom(edit.doc);
+    transport
+      .editTable(next.worktree, next.path, edit.doc.toString(), next.edit)
+      .catch((error: unknown) => dropTableAsks(next, String(error)));
   };
   sync(useHive.getState());
   return useHive.subscribe(sync);
