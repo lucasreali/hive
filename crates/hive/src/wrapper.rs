@@ -198,8 +198,15 @@ pub use login_shell as path_shell;
 /// a remote Linux service, whose own `PATH` (sshd's) is minimal.
 #[cfg(unix)]
 pub fn login_shell() -> (OsString, Vec<OsString>) {
+    let var = std::env::var_os;
+    login_shell_of(var("SHELL"), var("PATH").as_deref())
+}
+
+/// [`login_shell`] for `shell` (`$SHELL`) and the service's `path`.
+#[cfg(unix)]
+fn login_shell_of(shell: Option<OsString>, path: Option<&OsStr>) -> (OsString, Vec<OsString>) {
     use crate::terminal::login;
-    let shell = login::user_shell(std::env::var_os("PATH").as_deref());
+    let shell = login::user_shell(shell, path);
     let program = login::launch(shell, None, None, Path::new("")).program;
     (program, vec!["-l".into(), "-c".into(), PRINT_PATH.into()])
 }
@@ -373,24 +380,26 @@ mod tests {
         #[cfg(target_os = "linux")]
         assert_eq!((program, &args[..1]), ("fish".into(), &["-c".into()][..]));
         #[cfg(target_os = "macos")]
-        assert_eq!((program, args.clone()), login_shell());
-        // The login shell (macOS, a remote Linux service): `$SHELL` when it can run.
-        let (login, login_args) = login_shell();
-        let path = std::env::var_os("PATH");
-        let shell = crate::terminal::login::user_shell(path.as_deref());
-        let default = crate::terminal::login::DEFAULT_SHELL;
-        assert_eq!(login, shell.unwrap_or(OsString::from(default)));
+        assert!(!program.is_empty() && args == ["-l", "-c", PRINT_PATH]);
+        // The login shell (macOS, a remote Linux service) for a given `$SHELL` and `PATH`.
+        let dir = tempfile::tempdir().unwrap();
+        let mine = dir.path().join("mine");
+        std::fs::write(&mine, "").unwrap();
+        std::fs::set_permissions(&mine, Permissions::from_mode(0o755)).unwrap();
+        let of = |shell: Option<&str>| {
+            login_shell_of(shell.map(Into::into), Some(dir.path().as_os_str()))
+        };
+        let login_args = ["-l", "-c", PRINT_PATH].map(OsString::from).to_vec();
+        let missing = Some("/nonexistent/zsh");
+        // Linux starts only a shell that can run, by its absolute path, else `sh`.
         #[cfg(target_os = "linux")]
-        assert_eq!(
-            crate::terminal::login::user_shell(path.as_deref()),
-            crate::terminal::login::usable(std::env::var_os("SHELL"), path.as_deref())
-        );
+        let (named, gone, unset) = (mine.into_os_string(), "/bin/sh", "/bin/sh");
+        // macOS starts `$SHELL` as it is, else zsh.
         #[cfg(target_os = "macos")]
-        assert_eq!(
-            crate::terminal::login::user_shell(None),
-            std::env::var_os("SHELL")
-        );
-        assert_eq!(login_args, ["-l", "-c", PRINT_PATH]);
+        let (named, gone, unset) = (OsString::from("mine"), "/nonexistent/zsh", "/bin/zsh");
+        assert_eq!(of(Some("mine")), (named, login_args.clone()));
+        assert_eq!(of(missing), (gone.into(), login_args.clone()));
+        assert_eq!(of(None), (unset.into(), login_args));
         let service = std::env::var_os("PATH").unwrap();
         let sh = ("sh".into(), args[args.len() - 2..].to_vec());
         let printed = user_path(Some(sh), None, None, SHELL_TIMEOUT).await;
