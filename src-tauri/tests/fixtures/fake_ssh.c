@@ -7,7 +7,8 @@
  *     does for a refused host key, a failed login or a network error;
  *   - `sh <home> <path>`: runs the last argument (the remote command) with `/bin/sh -c`, as
  *     sshd runs it through the user's shell, with HOME=<home> and PATH=<path>;
- *   - `pipe <socket>`: connects stdin and stdout to the Unix socket <socket> (a test service).
+ *   - `pipe <socket>`: connects stdin and stdout to the Unix socket <socket> (a test service);
+ *   - `hang`: sleeps 30 s.
  *
  * `fake_ssh --pipe <socket>` pipes too, for a stand-in remote `hive bridge`. */
 #include <errno.h>
@@ -88,6 +89,10 @@ int main(int argc, char **argv) {
         return 255;
     }
     if (strncmp(step, "pipe ", 5) == 0) return pipe_to(step + 5);
+    if (strcmp(step, "hang") == 0) {
+        sleep(30);
+        return 0;
+    }
     if (strncmp(step, "sh ", 3) == 0) {
         char *home = step + 3, *space = strchr(home, ' ');
         if (!space) return 254;

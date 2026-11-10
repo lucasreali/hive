@@ -84,10 +84,7 @@ fn main() {
                 .with_tray(tray(app));
             // Links to the remote hosts over ssh, which get the app's Linux builds (26.17).
             #[cfg(target_os = "macos")]
-            let hive = hive.with_remote(
-                hive_lib::remote::SSH.into(),
-                app.path().resource_dir()?,
-            );
+            let hive = hive.with_remote(hive_lib::remote::SSH.into(), app.path().resource_dir()?);
             // Asks for notification permission at launch; the tone plays from the app (17.19).
             #[cfg(target_os = "macos")]
             let hive = hive

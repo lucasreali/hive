@@ -217,7 +217,9 @@ impl Failure {
 /// What `ssh`'s stderr `text` says went wrong.
 pub fn classify(text: &str) -> Failure {
     let line = |prefix: &str| {
-        let found = text.lines().find_map(|line| line.trim().strip_prefix(prefix));
+        let found = text
+            .lines()
+            .find_map(|line| line.trim().strip_prefix(prefix));
         found.map(str::to_owned)
     };
     if let Some(uname) = line("hive-needs ") {
@@ -276,12 +278,18 @@ pub fn app_id() -> String {
 /// How long an upload may take.
 const UPLOAD_WAIT: Duration = Duration::from_secs(600);
 
+/// The clock the reconnect ladder waits on: Tokio's, a fake one in tests.
+type Sleep = dyn Fn(Duration) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>>
+    + Send
+    + Sync;
+
 /// One remote host's link, and what drives it.
 struct Remote {
     name: String,
     alias: Alias,
     link: Arc<Mutex<Link>>,
-    /// A reconnect asked for (Reconnect, wake): ends the wait.
+    /// A reconnect asked for (Reconnect, wake): ends a wait, and does nothing while the link
+    /// is up or connecting.
     retry: Notify,
     /// The next try runs `hive bridge --replace` (Q8's "Restart the remote service").
     replace: AtomicBool,
@@ -301,6 +309,9 @@ pub struct Remotes {
     /// `remote.keep_minutes`, in seconds, for the next `hello`.
     keep_secs: AtomicU64,
     hosts: Mutex<Vec<Arc<Remote>>>,
+    sleep: Box<Sleep>,
+    /// [`UPLOAD_WAIT`]; shorter in tests.
+    upload_wait: Duration,
 }
 
 impl Remotes {
@@ -312,15 +323,22 @@ impl Remotes {
             ids,
             keep_secs: AtomicU64::new(u64::from(RemoteSettings::default().keep_minutes) * 60),
             hosts: Mutex::default(),
+            sleep: Box::new(|wait| Box::pin(tokio::time::sleep(wait))),
+            upload_wait: UPLOAD_WAIT,
         }
     }
 
     fn hosts(&self) -> std::sync::MutexGuard<'_, Vec<Arc<Remote>>> {
-        self.hosts.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+        self.hosts
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
     fn find(&self, host: &str) -> Option<Arc<Remote>> {
-        self.hosts().iter().find(|remote| remote.name == host).cloned()
+        self.hosts()
+            .iter()
+            .find(|remote| remote.name == host)
+            .cloned()
     }
 
     /// Links to the hosts of `settings`, in order: a new host's link starts (with the UI `ui`),
@@ -336,7 +354,10 @@ impl Remotes {
             remote.end();
         }
         // The service checks each alias; one that is not valid is never linked to.
-        let valid = settings.hosts.into_iter().filter_map(|name| Alias::new(name).ok());
+        let valid = settings
+            .hosts
+            .into_iter()
+            .filter_map(|name| Alias::new(name).ok());
         for alias in valid {
             let known = kept.iter().find(|remote| remote.alias == alias);
             let remote = known.cloned().unwrap_or_else(|| self.start(alias, ui));
@@ -363,7 +384,10 @@ impl Remotes {
             task: Mutex::default(),
         });
         let task = tokio::spawn(supervise(Arc::clone(self), Arc::clone(&remote)));
-        *remote.task.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(task);
+        *remote
+            .task
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(task);
         remote
     }
 
@@ -400,15 +424,19 @@ impl Remotes {
 
     /// Tries `host` again now, whatever stopped it.
     pub fn reconnect(&self, host: &str) -> Result<(), String> {
-        let remote = self.find(host).ok_or_else(|| format!("no link to the host {host}"))?;
+        let remote = self
+            .find(host)
+            .ok_or_else(|| format!("no link to the host {host}"))?;
         remote.stopped.store(false, SeqCst);
-        remote.retry.notify_one();
+        remote.retry.notify_waiters();
         Ok(())
     }
 
     /// Restarts `host`'s service of another version (Q8): the next try ends it first.
     pub fn restart(&self, host: &str) -> Result<(), String> {
-        let remote = self.find(host).ok_or_else(|| format!("no link to the host {host}"))?;
+        let remote = self
+            .find(host)
+            .ok_or_else(|| format!("no link to the host {host}"))?;
         remote.replace.store(true, SeqCst);
         self.reconnect(host)
     }
@@ -417,7 +445,7 @@ impl Remotes {
     pub fn wake(&self) {
         for remote in self.hosts().iter() {
             if !remote.stopped.load(SeqCst) {
-                remote.retry.notify_one();
+                remote.retry.notify_waiters();
             }
         }
     }
@@ -436,7 +464,12 @@ impl Remotes {
         let args = ssh_args(&remote.alias, script);
         let (stdout, stdin, exit) = match start(&self.ssh, &args) {
             Ok(started) => started,
-            Err(error) => return (Failure::Network(format!("cannot start ssh: {error}")), false),
+            Err(error) => {
+                return (
+                    Failure::Network(format!("cannot start ssh: {error}")),
+                    false,
+                )
+            }
         };
         let hello = Control::Hello {
             protocol: PROTOCOL_VERSION,
@@ -495,7 +528,7 @@ impl Remotes {
             let _ = tokio::join!(write, read);
             (child.wait().await, text)
         };
-        let Ok((status, text)) = tokio::time::timeout(UPLOAD_WAIT, run).await else {
+        let Ok((status, text)) = tokio::time::timeout(self.upload_wait, run).await else {
             return Err(Failure::Install("the upload took too long".to_owned()));
         };
         if status.is_ok_and(|status| status.success()) {
@@ -516,7 +549,11 @@ impl Remote {
     /// Ends the link: its `ssh` is killed, and the UI is told its terminals ended and the link
     /// is gone.
     fn end(&self) {
-        let task = self.task.lock().unwrap_or_else(std::sync::PoisonError::into_inner).take();
+        let task = self
+            .task
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take();
         task.iter().for_each(JoinHandle::abort);
         let mut link = self.link();
         dropped(&mut link);
@@ -567,7 +604,10 @@ async fn supervise(remotes: Arc<Remotes>, remote: Arc<Remote>) {
             if !installed {
                 installed = true;
                 let cpu = arch.cpu();
-                status(&mut remote.link(), json!({"state": "installing", "cpu": cpu}));
+                status(
+                    &mut remote.link(),
+                    json!({"state": "installing", "cpu": cpu}),
+                );
                 match remotes.upload(&remote.alias, arch).await {
                     Ok(()) => continue,
                     Err(error) => failure = error,
@@ -581,6 +621,10 @@ async fn supervise(remotes: Arc<Remotes>, remote: Arc<Remote>) {
             None
         };
         let reason = failure.message(&remote.name);
+        // Waiting before the UI learns it, so a reconnect it asks for is never missed.
+        let retry = remote.retry.notified();
+        tokio::pin!(retry);
+        retry.as_mut().enable();
         match wait {
             Some(wait) => {
                 let secs = wait.as_secs();
@@ -588,12 +632,13 @@ async fn supervise(remotes: Arc<Remotes>, remote: Arc<Remote>) {
                 status(&mut remote.link(), state);
                 attempt += 1;
                 tokio::select! {
-                    () = tokio::time::sleep(wait) => {}
-                    () = remote.retry.notified() => {}
+                    () = (remotes.sleep)(wait) => {}
+                    () = retry => {}
                 }
             }
             None => {
-                let mut state = json!({"state": "disconnected", "reason": reason, "kind": failure.kind()});
+                let mut state =
+                    json!({"state": "disconnected", "reason": reason, "kind": failure.kind()});
                 if let Failure::Version(version, terminals) = &failure {
                     state["version"] = version.as_str().into();
                     state["app_version"] = VERSION.into();
@@ -605,9 +650,12 @@ async fn supervise(remotes: Arc<Remotes>, remote: Arc<Remote>) {
                     link.end_terminals();
                     status(&mut link, state);
                 }
-                remote.retry.notified().await;
+                retry.await;
                 (attempt, installed) = (0, false);
             }
         }
     }
 }
+
+#[cfg(test)]
+mod tests;

@@ -45,7 +45,7 @@ fn output() -> (
 }
 
 /// The service end of an in-memory connection.
-struct Service {
+pub(crate) struct Service {
     reader: FramedRead<DuplexStream, FrameCodec>,
     writer: FramedWrite<DuplexStream, FrameCodec>,
 }
@@ -59,12 +59,12 @@ impl Service {
             .unwrap()
     }
 
-    async fn control(&mut self) -> (u32, Control) {
+    pub(crate) async fn control(&mut self) -> (u32, Control) {
         let frame = self.next().await;
         (frame.channel, frame.to_control().unwrap())
     }
 
-    async fn send(&mut self, channel: u32, message: Control) {
+    pub(crate) async fn send(&mut self, channel: u32, message: Control) {
         self.writer
             .send(Frame::control(channel, &message))
             .await
@@ -77,7 +77,7 @@ fn hive() -> Hive {
     Hive::new("/nonexistent/hive-test".into(), vec![])
 }
 
-fn attach(hive: &Hive, reason: &'static str) -> Service {
+pub(crate) fn attach(hive: &Hive, reason: &'static str) -> Service {
     // One pipe per direction, so each side can close them separately.
     let (reader, writer) = tokio::io::duplex(1 << 16);
     let (to_service, from_app) = tokio::io::duplex(1 << 16);
