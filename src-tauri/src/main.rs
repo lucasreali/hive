@@ -82,6 +82,12 @@ fn main() {
                     tauri_plugin_opener::open_url(url, None::<&str>).map_err(|e| e.to_string())
                 })
                 .with_tray(tray(app));
+            // Links to the remote hosts over ssh, which get the app's Linux builds (26.17).
+            #[cfg(target_os = "macos")]
+            let hive = hive.with_remote(
+                hive_lib::remote::SSH.into(),
+                app.path().resource_dir()?,
+            );
             // Asks for notification permission at launch; the tone plays from the app (17.19).
             #[cfg(target_os = "macos")]
             let hive = hive
@@ -105,6 +111,14 @@ fn main() {
                 hive_lib::native_bridge(&var, resource("hive.exe")),
             ));
             app.manage(hive);
+            // Waking from sleep reconnects the remote links at once (Q7).
+            #[cfg(target_os = "macos")]
+            {
+                let handle = app.handle().clone();
+                if !hive_lib::macos::observe_wake(move || hive_lib::woke(&handle)) {
+                    eprintln!("hive-app: waking from sleep cannot reconnect the remote hosts");
+                }
+            }
             #[cfg(target_os = "macos")]
             {
                 let handle = app.handle().clone();
@@ -190,6 +204,8 @@ fn main() {
             commands::set_mode,
             commands::check_update,
             commands::install_update,
+            commands::reconnect_host,
+            commands::restart_remote,
             commands::open_terminal,
             commands::attach_terminal,
             commands::write_terminal,

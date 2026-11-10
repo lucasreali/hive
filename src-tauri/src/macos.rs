@@ -11,6 +11,8 @@
 //! - Where the traffic lights go (18.4), from a close button laid out by this macOS.
 //! - Whether Hive holds Screen Recording and Accessibility, which programs in its terminals get
 //!   through it (25.5): only read, which never prompts.
+//! - Waking from sleep (`NSWorkspaceDidWakeNotification`), when the remote links reconnect at
+//!   once (26.17, Q7).
 //!
 //! Nothing unwinds across this boundary: `applicationShouldTerminate:` catches any panic, the
 //! center is asked only by an app bundle (`in_app_bundle`), and the completion blocks only hand
@@ -1248,6 +1250,74 @@ impl crate::Clipboard for Pasteboard {
     }
 }
 
+#[link(name = "AppKit", kind = "framework")]
+unsafe extern "C" {
+    /// The name of the notification `NSWorkspace`'s center posts when the computer wakes.
+    static NSWorkspaceDidWakeNotification: Id;
+}
+
+/// What a wake runs; AppKit calls [`woke`] with no context of ours.
+static WAKE: OnceLock<Box<dyn Fn() + Send + Sync>> = OnceLock::new();
+
+/// The wake observer's `woke:`. Nothing may unwind into AppKit.
+extern "C" fn woke(_: Id, _: Sel, _: Id) {
+    let _ = catch_unwind(|| WAKE.get().iter().for_each(|wake| wake()));
+}
+
+/// The notification center of `NSWorkspace`'s shared workspace, which posts its wake.
+fn workspace_center() -> Id {
+    // SAFETY: class methods and getters taking nothing and answering an object.
+    unsafe {
+        let get = message::<unsafe extern "C" fn(Id, Sel) -> Id>();
+        let workspace = get(
+            objc_getClass(c"NSWorkspace".as_ptr()),
+            selector(c"sharedWorkspace"),
+        );
+        get(workspace, selector(c"notificationCenter"))
+    }
+}
+
+/// Runs `wake` each time the computer wakes from sleep (Q7). Only the first `wake` is kept; the
+/// observer, an object of the class `HiveWakeObserver` made here, lives as long as the app.
+/// False when the class cannot be made (a second call).
+pub fn observe_wake(wake: impl Fn() + Send + Sync + 'static) -> bool {
+    let _ = WAKE.set(Box::new(wake));
+    // SAFETY: NSObject is a class; the method's encoding "v@:@" (nothing from self, _cmd and
+    // the notification) matches `woke`; `addObserver:selector:name:object:` takes an object, a
+    // selector, the notification's name (AppKit's constant) and nil.
+    unsafe {
+        let class = objc_allocateClassPair(
+            objc_getClass(c"NSObject".as_ptr()),
+            c"HiveWakeObserver".as_ptr(),
+            0,
+        );
+        if class.is_null() {
+            return false;
+        }
+        class_addMethod(
+            class,
+            selector(c"woke:"),
+            woke as *const c_void,
+            c"v@:@".as_ptr(),
+        );
+        objc_registerClassPair(class);
+        let new = message::<unsafe extern "C" fn(Id, Sel) -> Id>();
+        let observer = new(class, selector(c"new"));
+        let add = message::<unsafe extern "C" fn(Id, Sel, Id, Sel, Id, Id)>();
+        let name = NSWorkspaceDidWakeNotification;
+        let selector_of_woke = selector(c"woke:");
+        add(
+            workspace_center(),
+            selector(c"addObserver:selector:name:object:"),
+            observer,
+            selector_of_woke,
+            name,
+            null_mut(),
+        );
+    }
+    true
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1259,6 +1329,35 @@ mod tests {
         fn _Block_copy(block: *const c_void) -> *mut c_void;
         fn _Block_release(block: *const c_void);
         fn _Block_signature(block: *const c_void) -> *const c_char;
+    }
+
+    #[test]
+    fn a_wake_runs_what_was_asked_once_per_wake() {
+        static WAKES: AtomicUsize = AtomicUsize::new(0);
+        let count = || {
+            WAKES.fetch_add(1, SeqCst);
+        };
+        assert!(observe_wake(count));
+        // The class exists now: a second observer is refused, and the first `wake` is kept.
+        assert!(!observe_wake(|| {}));
+        let post = || {
+            // SAFETY: `postNotificationName:object:` with AppKit's name and nil; delivered at
+            // once, on this thread.
+            unsafe {
+                let post = message::<unsafe extern "C" fn(Id, Sel, Id, Id)>();
+                let name = NSWorkspaceDidWakeNotification;
+                post(
+                    workspace_center(),
+                    selector(c"postNotificationName:object:"),
+                    name,
+                    null_mut(),
+                );
+            }
+        };
+        post();
+        assert_eq!(WAKES.load(SeqCst), 1);
+        post();
+        assert_eq!(WAKES.load(SeqCst), 2);
     }
 
     /// The type encodings of the blocks the stand-ins were given.
