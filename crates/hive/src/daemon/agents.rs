@@ -27,13 +27,11 @@ impl State {
         }
     }
 
-    /// Holds the power assertion while an agent works and the setting is on (17.17), stops the
-    /// browsers of worktrees without agents (24.6), and sends `subagent_worktrees` when the set
-    /// changed. Called with the agents lock held, so
-    /// the changes go out in order.
+    /// Holds the power assertion while an agent works and the setting is on (17.17), and sends
+    /// `subagent_worktrees` when the set changed. Called with the agents lock held, so the
+    /// changes go out in order.
     pub(super) async fn owned_changed(&self, agents: &HashMap<String, Agent>) {
         self.power_changed(agents);
-        self.browsers_follow(agents).await;
         let worktrees = {
             let terminals = self
                 .terminal_worktrees
@@ -94,7 +92,6 @@ impl State {
         if let Some(state) = agent.apply(id, event, sent_ns, now, &place) {
             self.to_app(channel, &state).await;
         }
-        self.browser_action(id, agent, event).await;
         // The transcript got a message: its usage is read on the next tick (at most once a
         // second).
         agent.usage.due |= matches!(
@@ -212,7 +209,6 @@ impl State {
                 self.to_app(agent.channel, &usage).await;
             }
         }
-        self.browsers_snapshot().await;
         // The new app has none yet: sent unless still none.
         self.owned
             .lock()

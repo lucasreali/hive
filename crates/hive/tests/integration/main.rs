@@ -12,7 +12,7 @@ mod agents;
 mod bridge;
 #[cfg(unix)]
 #[cfg(test)]
-mod browser;
+mod browser_cleanup;
 #[cfg(unix)]
 #[cfg(test)]
 mod changes;

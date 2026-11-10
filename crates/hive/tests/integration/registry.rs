@@ -93,14 +93,25 @@ async fn worktrees_added_or_removed_outside_hive_reach_the_app() {
 #[tokio::test]
 async fn a_burst_of_worktrees_is_one_message() {
     let repo = Repo::new();
+    // Five worktrees made by git before the watch, their registry entries kept aside: a
+    // `git worktree add` each during the watch is a burst only while each takes less than
+    // `registry::QUIET` and all of them less than `registry::MAX_DELAY`, which a slow runner
+    // does not keep. Moving the entries back is the burst, however slow the runner.
+    let names_added = ["w1", "w2", "w3", "w4", "w5"];
+    let registry = repo.root.join(".git/worktrees");
+    let aside = repo.env.path("aside");
+    std::fs::create_dir(&aside).unwrap();
+    for name in names_added {
+        let path = repo.env.path(&format!("home/{name}"));
+        repo.git(&["worktree", "add", "-q", "-b", name, path.to_str().unwrap()]);
+        std::fs::rename(registry.join(name), aside.join(name)).unwrap();
+    }
     let (mut daemon, mut app) = followed(&repo).await;
     assert!(repo.hive(&["create", "first"]).status.success());
     assert_eq!(names(&mut app).await, ["main", "first"]);
 
-    let names_added = ["w1", "w2", "w3", "w4", "w5"];
     for name in names_added {
-        let path = repo.env.path(&format!("home/{name}"));
-        repo.git(&["worktree", "add", "-q", "-b", name, path.to_str().unwrap()]);
+        std::fs::rename(aside.join(name), registry.join(name)).unwrap();
     }
     let expected = [&["main", "first"][..], &names_added].concat();
     assert_eq!(names(&mut app).await, expected);
