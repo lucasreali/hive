@@ -242,16 +242,50 @@ pub fn locale_env() -> &'static [(&'static str, String)] {
     })
 }
 
-/// fish, with `bin_dir` put first on `PATH` after the user's config (WSL).
+/// Whether this Linux service is a remote one (26.14, `hive daemon --remote`): its terminals and
+/// its own `PATH` then come from the user's login shell, as on macOS, not from WSL's fish.
+#[cfg(target_os = "linux")]
+static REMOTE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Records whether this service is a remote one, once, before anything starts a shell.
+#[cfg(target_os = "linux")]
+pub fn set_remote(remote: bool) {
+    REMOTE.store(remote, Ordering::SeqCst);
+}
+
+/// Whether this service is a remote one (see [`set_remote`]).
+#[cfg(target_os = "linux")]
+pub fn remote() -> bool {
+    REMOTE.load(Ordering::SeqCst)
+}
+
+/// fish, with `bin_dir` put first on `PATH` after the user's config (WSL); on a remote service
+/// the user's login shell.
 #[cfg(target_os = "linux")]
 fn shell(bin_dir: &Path) -> pty_process::Command {
+    if remote() {
+        return login_shell(bin_dir);
+    }
     pty_process::Command::new("fish")
         .arg("-C")
         .arg(path_command(bin_dir))
 }
 
 #[cfg(target_os = "macos")]
-use crate::macos::shell;
+use login_shell as shell;
+
+/// The user's login shell (`$SHELL`, else [`login::DEFAULT_SHELL`] when it cannot run),
+/// started as [`login::launch`] says: macOS, and a remote Linux service.
+#[cfg(unix)]
+fn login_shell(bin_dir: &Path) -> pty_process::Command {
+    let var = std::env::var_os;
+    let path = var("PATH");
+    let shell = login::user_shell(var("SHELL"), path.as_deref());
+    let launch = login::launch(shell, var("ZDOTDIR"), path, bin_dir);
+    pty_process::Command::new(launch.program)
+        .args(launch.args)
+        .envs(launch.env)
+}
 
 /// fish command run after the user's config: puts `bin_dir` first on `PATH` for this shell only.
 /// Never `fish_add_path` without flags: it would persist through a universal variable.
@@ -263,16 +297,64 @@ fn path_command(bin_dir: &Path) -> String {
     format!("set -gx PATH '{dir}' $PATH")
 }
 
-/// How a login shell starts on macOS so that Hive's bin dir stays first on `PATH`: a GUI
-/// app gets only `/usr/bin:/bin`, and the login files (`path_helper` among them) reorder
-/// `PATH`, so the bin dir goes first only after they ran. Portable, so tested everywhere.
+/// How a login shell starts on macOS and on a remote Linux service (26.14) so that Hive's bin
+/// dir stays first on `PATH`: a GUI app gets only `/usr/bin:/bin`, sshd's minimal one, and the
+/// login files (`path_helper` among them) reorder `PATH`, so the bin dir goes first only after
+/// they ran. Portable, so tested everywhere.
 pub mod login {
+    #[cfg(unix)]
+    use std::ffi::OsStr;
     use std::ffi::OsString;
     use std::io;
     use std::path::{Path, PathBuf};
 
-    /// Used when `$SHELL` is unset: macOS's default shell.
-    const DEFAULT_SHELL: &str = "/bin/zsh";
+    /// Used when `$SHELL` is unset or cannot run: macOS's default shell; elsewhere `sh`.
+    #[cfg(target_os = "macos")]
+    pub const DEFAULT_SHELL: &str = "/bin/zsh";
+    #[cfg(not(target_os = "macos"))]
+    pub const DEFAULT_SHELL: &str = "/bin/sh";
+
+    /// The shell to start for `shell` (`$SHELL`) with the service's `path`: on Linux only one
+    /// that can run ([`usable`]); on macOS `shell` as it is, as before 26.14.
+    #[cfg(unix)]
+    pub fn user_shell(shell: Option<OsString>, path: Option<&OsStr>) -> Option<OsString> {
+        #[cfg(target_os = "linux")]
+        let shell = usable(shell, path);
+        #[cfg(target_os = "macos")]
+        let _ = path;
+        shell
+    }
+
+    /// The absolute path of `shell` (`$SHELL`) when it can run: an absolute path to an
+    /// executable file, or a name found as one in the absolute folders of `path` (the
+    /// service's `PATH`). None otherwise (a relative path too: the terminal starts in a
+    /// worktree, whose files must never run), so that [`launch`] starts [`DEFAULT_SHELL`]
+    /// instead of a terminal that fails to open.
+    #[cfg(unix)]
+    pub fn usable(shell: Option<OsString>, path: Option<&OsStr>) -> Option<OsString> {
+        let shell = PathBuf::from(shell?);
+        let runs = |file: &Path| {
+            let meta = file.metadata();
+            meta.is_ok_and(|meta| meta.is_file() && crate::mode::executable(&meta))
+        };
+        let found = if shell.as_os_str().as_encoded_bytes().contains(&b'/') {
+            Some(shell).filter(|shell| shell.is_absolute() && runs(shell))
+        } else if shell.as_os_str().is_empty() {
+            None
+        } else {
+            let dirs = path.into_iter().flat_map(std::env::split_paths);
+            let absolute = dirs.filter(|dir| dir.is_absolute());
+            absolute.map(|dir| dir.join(&shell)).find(|file| runs(file))
+        };
+        found.map(PathBuf::into_os_string)
+    }
+
+    /// Whether `file`, as the value of `ENV`, would be read as it is: a POSIX shell expands
+    /// `ENV`, so a `$`, a backtick or a backslash in it would change it, or run something.
+    fn plain(file: &Path) -> bool {
+        let bytes = file.as_os_str().as_encoded_bytes();
+        !bytes.iter().any(|b| matches!(b, b'$' | b'`' | b'\\'))
+    }
 
     /// A shell's program, arguments and extra environment.
     #[derive(Debug, PartialEq, Eq)]
@@ -290,7 +372,10 @@ pub mod login {
     /// How to start `shell` (`$SHELL`) as a login shell. zsh reads Hive's `ZDOTDIR`, whose
     /// files run the user's (from `zdotdir`, else `HOME`) and then put the bin dir first;
     /// bash reads Hive's rc file, which does the same with the login profile; fish runs a
-    /// command after its config. Any other shell only gets the bin dir first on `path`.
+    /// command after its config. Any other shell gets the bin dir first on `path`; `sh` and
+    /// `dash` also get it again, if their login profile moved it, from Hive's `ENV` file, which
+    /// an interactive one reads after the profile (unless that path holds a `$`, a backtick or
+    /// a backslash, which `ENV`'s expansion would change).
     pub fn launch(
         shell: Option<OsString>,
         zdotdir: Option<OsString>,
@@ -318,13 +403,20 @@ pub mod login {
                 let rc = startup.join("bashrc").into();
                 (vec!["--rcfile".into(), rc], vec![("HIVE_BIN_DIR", bin)])
             }
-            _ => {
-                let mut first = bin;
+            other => {
+                let mut first = bin.clone();
                 if let Some(path) = path {
                     first.push(":");
                     first.push(path);
                 }
-                (vec!["-l".into()], vec![("PATH", first)])
+                let mut env = vec![("PATH", first)];
+                // Only `sh` and `dash` read Hive's `ENV` file: ksh and mksh read the user's rc
+                // file only while `ENV` is unset.
+                let shrc = startup.join("shrc");
+                if matches!(other, Some("sh" | "dash")) && plain(&shrc) {
+                    env.extend([("HIVE_BIN_DIR", bin), ("ENV", shrc.into())]);
+                }
+                (vec!["-l".into()], env)
             }
         };
         Launch { program, args, env }
@@ -341,8 +433,8 @@ pub mod login {
         )
     }
 
-    /// The startup files, by name: zsh's four (`.zlogin` runs last in a login shell) and
-    /// bash's rc file, which reads what a login bash reads.
+    /// The startup files, by name: zsh's four (`.zlogin` runs last in a login shell), bash's
+    /// rc file, which reads what a login bash reads, and the `ENV` file of any other shell.
     pub fn startup_files() -> Vec<(&'static str, String)> {
         let header =
             "# Written by Hive: runs your startup files, then puts Hive's bin dir first on PATH.\n";
@@ -381,6 +473,15 @@ pub mod login {
                       fi\n\
                       export PATH=\"$HIVE_BIN_DIR:$PATH\"\n\
                       unset HIVE_BIN_DIR\n";
+        // Unset once read: a nested interactive `sh` reads no `ENV`, as without Hive.
+        let shrc = "if [ -n \"$HIVE_BIN_DIR\" ]; then\n\
+                    \x20 case $PATH in\n\
+                    \x20   \"$HIVE_BIN_DIR\" | \"$HIVE_BIN_DIR\":*) ;;\n\
+                    \x20   *) PATH=\"$HIVE_BIN_DIR:$PATH\" ;;\n\
+                    \x20 esac\n\
+                    \x20 export PATH\n\
+                    fi\n\
+                    unset HIVE_BIN_DIR ENV\n";
         vec![
             (
                 ".zshenv",
@@ -396,6 +497,7 @@ pub mod login {
                 format!("{header}{}{zlogin}", zsh_file(".zlogin")),
             ),
             ("bashrc", format!("{header}{bashrc}")),
+            ("shrc", format!("{header}{shrc}")),
         ]
     }
 
@@ -430,7 +532,7 @@ pub mod login {
                     bin,
                 )
             };
-            let zsh = Launch {
+            let zsh = || Launch {
                 program: "/bin/zsh".into(),
                 args: os(&["-l"]),
                 env: vec![
@@ -438,11 +540,10 @@ pub mod login {
                     ("ZDOTDIR", "/d/hive/shell".into()),
                 ],
             };
-            assert_eq!(at(None, None), zsh);
-            assert_eq!(at(Some("/bin/zsh"), None), zsh);
+            assert_eq!(at(Some("/bin/zsh"), None), zsh());
             let mut own = at(Some("/opt/zsh"), Some("/u/z"));
             assert_eq!(own.env.pop(), Some(("HIVE_USER_ZDOTDIR", "/u/z".into())));
-            assert_eq!(own.env, zsh.env);
+            assert_eq!(own.env, zsh().env);
             let bash = at(Some("/bin/bash"), None);
             assert_eq!(bash.args, os(&["--rcfile", "/d/hive/shell/bashrc"]));
             assert_eq!(bash.env, vec![("HIVE_BIN_DIR", "/d/hive/bin".into())]);
@@ -450,16 +551,117 @@ pub mod login {
             let set = "set -gx PATH '/d/hive/bin' $PATH";
             assert_eq!(fish.args, os(&["-l", "-C", set]));
             assert!(fish.env.is_empty());
-            let other = at(Some("/bin/ksh"), None);
-            assert_eq!(other.args, os(&["-l"]));
-            assert_eq!(
-                other.env,
-                vec![("PATH", "/d/hive/bin:/usr/bin:/bin".into())]
-            );
+            // ksh and mksh: only `PATH`, so they still read the user's rc file.
+            let ksh = at(Some("/bin/ksh"), None);
+            assert_eq!(ksh.args, os(&["-l"]));
+            assert_eq!(ksh.env, vec![("PATH", "/d/hive/bin:/usr/bin:/bin".into())]);
+            let sh_env = |path: &str| {
+                vec![
+                    ("PATH", path.into()),
+                    ("HIVE_BIN_DIR", "/d/hive/bin".into()),
+                    ("ENV", "/d/hive/shell/shrc".into()),
+                ]
+            };
+            let sh = |path: &str| Launch {
+                program: "/bin/sh".into(),
+                args: os(&["-l"]),
+                env: sh_env(path),
+            };
+            assert_eq!(at(Some("/bin/sh"), None), sh("/d/hive/bin:/usr/bin:/bin"));
+            let dash = at(Some("/usr/bin/dash"), None);
+            assert_eq!(dash.env, sh_env("/d/hive/bin:/usr/bin:/bin"));
             let bare = launch(Some("sh".into()), None, Some("".into()), bin);
-            assert_eq!(bare.env, vec![("PATH", "/d/hive/bin".into())]);
-            let empty = launch(Some("".into()), Some("".into()), None, bin);
-            assert_eq!(empty, zsh);
+            assert_eq!(bare.env, sh_env("/d/hive/bin"));
+            // Unset or empty: macOS's zsh, else `sh`.
+            #[cfg(target_os = "macos")]
+            let (unset, empty) = (zsh(), zsh());
+            #[cfg(not(target_os = "macos"))]
+            let (unset, empty) = (sh("/d/hive/bin:/usr/bin:/bin"), sh("/d/hive/bin"));
+            assert_eq!(at(None, None), unset);
+            assert_eq!(launch(Some("".into()), Some("".into()), None, bin), empty);
+            // `ENV` is expanded: a data path it would change gets no `ENV` file.
+            for odd in ["/d/$x/bin", "/d/`x`/bin", "/d/a\\b/bin"] {
+                let odd = launch(Some("/bin/sh".into()), None, None, Path::new(odd));
+                assert_eq!(odd.env.len(), 1, "{odd:?}");
+                assert_eq!(odd.env[0].0, "PATH");
+            }
+        }
+
+        #[test]
+        fn only_a_shell_that_can_run_is_usable() {
+            use std::os::unix::fs::PermissionsExt;
+            let dir = tempfile::tempdir().unwrap();
+            let file = |name: &str, mode: u32| {
+                let path = dir.path().join(name);
+                std::fs::write(&path, "").unwrap();
+                std::fs::set_permissions(&path, std::fs::Permissions::from_mode(mode)).unwrap();
+                path.into_os_string()
+            };
+            let (runs, plain) = (file("runs", 0o755), file("plain", 0o644));
+            let dirs = std::env::join_paths(["rel".as_ref(), dir.path()]).unwrap();
+            let path = Some(dirs.as_os_str());
+            let usable = |shell: &OsStr| super::usable(Some(shell.into()), path);
+            assert_eq!(usable(&runs), Some(runs.clone()));
+            // A name is started by the absolute path it was found at.
+            assert_eq!(usable("runs".as_ref()), Some(runs.clone()));
+            // A relative path never, though it leads to `runs` from here: a terminal starts
+            // it from its worktree.
+            let cwd = std::env::current_dir().unwrap();
+            let up = "../".repeat(cwd.components().count() - 1);
+            let from_root = Path::new(&runs).strip_prefix("/").unwrap();
+            let relative = format!("{up}{}", from_root.display());
+            assert!(
+                Path::new(&relative).is_relative() && Path::new(&relative).is_file(),
+                "{relative}"
+            );
+            for unusable in [
+                plain,
+                "plain".into(),
+                dir.path().into(),
+                "".into(),
+                relative.into(),
+                "bin/runs".into(),
+            ] {
+                assert_eq!(usable(&unusable), None, "{unusable:?}");
+            }
+            assert_eq!(usable("missing".as_ref()), None);
+            assert_eq!(usable(&dir.path().join("missing").into_os_string()), None);
+            assert_eq!(super::usable(None, path), None);
+            assert_eq!(super::usable(Some("runs".into()), None), None);
+            // Only absolute folders are looked in.
+            let here = Some(OsStr::new("."));
+            assert!(!cwd.join("runs").exists());
+            assert_eq!(super::usable(Some("runs".into()), here), None);
+        }
+
+        #[test]
+        fn sh_runs_the_login_profile_then_its_env_file_puts_the_bin_dir_first() {
+            let dir = tempfile::tempdir().unwrap();
+            let bin = dir.path().join("bin");
+            install(&bin).unwrap();
+            let home = dir.path().join("home");
+            std::fs::create_dir(&home).unwrap();
+            let profile = "export PATH=/user/first:$PATH\nexport HIVE_TEST_RC=read\n";
+            std::fs::write(home.join(".profile"), profile).unwrap();
+            let sh = launch(
+                Some("/bin/sh".into()),
+                None,
+                Some("/usr/bin:/bin".into()),
+                &bin,
+            );
+            let echo = "echo \"rc=$HIVE_TEST_RC first=${PATH%%:*} left=$HIVE_BIN_DIR$ENV.\"";
+            let out = std::process::Command::new(&sh.program)
+                .args(&sh.args)
+                .args(["-i", "-c", echo])
+                .env_clear()
+                .env("HOME", &home)
+                .envs(sh.env)
+                .stdin(std::process::Stdio::null())
+                .output()
+                .unwrap();
+            let stdout = String::from_utf8_lossy(&out.stdout);
+            let want = format!("rc=read first={} left=.", bin.display());
+            assert!(stdout.contains(&want), "{out:?}");
         }
 
         #[test]

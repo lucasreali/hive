@@ -72,9 +72,8 @@ pub fn install(paths: &Paths, hive: &Path) -> io::Result<()> {
     let wrapper = script(&bin, &settings, &paths.shared_dir());
     #[cfg(unix)]
     write_atomic(&bin.join("claude"), &wrapper, 0o755)?;
-    // Shells that put the bin folder first after the user's startup files: zsh and bash on
-    // macOS, Git Bash on Windows.
-    #[cfg(not(target_os = "linux"))]
+    // Shells that put the bin folder first after the user's startup files: zsh, bash and `sh`
+    // on macOS and on a remote Linux service (26.14), Git Bash on Windows.
     crate::terminal::login::install(&bin)?;
     Ok(())
 }
@@ -176,15 +175,35 @@ const SHELL_OUTPUT: u64 = 64 * 1024;
 #[cfg(unix)]
 pub(crate) const PRINT_PATH: &str = r#"printf '%s\n' "$PATH""#;
 
-/// The user's shell as terminals start it (fish, after its config, on WSL), asked for its
-/// `PATH`.
+/// The user's shell as terminals start it (fish, after its config, on WSL; the login shell on
+/// a remote service), asked for its `PATH`.
 #[cfg(target_os = "linux")]
 pub fn path_shell() -> (OsString, Vec<OsString>) {
+    if crate::terminal::remote() {
+        return login_shell();
+    }
     ("fish".into(), vec!["-c".into(), PRINT_PATH.into()])
 }
 
 #[cfg(target_os = "macos")]
-pub use crate::macos::path_shell;
+pub use login_shell as path_shell;
+
+/// The user's login shell (`$SHELL`), as terminals start it, asked for its `PATH`: macOS, and
+/// a remote Linux service, whose own `PATH` (sshd's) is minimal.
+#[cfg(unix)]
+pub fn login_shell() -> (OsString, Vec<OsString>) {
+    let var = std::env::var_os;
+    login_shell_of(var("SHELL"), var("PATH").as_deref())
+}
+
+/// [`login_shell`] for `shell` (`$SHELL`) and the service's `path`.
+#[cfg(unix)]
+fn login_shell_of(shell: Option<OsString>, path: Option<&OsStr>) -> (OsString, Vec<OsString>) {
+    use crate::terminal::login;
+    let shell = login::user_shell(shell, path);
+    let program = login::launch(shell, None, None, Path::new("")).program;
+    (program, vec!["-l".into(), "-c".into(), PRINT_PATH.into()])
+}
 
 /// The `PATH` the user's terminals get, for finding the real `claude`: the one `shell` (see
 /// [`path_shell`]) prints, else the service's `path` (started through `wsl.exe`, it lacks what
@@ -355,14 +374,26 @@ mod tests {
         #[cfg(target_os = "linux")]
         assert_eq!((program, &args[..1]), ("fish".into(), &["-c".into()][..]));
         #[cfg(target_os = "macos")]
-        {
-            let var = std::env::var_os("SHELL");
-            let shell = crate::terminal::login::launch(var, None, None, Path::new("")).program;
-            assert_eq!(
-                (program, &args[..2]),
-                (shell, &["-l".into(), "-c".into()][..])
-            );
-        }
+        assert!(!program.is_empty() && args == ["-l", "-c", PRINT_PATH]);
+        // The login shell (macOS, a remote Linux service) for a given `$SHELL` and `PATH`.
+        let dir = tempfile::tempdir().unwrap();
+        let mine = dir.path().join("mine");
+        std::fs::write(&mine, "").unwrap();
+        std::fs::set_permissions(&mine, Permissions::from_mode(0o755)).unwrap();
+        let of = |shell: Option<&str>| {
+            login_shell_of(shell.map(Into::into), Some(dir.path().as_os_str()))
+        };
+        let login_args = ["-l", "-c", PRINT_PATH].map(OsString::from).to_vec();
+        let missing = Some("/nonexistent/zsh");
+        // Linux starts only a shell that can run, by its absolute path, else `sh`.
+        #[cfg(target_os = "linux")]
+        let (named, gone, unset) = (mine.into_os_string(), "/bin/sh", "/bin/sh");
+        // macOS starts `$SHELL` as it is, else zsh.
+        #[cfg(target_os = "macos")]
+        let (named, gone, unset) = (OsString::from("mine"), "/nonexistent/zsh", "/bin/zsh");
+        assert_eq!(of(Some("mine")), (named, login_args.clone()));
+        assert_eq!(of(missing), (gone.into(), login_args.clone()));
+        assert_eq!(of(None), (unset.into(), login_args));
         let service = std::env::var_os("PATH").unwrap();
         let sh = ("sh".into(), args[args.len() - 2..].to_vec());
         let printed = user_path(Some(sh), None, None, SHELL_TIMEOUT).await;

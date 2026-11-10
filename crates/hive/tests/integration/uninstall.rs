@@ -152,10 +152,11 @@ fn expected(data: bool, accounts: bool) -> Vec<(&'static str, UninstallKind)> {
             items.push((".hive/accounts/work", Account));
         }
     }
-    items.extend([(".hive/bin", Program), (".hive/hive-hooks.json", Program)]);
-    if mac {
-        items.push((".hive/shell", Program));
-    }
+    items.extend([
+        (".hive/bin", Program),
+        (".hive/hive-hooks.json", Program),
+        (".hive/shell", Program),
+    ]);
     items.push((".local/bin/hive", Program));
     if mac {
         items.extend([
