@@ -21,7 +21,7 @@ for (const theme of ["one-dark", "one-light"]) {
     const bar = page.locator("header.titlebar");
     await expect(bar).toHaveCSS(
       "background-color",
-      theme === "one-light" ? "rgb(220, 220, 221)" : "rgb(59, 65, 77)",
+      theme === "one-light" ? "rgb(219, 219, 216)" : "rgb(59, 65, 77)",
     );
     await expect(bar).toHaveAttribute("data-mac", "true");
     await expect(bar.getByRole("button", { name: "Close" })).toHaveCount(0);
