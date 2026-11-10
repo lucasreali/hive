@@ -92,9 +92,6 @@ test("terminal and project actions call their commands", async () => {
   await tauriTransport.setView(3, true, false);
   await tauriTransport.listChanges("/r", "head");
   await tauriTransport.listScripts("/r");
-  await tauriTransport.watchBrowser("/r");
-  await tauriTransport.watchBrowser(null);
-  await tauriTransport.browserDrawn();
   await tauriTransport.listSessions();
   await tauriTransport.locateSession("s", "log");
   await tauriTransport.deleteSession("s");
@@ -161,9 +158,6 @@ test("terminal and project actions call their commands", async () => {
     ["set_view", { terminal: 3, focused: true, visible: false }],
     ["list_changes", { path: "/r", base: "head" }],
     ["list_scripts", { path: "/r" }],
-    ["watch_browser", { worktree: "/r" }],
-    ["watch_browser", { worktree: null }],
-    ["browser_drawn", {}],
     ["list_sessions", {}],
     ["locate_session", { id: "s", target: "log" }],
     ["delete_session", { id: "s" }],

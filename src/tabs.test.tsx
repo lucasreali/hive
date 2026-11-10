@@ -55,7 +55,7 @@ const [, fixLogin, checkout] = shop.worktrees;
 const W = fixLogin.path;
 const s = () => useHive.getState();
 /** The bar's tabs: a file by its path, a terminal by its id. */
-const bar = () => barItems(s()).map((t) => ("path" in t ? t.path : "id" in t ? t.id : t.browser));
+const bar = () => barItems(s()).map((t) => ("path" in t ? t.path : t.id));
 const file = (path: string, worktree = W) => ({ worktree, path });
 /** Opens `f` and keeps its tab (a double click, 11.1), so the next file gets a tab of its own. */
 const keepOpen = (f: OpenFile, editing?: boolean, line?: number) => {
@@ -232,6 +232,9 @@ test("a saved order that cannot be read is empty; a failing storage keeps the mo
   expect(savedTabOrder()).toEqual([]);
   localStorage.setItem("hive.tabOrder", JSON.stringify(["file:x", 2, "tab:3", "session:s"]));
   expect(savedTabOrder()).toEqual(["file:x", "session:s"]);
+  // The agent's browser's tab, as an install before 26.11 remembers it.
+  localStorage.setItem("hive.tabOrder", JSON.stringify(["browser:/w", "file:x"]));
+  expect(savedTabOrder()).toEqual(["file:x"]);
   expect(savedTabOrder(null)).toEqual([]);
   const full = stubStorage(true);
   addTab(1, W);

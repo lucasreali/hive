@@ -1619,17 +1619,6 @@ impl Hive {
         self.link().send(0, &Control::ListScripts { path })
     }
 
-    /// The browser panel shows `worktree`'s browser (24.6; `None`: none in view). Answered by
-    /// `browser_status`, then `browser_frame`s.
-    pub fn watch_browser(&self, worktree: Option<String>) -> Result<(), String> {
-        self.link().send(0, &Control::WatchBrowser { worktree })
-    }
-
-    /// The last `browser_frame` is drawn: the next may come.
-    pub fn browser_drawn(&self) -> Result<(), String> {
-        self.link().send(0, &Control::BrowserDrawn)
-    }
-
     /// The answer arrives as `sessions`.
     pub fn list_sessions(&self) -> Result<(), String> {
         self.link().send(0, &Control::ListSessions)
@@ -2629,16 +2618,6 @@ pub mod commands {
     #[tauri::command]
     pub fn list_scripts(hive: State<'_, Hive>, path: String) -> Result<(), String> {
         hive.list_scripts(path)
-    }
-
-    #[tauri::command]
-    pub fn watch_browser(hive: State<'_, Hive>, worktree: Option<String>) -> Result<(), String> {
-        hive.watch_browser(worktree)
-    }
-
-    #[tauri::command]
-    pub fn browser_drawn(hive: State<'_, Hive>) -> Result<(), String> {
-        hive.browser_drawn()
     }
 
     #[tauri::command]

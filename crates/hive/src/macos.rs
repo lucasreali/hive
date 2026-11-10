@@ -251,28 +251,6 @@ fn confstr_path(len: usize, buf: &[c_char]) -> Option<PathBuf> {
     (!path.as_os_str().is_empty()).then_some(path)
 }
 
-/// The browsers looked for, in this order, in `/Applications` and `~/Applications`.
-const APPS: [&str; 4] = [
-    "Google Chrome.app/Contents/MacOS/Google Chrome",
-    "Chromium.app/Contents/MacOS/Chromium",
-    "Microsoft Edge.app/Contents/MacOS/Microsoft Edge",
-    "Brave Browser.app/Contents/MacOS/Brave Browser",
-];
-
-/// Where browsers install on macOS (24.6, see `crate::browser::find`): each app of [`APPS`]
-/// in `/Applications`, then in `~/Applications`.
-pub fn browser_candidates(home: Option<&Path>, _path: Option<&OsStr>) -> Vec<PathBuf> {
-    let roots = [
-        Some(PathBuf::from("/Applications")),
-        home.map(|h| h.join("Applications")),
-    ];
-    roots
-        .into_iter()
-        .flatten()
-        .flat_map(|root| APPS.iter().map(move |app| root.join(app)))
-        .collect()
-}
-
 /// The command that prints the system locale (D18.2), `AppleLocale` in the global
 /// preferences (e.g. `en_BR`): `defaults read -g AppleLocale`.
 pub fn apple_locale() -> std::process::Command {
@@ -711,19 +689,6 @@ mod trash {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn browsers_are_looked_for_in_both_applications_folders() {
-        let found = browser_candidates(Some(Path::new("/h")), None);
-        let chrome = "Google Chrome.app/Contents/MacOS/Google Chrome";
-        let brave = "Brave Browser.app/Contents/MacOS/Brave Browser";
-        assert_eq!(found.len(), 8);
-        assert_eq!(found[0], Path::new("/Applications").join(chrome));
-        assert_eq!(found[3], Path::new("/Applications").join(brave));
-        assert_eq!(found[4], Path::new("/h/Applications").join(chrome));
-        assert_eq!(found[7], Path::new("/h/Applications").join(brave));
-        assert_eq!(browser_candidates(None, None).len(), 4);
-    }
 
     #[test]
     fn a_process_footprint_is_its_memory() {
