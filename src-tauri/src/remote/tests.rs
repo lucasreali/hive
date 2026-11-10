@@ -670,6 +670,38 @@ async fn a_wake_ends_the_wait_on_the_real_clock() {
 }
 
 #[cfg(unix)]
+#[test]
+fn the_app_s_wake_and_exit_reach_its_remote_links() {
+    use tauri::test::{mock_builder, mock_context, noop_assets};
+    let lab = Lab::new("app");
+    lab.plan(&["stderr Connection reset by peer".to_owned()]);
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    let hive = Hive::new("/nonexistent/hive-test".into(), vec![])
+        .with_remote(lab.path("ssh").into(), lab.path("builds"));
+    let remotes = hive.remotes().unwrap();
+    let app = mock_builder()
+        .manage(hive)
+        .build(mock_context(noop_assets()))
+        .unwrap();
+    let (channel, mut rx) = ui();
+    {
+        let _runtime = runtime.enter();
+        remotes.sync(settings(&["gpu"], 1), Some(&channel));
+    }
+    runtime.block_on(until(&mut rx, "reconnecting"));
+    // Waking cuts the 1 s wait short (Q7).
+    let before = std::time::Instant::now();
+    crate::woke(app.handle());
+    runtime.block_on(until(&mut rx, "connecting"));
+    assert!(before.elapsed() < Duration::from_millis(900));
+    // The exit ends every link.
+    crate::on_run_event(app.handle(), tauri::RunEvent::Exit);
+    runtime.block_on(until(&mut rx, "removed"));
+    let gone = tauri::Manager::state::<Hive>(&app).on(Some("gpu")).err();
+    assert_eq!(gone, Some("no link to the host gpu".into()));
+}
+
+#[cfg(unix)]
 #[tokio::test]
 async fn a_dropped_link_keeps_its_terminals_and_retries_every_30_s_while_it_does() {
     let lab = Lab::new("kept");
@@ -687,6 +719,7 @@ async fn a_dropped_link_keeps_its_terminals_and_retries_every_30_s_while_it_does
         network.clone(),
         network.clone(),
         lab.pipe(),
+        network.clone(),
     ]);
     let (channel, mut rx) = ui();
     remotes.sync(settings(&["gpu"], 1), Some(&channel));
@@ -720,6 +753,14 @@ async fn a_dropped_link_keeps_its_terminals_and_retries_every_30_s_while_it_does
         json!({"type": "terminal_exited", "channel": id, "code": null, "host": "gpu"})
     );
     assert!(lock(&link).terminals.is_empty());
+    // A link that was welcomed starts the ladder over when it drops.
+    drop(service);
+    until(&mut rx, "disconnected").await;
+    let mut slept = Vec::new();
+    while let Ok(wait) = clock.try_recv() {
+        slept.push(wait.as_secs());
+    }
+    assert_eq!(slept, [1, 2, 5, 10, 30]);
     remotes.end();
 }
 
@@ -1041,6 +1082,9 @@ async fn the_local_settings_link_the_hosts_and_requests_go_to_each_host_s_link()
     until(&mut reloaded, "removed").await;
     let gone = hive.on(Some("gpu")).err();
     assert_eq!(gone, Some("no link to the host gpu".into()));
+    // Its `ssh` is gone: the remote's service sees the link close, past what it was sent.
+    let closed = async { while remote.reader.next().await.is_some() {} };
+    tokio::time::timeout(WAIT, closed).await.unwrap();
 }
 
 #[cfg(unix)]

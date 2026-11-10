@@ -427,7 +427,6 @@ impl Remotes {
         let remote = self
             .find(host)
             .ok_or_else(|| format!("no link to the host {host}"))?;
-        remote.stopped.store(false, SeqCst);
         remote.retry.notify_waiters();
         Ok(())
     }
