@@ -182,13 +182,6 @@ export interface Transport {
   listChanges(path: string, base: DiffBase): Promise<void>;
   /** The scripts of the worktree at `path` (23.4); answered by `scripts`. */
   listScripts(path: string): Promise<void>;
-  /**
-   * The browser panel shows the browser of the worktree `worktree` (24.6; null: none in view):
-   * only that one's screencast runs. Answered by `browser_status`, then `browser_frame`s.
-   */
-  watchBrowser(worktree: string | null): Promise<void>;
-  /** The last `browser_frame` is drawn, so the next may come. */
-  browserDrawn(): Promise<void>;
   /** Claude sessions of the followed projects; answered by `sessions`. */
   listSessions(): Promise<void>;
   /** Where Windows sees a session's log or folder; answered by `session_located`. */

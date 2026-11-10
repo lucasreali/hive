@@ -1,5 +1,5 @@
 # A tag `v*` (made by scripts/release.sh) publishes a GitHub release: the Windows installer
-# with the Linux `hive` and `hive.exe` (12.5.4) inside it, the macOS app (.dmg) with the macOS `hive` inside it, their
+# with the Linux `hive` and `hive.exe` (12.5.4) inside it, the universal macOS app (.dmg, TODO 26.5) with the macOS `hive` inside it, their
 # updater signatures and `latest.json`, which the app's updater reads (TODO 4.17–4.19, 5.3).
 # Windows and macOS build in parallel; only `publish` touches the release, so `latest.json` is
 # written once, with every platform, in the shape tauri-action used to produce.
@@ -122,7 +122,8 @@ jobs:
 
   macos:
     needs: [ci-green, linux-remote]
-    # Apple Silicon only (#39). macos-26 since GitHub retired macos-14 (the human, 2026-11-05).
+    # Universal, Apple Silicon and Intel (D18.8, TODO 26.5). macos-26 since GitHub retired macos-14
+    # (the human, 2026-11-05).
     runs-on: macos-26
     environment: release
     # Signing (TODO 17.11, 25.5, D17.1): with every Developer ID secret of the `release` environment
@@ -144,6 +145,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
         with:
           toolchain: stable
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         # Pinned: a newer bun counts comment-only lines as uncovered.
         with:
@@ -168,10 +170,14 @@ jobs:
       # The release does not stop: it stays as it was, and says what that costs.
       - if: steps.signing.outputs.mode == 'adhoc'
         run: echo "::warning title=Hive is signed ad-hoc::No signing certificate in the release environment, so every update loses what macOS allowed Hive (Screen Recording, Accessibility, folders). README, Signing with Hive's certificate."
+      # Joined before anything signs it: `sign-hive` then signs both slices, and `lipo` afterwards
+      # would keep each slice's own signature as it is.
       - run: |
-          cargo build --release --locked -p hive
+          cargo build --release --locked -p hive --target aarch64-apple-darwin
+          cargo build --release --locked -p hive --target x86_64-apple-darwin
           mkdir -p src-tauri/resources
-          cp target/release/hive src-tauri/resources/hive
+          lipo -create -output src-tauri/resources/hive \
+            target/aarch64-apple-darwin/release/hive target/x86_64-apple-darwin/release/hive
       # Data to codesign: the app's signature seals them as resources, nothing signs them.
       - uses: actions/download-artifact@v7
         with:
@@ -181,12 +187,12 @@ jobs:
       # An artifact keeps no file mode.
       - run: chmod 755 src-tauri/resources/hive-linux-*
       - run: bun install --frozen-lockfile
-      # The frontend and the app binary, without signing anything.
-      - run: bun tauri build --no-bundle --config src-tauri/tauri.release.macos.conf.json
+      # The frontend and the app binary of both architectures, joined, without signing anything.
+      - run: bun tauri build --no-bundle --target universal-apple-darwin --config src-tauri/tauri.release.macos.conf.json
       - if: steps.signing.outputs.mode == 'adhoc'
         run: |
           scripts/macos-bundle.sh sign-hive src-tauri/resources/hive
-          bun tauri bundle --config src-tauri/tauri.release.macos.conf.json
+          bun tauri bundle --target universal-apple-darwin --config src-tauri/tauri.release.macos.conf.json
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
@@ -215,7 +221,7 @@ jobs:
         run: |
           export APPLE_API_KEY_PATH=$RUNNER_TEMP/api-key.p8
           scripts/macos-bundle.sh sign-hive src-tauri/resources/hive
-          bun tauri bundle --config src-tauri/tauri.release.macos.conf.json \
+          bun tauri bundle --target universal-apple-darwin --config src-tauri/tauri.release.macos.conf.json \
             --config "$(jq -cn --arg id "$APPLE_SIGNING_IDENTITY" '{bundle: {macOS: {signingIdentity: $id}}}')"
       # The nested `hive` and the app with the certificate, by its SHA-1. No APPLE_* variable is
       # set, so Tauri neither imports a certificate nor notarizes.
@@ -226,15 +232,15 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: |
           scripts/macos-bundle.sh sign-hive src-tauri/resources/hive
-          bun tauri bundle --config src-tauri/tauri.release.macos.conf.json \
+          bun tauri bundle --target universal-apple-darwin --config src-tauri/tauri.release.macos.conf.json \
             --config "$(jq -cn --arg id "$HIVE_CERTIFICATE_SHA1" '{bundle: {macOS: {signingIdentity: $id}}}')"
       - if: always()
         run: |
           security delete-keychain "$RUNNER_TEMP/signing.keychain-db" 2>/dev/null || true
           rm -f "$RUNNER_TEMP/signing.keychain-db.p12" "$RUNNER_TEMP/api-key.p8"
-      # codesign --verify --deep --strict, the nested `hive`'s signer, entitlements, Info.plist;
-      # with the Developer ID also `spctl -a` and the stapled ticket; with the certificate also a
-      # designated requirement that names it.
+      # Both architectures, and in each: codesign --verify --deep --strict, the nested `hive`'s
+      # signer, entitlements, Info.plist; with the Developer ID also `spctl -a` and the stapled
+      # ticket; with the certificate also a designated requirement that names it.
       - env:
           MODE: ${{ steps.signing.outputs.mode }}
           HIVE_CERTIFICATE_SHA1: ${{ secrets.HIVE_CERTIFICATE_SHA1 }}
@@ -245,18 +251,23 @@ jobs:
             adhoc) identity=() ;;
             *) echo "unknown signing mode: '$MODE'" >&2; exit 1 ;;
           esac
-          scripts/macos-bundle.sh check target/release/bundle/macos/Hive.app "${identity[@]}"
-      # Each dSYM's UUID is the shipped binary's (`dwarfdump --uuid`).
-      - run: scripts/macos-bundle.sh dsyms target/release/bundle/macos/Hive.app target/release
-      # The asset names tauri-action gave the updater tarball (`Hive_aarch64.app.tar.gz`); the
-      # dSYMs zipped beside them (cargo's `target/release/*.dSYM` are links into `deps`).
+          scripts/macos-bundle.sh check target/universal-apple-darwin/release/bundle/macos/Hive.app "${identity[@]}"
+      # Each joined dSYM's UUIDs are the bundled binary's (`dwarfdump --uuid`).
       - run: |
-          mkdir out dsym
-          cp -RL target/release/hive-app.dSYM target/release/hive.dSYM dsym/
-          (cd dsym && zip -qr ../out/Hive_aarch64.dSYM.zip .)
-          cp target/release/bundle/dmg/*.dmg out/
-          cp target/release/bundle/macos/Hive.app.tar.gz out/Hive_aarch64.app.tar.gz
-          cp target/release/bundle/macos/Hive.app.tar.gz.sig out/Hive_aarch64.app.tar.gz.sig
+          scripts/macos-bundle.sh join-dsyms target/aarch64-apple-darwin/release target/x86_64-apple-darwin/release dsym
+          scripts/macos-bundle.sh dsyms target/universal-apple-darwin/release/bundle/macos/Hive.app dsym
+      # The signed Intel slices really run, under Rosetta (installed here if the image has none).
+      - run: |
+          arch -x86_64 /usr/bin/true || softwareupdate --install-rosetta --agree-to-license
+          scripts/macos-bundle.sh smoke target/universal-apple-darwin/release/bundle/macos/Hive.app
+      # The asset names tauri-action would give a universal build. Renaming `Hive_aarch64.*` strands
+      # nobody: an installed Hive follows the `url` in `latest.json`, under its `darwin-*` keys.
+      - run: |
+          mkdir out
+          (cd dsym && zip -qr ../out/Hive_universal.dSYM.zip .)
+          cp target/universal-apple-darwin/release/bundle/dmg/*.dmg out/
+          cp target/universal-apple-darwin/release/bundle/macos/Hive.app.tar.gz out/Hive_universal.app.tar.gz
+          cp target/universal-apple-darwin/release/bundle/macos/Hive.app.tar.gz.sig out/Hive_universal.app.tar.gz.sig
       - uses: actions/upload-artifact@v6
         with:
           name: bundle-macos
@@ -303,17 +314,20 @@ jobs:
           exe=$(cd out && ls *-setup.exe)
           # Separate assignments: `set -e` stops on a missing signature.
           win_sig=$(cat "out/$exe.sig")
-          mac_sig=$(cat out/Hive_aarch64.app.tar.gz.sig)
+          mac_sig=$(cat out/Hive_universal.app.tar.gz.sig)
           notes=$(cat notes.md)
           jq -n --arg version "$version" --arg notes "$notes" --arg date "$(date -u +%Y-%m-%dT%H:%M:%S.%3NZ)" \
             --arg win_sig "$win_sig" --arg win_url "$base/$exe" \
-            --arg mac_sig "$mac_sig" --arg mac_url "$base/Hive_aarch64.app.tar.gz" \
+            --arg mac_sig "$mac_sig" --arg mac_url "$base/Hive_universal.app.tar.gz" \
             '{version: $version, notes: $notes, pub_date: $date, platforms: {
                 "windows-x86_64": {signature: $win_sig, url: $win_url},
                 "windows-x86_64-nsis": {signature: $win_sig, url: $win_url},
                 "darwin-aarch64": {signature: $mac_sig, url: $mac_url},
-                "darwin-aarch64-app": {signature: $mac_sig, url: $mac_url}}}' > out/latest.json
+                "darwin-aarch64-app": {signature: $mac_sig, url: $mac_url},
+                "darwin-x86_64": {signature: $mac_sig, url: $mac_url},
+                "darwin-x86_64-app": {signature: $mac_sig, url: $mac_url}}}' > out/latest.json
           cat out/latest.json
+          scripts/macos-bundle.sh check-updater out/latest.json
           ls -l out
           echo "TAG=$tag" >> "$GITHUB_ENV"
       # `gh release create` uploads every file before it publishes the release, so the

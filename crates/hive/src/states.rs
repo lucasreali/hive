@@ -76,8 +76,6 @@ pub struct Agent {
     interrupted: bool,
     /// What the agent itself is doing, from its last tool call; cleared when its turn ends.
     activity: Option<String>,
-    /// It or a subagent called a browser tool (25.2), and it has not stopped since.
-    browsing: bool,
     /// Its state and activity when a compaction began (`PreCompact`), back at `PostCompact`.
     compacting: Option<(AgentState, Option<String>)>,
     /// Wall clock (ms since the epoch) when the displayed state began.
@@ -97,7 +95,6 @@ impl Agent {
             worktree: None,
             cwd: None,
             title: None,
-            browsing: false,
             transcript: None,
             usage: Default::default(),
             claude_dir: None,
@@ -234,12 +231,6 @@ impl Agent {
                 if let Some(state) = state_of(&event.kind, agent.state) {
                     agent.state = state;
                 }
-                agent.browsing = match event.kind {
-                    EventKind::TurnFinished
-                    | EventKind::TurnFailed { .. }
-                    | EventKind::SessionEnded { .. } => false,
-                    _ => agent.browsing || browses(event),
-                };
                 return follow(&mut agent.activity, event);
             };
             // `SubagentStop` has no state: a kept subagent is left as `prune` set it below.
@@ -259,7 +250,6 @@ impl Agent {
             {
                 follow(&mut agent.subagents[i].activity, event);
             }
-            agent.browsing |= !stale && browses(event);
             if let EventKind::WorktreeCreated {
                 path: Some(path), ..
             } = &event.kind
@@ -426,8 +416,6 @@ impl Agent {
                 *activity = None;
             }
         }
-        // It was stopped, not just one of its subagents.
-        self.browsing &= self.state != AgentState::WaitingYou;
     }
 
     /// The `agent_state` message, without an alert (the first one, the snapshot after
@@ -461,7 +449,6 @@ impl Agent {
             subagents: self.subagents.clone(),
             activity: self.activity.clone(),
             since_ms: self.since_ms,
-            browsing: self.browsing,
         }
     }
 
@@ -563,11 +550,6 @@ pub fn subagent_worktrees<'a>(
     owned.sort();
     owned.dedup();
     owned
-}
-
-/// Whether `event` is a call of one of the agent's browser's tools.
-fn browses(event: &AgentEvent) -> bool {
-    matches!(&event.kind, EventKind::ToolStarted { tool: Some(tool) } if crate::browser::is_tool(tool))
 }
 
 /// Keeps the activity an event brings; a new prompt, the end of a turn, a session or a
@@ -1061,114 +1043,8 @@ mod tests {
                 subagents: vec![],
                 activity: None,
                 since_ms: 1_005,
-                browsing: false,
             })
         );
-    }
-
-    #[test]
-    fn it_browses_from_its_last_browser_call_until_it_stops() {
-        let browsing = |sent: Option<Control>| {
-            sent.map(|message| matches!(message, Control::AgentState { browsing: true, .. }))
-        };
-        let now = Instant::now();
-        let mut agent = Agent::new(1, now, 0);
-        let click = json!({"tool_name": "mcp__hive-browser__browser_click"});
-        let other = json!({"tool_name": "Read"});
-        let start = |agent: &mut Agent, sub, payload: &Value| {
-            agent.feed("s", &hook("PreToolUse", sub, payload.clone()), now)
-        };
-        // Another tool's call or a nameless one says nothing.
-        start(&mut agent, None, &other);
-        assert!(!agent.browsing);
-        start(&mut agent, None, &json!({}));
-        assert!(!agent.browsing);
-        // A permission asked for a browser tool is no call yet.
-        agent.feed("s", &hook("PermissionRequest", None, click.clone()), now);
-        assert!(!agent.browsing);
-        assert_eq!(browsing(start(&mut agent, None, &click)), Some(true));
-        // It stays through another tool's call, until its turn ends.
-        start(&mut agent, None, &other);
-        assert!(agent.browsing);
-        assert_eq!(
-            browsing(agent.feed("s", &hook("Stop", None, json!({})), now)),
-            Some(false)
-        );
-        // Its turn failing or its session ending stops it too.
-        for end in ["StopFailure", "SessionEnd"] {
-            start(&mut agent, None, &click);
-            assert!(agent.browsing);
-            agent.feed("s", &hook(end, None, json!({})), now);
-            assert!(!agent.browsing, "{end}");
-        }
-        // A subagent's call counts for its agent, which then keeps it when the subagent stops.
-        start(&mut agent, None, &other);
-        start(&mut agent, Some("a"), &other);
-        assert!(!agent.browsing);
-        start(&mut agent, Some("a"), &click);
-        assert!(agent.browsing);
-        agent.feed("s", &hook("SubagentStop", Some("a"), json!({})), now);
-        assert!(agent.browsing);
-        // Interrupted: it stopped, with no `Stop`.
-        assert_eq!(browsing(agent.interrupt("s", now)), Some(false));
-    }
-
-    #[test]
-    fn a_late_browser_call_does_not_bring_the_globe_back() {
-        let now = Instant::now();
-        let mut agent = Agent::new(1, now, 0);
-        let click = json!({"tool_name": "mcp__hive-browser__browser_click"});
-        let place = |_: &str| None;
-        let call = |sub| hook("PreToolUse", sub, click.clone());
-        let stop = hook("Stop", None, json!({}));
-        agent.apply("s", &stop, 10, now, &place);
-        agent.apply("s", &call(None), 5, now, &place);
-        assert!(!agent.browsing);
-        let sub = hook("PreToolUse", Some("a"), json!({"tool_name": "Read"}));
-        agent.apply("s", &sub, 10, now, &place);
-        agent.apply("s", &call(Some("a")), 5, now, &place);
-        assert!(!agent.browsing);
-    }
-
-    #[test]
-    fn a_subagent_settling_leaves_the_globe_of_its_agent_still_in_its_turn() {
-        let start = Instant::now();
-        let mut agent = Agent::new(1, start, 0);
-        let click = json!({"tool_name": "mcp__hive-browser__browser_click"});
-        agent.feed("s", &hook("PreToolUse", None, click), start);
-        // The agent asks for a permission, its subagent works, then goes silent.
-        let asks = json!({"tool_name": "Bash"});
-        agent.feed("s", &hook("PermissionRequest", None, asks), start);
-        let work = json!({"tool_name": "Read"});
-        agent.feed("s", &hook("SubagentStart", Some("a"), json!({})), start);
-        agent.feed("s", &hook("PreToolUse", Some("a"), work), start);
-        assert_eq!(agent.subagents[0].state, Working);
-        agent.reconcile("s", SILENCE, start, start + SILENCE);
-        assert_eq!(agent.subagents[0].state, WaitingYou);
-        assert_eq!(agent.state, WaitingPermission);
-        assert!(agent.browsing);
-    }
-
-    #[test]
-    fn silence_ends_the_globe_of_an_agent_that_stopped_saying_so() {
-        let start = Instant::now();
-        let mut agent = Agent::new(1, start, 0);
-        let click = json!({"tool_name": "mcp__hive-browser__browser_click"});
-        agent.feed("s", &hook("PreToolUse", None, click), start);
-        assert!(agent.browsing);
-        // Not silent long enough: it goes on.
-        let early = start + SILENCE - Duration::from_millis(1);
-        assert_eq!(agent.reconcile("s", SILENCE, start, early), None);
-        assert!(agent.browsing);
-        let sent = agent.reconcile("s", SILENCE, start, start + SILENCE);
-        assert!(matches!(
-            sent,
-            Some(Control::AgentState {
-                browsing: false,
-                ..
-            })
-        ));
-        assert!(!agent.browsing);
     }
 
     /// The alert of a message `apply` sent, and whether its state may be writing files.
@@ -1452,7 +1328,6 @@ mod tests {
                 }],
                 activity: None,
                 since_ms: 0,
-                browsing: false,
             })
         );
         agent.feed("s", &hook("SubagentStart", Some("b"), json!({})), now);

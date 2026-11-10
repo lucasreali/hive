@@ -120,8 +120,9 @@ jobs:
   bundle:
     needs: [changes, linux-remote]
     if: needs.changes.outputs.bundle == 'true'
-    # As release.yml builds the shipped app. GitHub retired macos-14; the human moved both to
-    # macos-26 (2026-11-05), so the app links against the macOS 26 SDK (its new window style).
+    # As release.yml builds the shipped app: universal (TODO 26.5). GitHub retired macos-14; the
+    # human moved both to macos-26 (2026-11-05), so the app links against the macOS 26 SDK (its new
+    # window style).
     runs-on: macos-26
     # With release.yml's dSYMs (D18.6), so their check runs on every branch.
     env:
@@ -132,15 +133,19 @@ jobs:
       - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
         with:
           toolchain: stable
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         # Pinned: a newer bun counts comment-only lines as uncovered.
         with:
           bun-version-file: .bun-version
+      # Joined before anything signs it: `lipo` would keep each slice's own signature as it is.
       - run: |
-          cargo build --release --locked -p hive
+          cargo build --release --locked -p hive --target aarch64-apple-darwin
+          cargo build --release --locked -p hive --target x86_64-apple-darwin
           mkdir -p src-tauri/resources
-          cp target/release/hive src-tauri/resources/hive
+          lipo -create -output src-tauri/resources/hive \
+            target/aarch64-apple-darwin/release/hive target/x86_64-apple-darwin/release/hive
       - uses: actions/download-artifact@v7
         with:
           pattern: hive-linux-*
@@ -152,19 +157,26 @@ jobs:
       # Built, then bundled, as release.yml does (its signing secrets reach only the bundling).
       # No updater artifacts, so no signing key: that stays in release.yml's `release`
       # environment (#29), out of reach of any branch.
-      - run: bun tauri build --no-bundle --config src-tauri/tauri.release.macos.conf.json
+      - run: bun tauri build --no-bundle --target universal-apple-darwin --config src-tauri/tauri.release.macos.conf.json
       # Ad-hoc, as the app (D17.1); release.yml signs both with a Developer ID when it has one.
       - run: |
           scripts/macos-bundle.sh sign-hive src-tauri/resources/hive
-          bun tauri bundle --config src-tauri/tauri.release.macos.conf.json --config '{"bundle":{"createUpdaterArtifacts":false}}'
-      # The bundle validates (`codesign --verify --deep --strict`), the nested `hive` has the
-      # app's signer, the JIT entitlement and the folder prompts' texts are there (TODO 17.11).
-      - run: scripts/macos-bundle.sh check target/release/bundle/macos/Hive.app
-      # Each dSYM's UUID is the bundled binary's (`dwarfdump --uuid`).
-      - run: scripts/macos-bundle.sh dsyms target/release/bundle/macos/Hive.app target/release
+          bun tauri bundle --target universal-apple-darwin --config src-tauri/tauri.release.macos.conf.json --config '{"bundle":{"createUpdaterArtifacts":false}}'
+      # Both architectures are there, the bundle validates (`codesign --verify --deep --strict`), the
+      # nested `hive` has the app's signer in each, the JIT entitlement and the folder prompts' texts
+      # are there (TODO 17.11, 26.5).
+      - run: scripts/macos-bundle.sh check target/universal-apple-darwin/release/bundle/macos/Hive.app
+      # Each joined dSYM's UUIDs are the bundled binary's (`dwarfdump --uuid`).
+      - run: |
+          scripts/macos-bundle.sh join-dsyms target/aarch64-apple-darwin/release target/x86_64-apple-darwin/release dsym
+          scripts/macos-bundle.sh dsyms target/universal-apple-darwin/release/bundle/macos/Hive.app dsym
+      # The Intel slices really run, under Rosetta (installed here if the image has none).
+      - run: |
+          arch -x86_64 /usr/bin/true || softwareupdate --install-rosetta --agree-to-license
+          scripts/macos-bundle.sh smoke target/universal-apple-darwin/release/bundle/macos/Hive.app
       - uses: actions/upload-artifact@v6
         with:
           name: hive-macos
-          path: target/release/bundle/dmg/*.dmg
+          path: target/universal-apple-darwin/release/bundle/dmg/*.dmg
           if-no-files-found: error
           retention-days: 7

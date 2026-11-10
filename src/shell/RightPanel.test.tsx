@@ -783,15 +783,6 @@ test("each rail icon keeps its label as its accessible name and tooltip, in its 
     ),
   ).toEqual(["Files", "Diff", "Scripts", "|", "PRs", "Actions", "|", "Sessions"]);
   for (const l of labels) expect(screen.getByRole("tab", { name: l })).toBeDefined();
-  // The agent's browser has a tab of its own (25.2), whatever its setting.
-  act(() => {
-    const settings = useHive.getState().settings;
-    apply({
-      type: "settings",
-      settings: { ...settings, browser: { ...settings.browser, enabled: true } },
-    });
-  });
-  expect(screen.queryByRole("tab", { name: "Browser" })).toBeNull();
 });
 
 /** The view the rail, the bar's title and the shown region agree on. */

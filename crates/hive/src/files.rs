@@ -951,7 +951,9 @@ pub(crate) mod tests {
         let outside = root.with_file_name("outside");
         std::fs::write(outside.join("y.js"), "").unwrap();
         std::fs::write(outside.join("a/w.js"), "").unwrap();
-        assert!(!changes(&mut watcher, NEVER).await);
+        // Only the link swapped in may still come in (`changes_but`).
+        let link = [root.join("deps")];
+        assert!(!changes_but(&mut watcher, NEVER, &link).await);
         unswap(&root, "deps");
 
         // Left alone, it is read and watched.
@@ -1100,6 +1102,25 @@ pub(crate) mod tests {
         tokio::time::timeout(wait, watcher.changed()).await.is_ok()
     }
 
+    /// Whether an event counted within `wait` is about anything but `echoes`. FSEvents
+    /// reports a path that changed a moment ago with all it went through (made, renamed,
+    /// its `com.apple.provenance` set), in one batch or in several, a later one long after on
+    /// a loaded machine: an earlier step's paths may still come, and no quiet spell rules
+    /// them out. Each event until the first that counts is seen, as [`Watcher::changed`] would.
+    async fn changes_but(watcher: &mut Watcher, wait: Duration, echoes: &[PathBuf]) -> bool {
+        let fresh = async {
+            let mut fresh = false;
+            while !fresh {
+                let event = watcher.events.recv().await;
+                let echo = matches!(&event, Some(Ok(event)) if !event.paths.is_empty()
+                    && event.paths.iter().all(|path| echoes.contains(path)));
+                // A closed queue counts too: the watcher is gone.
+                fresh = !echo & event.is_none_or(|event| watcher.saw(event));
+            }
+        };
+        tokio::time::timeout(wait, fresh).await.is_ok()
+    }
+
     const SOON: Duration = Duration::from_secs(5);
     const NEVER: Duration = Duration::from_millis(600);
 
@@ -1216,11 +1237,13 @@ pub(crate) mod tests {
         watcher.list().unwrap();
         assert_eq!(watched(&watcher), ["", "d"]);
         std::fs::write(root.join(".gitignore"), "d/\n").unwrap();
-        assert!(changes(&mut watcher, SOON).await);
+        assert!(changes_but(&mut watcher, SOON, &[]).await);
         assert_eq!(names(&watcher.list().unwrap()), [".gitignore"]);
         assert_eq!(watched(&watcher), [""]);
         write(&root, "d/b.txt");
-        assert!(!changes(&mut watcher, NEVER).await);
+        // Only the folder made and the file written before may still come in (`changes_but`).
+        let before = [root.join("d"), root.join(".gitignore")];
+        assert!(!changes_but(&mut watcher, NEVER, &before).await);
     }
 
     #[tokio::test]
