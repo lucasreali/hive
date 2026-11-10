@@ -233,6 +233,7 @@ export const DEFAULT_SETTINGS: Settings = {
   projects: {},
   claude: { accounts: [], default_name: "Default", share_sessions: false },
   gh: { config_dirs: [] },
+  remote: { hosts: [], keep_minutes: 1440 },
 };
 
 /** A tab of the terminal area: a terminal, and the worktree path it was opened in (its title's source). */

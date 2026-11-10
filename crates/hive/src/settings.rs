@@ -10,7 +10,8 @@ use std::sync::{Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 
 use hive_protocol::{
-    Account, AccountDir, ClaudeSettings, DEFAULT_ACCOUNT, GhSettings, ProjectScripts, Settings,
+    Account, AccountDir, ClaudeSettings, DEFAULT_ACCOUNT, GhSettings, HOST_LIMIT, ProjectScripts,
+    Settings, check_host,
 };
 
 use crate::git::read_limited;
@@ -544,10 +545,32 @@ fn gh_folders(gh: &GhSettings) -> Result<(), String> {
     Ok(())
 }
 
+/// The remote hosts (26.17): at most [`HOST_LIMIT`] aliases `ssh` may be given
+/// ([`check_host`]), each once.
+fn hosts(hosts: &[String]) -> Result<(), String> {
+    if hosts.len() > HOST_LIMIT {
+        return Err(format!("At most {HOST_LIMIT} hosts can be added"));
+    }
+    for (i, host) in hosts.iter().enumerate() {
+        check_host(host)?;
+        if hosts[..i].contains(host) {
+            return Err(format!("The host {host} is there twice"));
+        }
+    }
+    Ok(())
+}
+
 /// Every value within its range, with a message naming the first that is not.
 pub fn check(settings: &Settings) -> Result<(), String> {
     accounts(&settings.claude)?;
     gh_folders(&settings.gh)?;
+    hosts(&settings.remote.hosts)?;
+    range(
+        "remote.keep_minutes",
+        settings.remote.keep_minutes,
+        1,
+        10_080,
+    )?;
     let terminal = &settings.terminal;
     range("terminal.font_size", terminal.font_size, 8, 32)?;
     range("terminal.scrollback", terminal.scrollback, 1000, 100_000)?;
@@ -836,12 +859,13 @@ mod tests {
     #[test]
     fn every_range_holds_at_its_ends_only() {
         type Field = fn(&mut Settings) -> &mut u32;
-        let fields: [(Field, u32, u32); 5] = [
+        let fields: [(Field, u32, u32); 6] = [
             (|s| &mut s.terminal.font_size, 8, 32),
             (|s| &mut s.terminal.scrollback, 1000, 100_000),
             (|s| &mut s.notifications.volume, 0, 100),
             (|s| &mut s.notifications.command_secs, 0, 3600),
             (|s| &mut s.agents.silence_secs, 2, 60),
+            (|s| &mut s.remote.keep_minutes, 1, 10_080),
         ];
         for (field, min, max) in fields {
             let mut settings = Settings::default();
@@ -854,6 +878,28 @@ mod tests {
                 assert!(check(&settings).is_err(), "{min}");
             }
         }
+    }
+
+    #[test]
+    fn hosts_are_valid_aliases_each_once_and_at_most_the_limit() {
+        let with = |hosts: &[&str]| {
+            let mut settings = Settings::default();
+            settings.remote.hosts = hosts.iter().map(|h| (*h).to_owned()).collect();
+            check(&settings)
+        };
+        assert_eq!(with(&["gpu-box", "user@lab.example"]), Ok(()));
+        assert_eq!(
+            with(&["gpu-box", "gpu-box"]),
+            Err("The host gpu-box is there twice".into())
+        );
+        assert_eq!(
+            with(&["-oProxyCommand=x"]),
+            Err("The host alias \"-oProxyCommand=x\" must not start with -".into())
+        );
+        let many: Vec<String> = (0..=HOST_LIMIT).map(|i| format!("h{i}")).collect();
+        let many: Vec<&str> = many.iter().map(String::as_str).collect();
+        assert_eq!(with(&many[..HOST_LIMIT]), Ok(()));
+        assert_eq!(with(&many), Err("At most 32 hosts can be added".into()));
     }
 
     #[test]

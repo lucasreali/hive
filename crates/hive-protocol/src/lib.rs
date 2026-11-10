@@ -182,10 +182,14 @@ pub enum Control {
         #[serde(default)]
         warning: Option<String>,
     },
-    /// Handshake refused; the connection is closed after this message.
+    /// Handshake refused; the connection is closed after this message. `terminals` (26.17):
+    /// how many terminals the service runs, which restarting it would end; optional, so
+    /// protocol 1 stays compatible, and left out when absent.
     VersionMismatch {
         protocol: u32,
         version: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        terminals: Option<u32>,
     },
     OpenTerminal {
         cwd: String,
@@ -1286,6 +1290,53 @@ pub struct Settings {
     pub projects: BTreeMap<String, ProjectSettings>,
     pub claude: ClaudeSettings,
     pub gh: GhSettings,
+    pub remote: RemoteSettings,
+}
+
+/// The remote hosts the app connects to over ssh (26.17), kept in the local service's settings.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct RemoteSettings {
+    /// Each an alias of the user's `~/.ssh/config` ([`check_host`]), in order, at most
+    /// [`HOST_LIMIT`].
+    pub hosts: Vec<String>,
+    /// How long a remote service keeps its terminals after the link drops (Q3), 1 to 10080
+    /// minutes (7 days).
+    pub keep_minutes: u32,
+}
+
+/// The default keep time of a remote's terminals (Q3: 24 h).
+pub const KEEP_MINUTES: u32 = 1440;
+/// The most remote hosts in the settings.
+pub const HOST_LIMIT: usize = 32;
+/// The longest host alias, in bytes.
+pub const HOST_ALIAS_LIMIT: usize = 255;
+
+impl Default for RemoteSettings {
+    fn default() -> Self {
+        Self {
+            hosts: Vec::new(),
+            keep_minutes: KEEP_MINUTES,
+        }
+    }
+}
+
+/// A host alias `ssh` may be given (26.17): not empty, at most [`HOST_ALIAS_LIMIT`] bytes, no
+/// leading `-` (it would be read as an option), no whitespace or control characters.
+pub fn check_host(alias: &str) -> Result<(), String> {
+    if alias.is_empty() {
+        Err("A host alias must not be empty".to_owned())
+    } else if alias.len() > HOST_ALIAS_LIMIT {
+        Err(format!("A host alias is at most {HOST_ALIAS_LIMIT} bytes"))
+    } else if alias.starts_with('-') {
+        Err(format!("The host alias {alias:?} must not start with -"))
+    } else if alias.chars().any(|c| c.is_whitespace() || c.is_control()) {
+        Err(format!(
+            "The host alias {alias:?} must not hold spaces or control characters"
+        ))
+    } else {
+        Ok(())
+    }
 }
 
 /// The gh config folders (24.13) besides `gh`'s own, whose accounts a space may pick.
@@ -2421,6 +2472,73 @@ mod tests {
                 app_id: None,
             }
         );
+    }
+
+    #[test]
+    fn a_host_alias_is_one_safe_ssh_argument() {
+        for ok in [
+            "gpu-box",
+            "user@lab.example",
+            "h",
+            &"a".repeat(HOST_ALIAS_LIMIT),
+        ] {
+            assert_eq!(check_host(ok), Ok(()), "{ok}");
+        }
+        let bad = [
+            ("", "A host alias must not be empty".to_owned()),
+            (
+                &*"a".repeat(HOST_ALIAS_LIMIT + 1),
+                "A host alias is at most 255 bytes".to_owned(),
+            ),
+            (
+                "-F",
+                r#"The host alias "-F" must not start with -"#.to_owned(),
+            ),
+        ];
+        for (alias, error) in bad {
+            assert_eq!(check_host(alias), Err(error));
+        }
+        for alias in [
+            "gpu box",
+            "gpu\tbox",
+            "gpu\u{1b}box",
+            "gpu\u{a0}box",
+            "gpu\nbox",
+        ] {
+            let error = check_host(alias).unwrap_err();
+            assert!(
+                error.ends_with("must not hold spaces or control characters"),
+                "{error}"
+            );
+        }
+    }
+
+    #[test]
+    fn remote_settings_default_to_no_hosts_kept_a_day() {
+        let settings: Settings = serde_json::from_str("{}").unwrap();
+        assert_eq!(settings.remote.hosts, Vec::<String>::new());
+        assert_eq!(settings.remote.keep_minutes, 1440);
+        let remote: RemoteSettings = serde_json::from_str(r#"{"hosts":["gpu-box"]}"#).unwrap();
+        assert_eq!(remote.hosts, ["gpu-box"]);
+        assert_eq!(remote.keep_minutes, KEEP_MINUTES);
+    }
+
+    #[test]
+    fn version_mismatch_counts_the_terminals_only_when_known() {
+        let mismatch = |terminals| Control::VersionMismatch {
+            protocol: 1,
+            version: "0.1.0".into(),
+            terminals,
+        };
+        let known = Frame::control(0, &mismatch(Some(3)));
+        assert_eq!(
+            &known.payload[..],
+            br#"{"type":"version_mismatch","protocol":1,"version":"0.1.0","terminals":3}"#
+        );
+        let old = br#"{"type":"version_mismatch","protocol":1,"version":"0.1.0"}"#;
+        assert_eq!(Frame::control(0, &mismatch(None)).payload[..], old[..]);
+        let read: Control = serde_json::from_slice(old).unwrap();
+        assert_eq!(read, mismatch(None));
     }
 
     #[test]
@@ -3575,7 +3693,7 @@ mod tests {
         };
         assert_eq!(
             &Frame::control(0, &settings).payload[..],
-            br#"{"type":"settings","settings":{"terminal":{"font_family":"\"Hive Mono\", \"Symbols Nerd Font\", monospace","font_size":13,"scrollback":5000,"cursor_style":"block","cursor_blink":false,"copy_on_select":false,"option_as_meta":"off","screen_reader":false,"shell":"default"},"appearance":{"theme":"one-dark"},"notifications":{"volume":100,"bounce":true,"menu_bar":true,"command_secs":10},"agents":{"silence_secs":5,"confirm_close":true,"keep_awake":true},"worktrees":{"default_base":null},"projects":{},"claude":{"accounts":[],"default_name":"Default","share_sessions":false},"gh":{"config_dirs":[]}}}"#
+            br#"{"type":"settings","settings":{"terminal":{"font_family":"\"Hive Mono\", \"Symbols Nerd Font\", monospace","font_size":13,"scrollback":5000,"cursor_style":"block","cursor_blink":false,"copy_on_select":false,"option_as_meta":"off","screen_reader":false,"shell":"default"},"appearance":{"theme":"one-dark"},"notifications":{"volume":100,"bounce":true,"menu_bar":true,"command_secs":10},"agents":{"silence_secs":5,"confirm_close":true,"keep_awake":true},"worktrees":{"default_base":null},"projects":{},"claude":{"accounts":[],"default_name":"Default","share_sessions":false},"gh":{"config_dirs":[]},"remote":{"hosts":[],"keep_minutes":1440}}}"#
         );
         let partial: Control = serde_json::from_str(
             r#"{"type":"set_settings","settings":{"terminal":{"cursor_style":"bar","shell":"git_bash"},"appearance":{"theme":"one-light"},"projects":{"/r":{"later":1}},"claude":{"accounts":[{"name":"Work","config_dir":"/w"}],"account":"/w"},"unknown":1}}"#,

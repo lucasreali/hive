@@ -75,6 +75,7 @@ impl Claim {
                 return Err(Problem::Lost(err));
             }
             taken.map_err(io::Error::from).map_err(Problem::Passing)?;
+            super::name_holder(&lock).map_err(Problem::Passing)?;
             self.lock_id = id(&lock.metadata().map_err(Problem::Passing)?);
             self.lock = lock;
         }
@@ -149,6 +150,9 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let paths = paths_in(tmp.path());
         let (mut claim, listener) = claim(&paths).await;
+        // The lockfile names its holder, for `hive bridge --replace` (26.17).
+        let pid = std::process::id().to_string();
+        assert_eq!(std::fs::read_to_string(paths.lock()).unwrap(), pid);
         let socket = std::fs::symlink_metadata(paths.socket()).unwrap();
         assert_eq!(socket.permissions().mode() & 0o777, 0o600);
         assert!(claim.keep().unwrap().is_none());
@@ -186,12 +190,19 @@ mod tests {
         std::fs::remove_file(paths.lock()).unwrap();
         assert!(claim.keep().unwrap().is_none());
         assert!(locked(&paths));
+        let pid = std::process::id().to_string();
+        assert_eq!(std::fs::read_to_string(paths.lock()).unwrap(), pid);
         let mode = std::fs::metadata(paths.lock())
             .unwrap()
             .permissions()
             .mode();
         assert_eq!(mode & 0o777, 0o600);
         assert!(claim.keep().unwrap().is_none());
+        // A longer file put in its place holds only this service's id once taken.
+        std::fs::remove_file(paths.lock()).unwrap();
+        std::fs::write(paths.lock(), "4294967295 an older holder").unwrap();
+        assert!(claim.keep().unwrap().is_none());
+        assert_eq!(std::fs::read_to_string(paths.lock()).unwrap(), pid);
     }
 
     #[tokio::test]

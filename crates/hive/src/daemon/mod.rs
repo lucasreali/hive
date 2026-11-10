@@ -177,7 +177,16 @@ async fn lock(paths: &Paths) -> io::Result<File> {
         .await
         .unwrap_or_else(|_| file.try_lock());
     locked.map_err(|err| lock_error(paths, err))?;
+    name_holder(&file)?;
     Ok(file)
+}
+
+/// Writes this service's process id into its locked lockfile, for `hive bridge --replace`
+/// (26.17) to end it.
+fn name_holder(mut file: &File) -> io::Result<()> {
+    use std::io::Write as _;
+    file.set_len(0)?;
+    write!(file, "{}", std::process::id())
 }
 
 /// The lockfile, created private, not yet locked.

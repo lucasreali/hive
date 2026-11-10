@@ -8,7 +8,8 @@
   {
     "type": "version_mismatch",
     "protocol": 1,
-    "version": "0.4.0"
+    "version": "0.4.0",
+    "terminals": 2
   },
   {
     "type": "terminal_opened",
@@ -746,6 +747,10 @@
       },
       "gh": {
         "config_dirs": []
+      },
+      "remote": {
+        "hosts": [],
+        "keep_minutes": 1440
       }
     }
   },

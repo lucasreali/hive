@@ -41,6 +41,7 @@ const FIELDS: { [T in ServiceMessage["type"]]: Fields<Extract<ServiceMessage, { 
   version_mismatch: {
     protocol: true,
     version: true,
+    terminals: true,
     app_protocol: true,
     app_version: true,
     bundled: true,

@@ -229,6 +229,7 @@ fn samples() -> Vec<Control> {
         VersionMismatch {
             protocol: 1,
             version: s("0.4.0"),
+            terminals: Some(2),
         },
         TerminalOpened {
             worktree: Some(s("/r")),

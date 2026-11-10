@@ -92,14 +92,21 @@ async fn binary_version_mismatch_is_refused() {
     let mut daemon = env.daemon();
     let mut conn = env.raw().await;
     conn.send(0, Control::hello(Role::App, "0.0.0-other")).await;
-    let expected = Control::VersionMismatch {
+    let expected = |terminals| Control::VersionMismatch {
         protocol: PROTOCOL_VERSION,
         version: hive::VERSION.into(),
+        terminals: Some(terminals),
     };
-    assert_eq!(conn.control().await, (0, expected));
+    assert_eq!(conn.control().await, (0, expected(0)));
     assert_eq!(conn.next().await, None);
+    // The refusal counts the terminals a restart would end (26.17).
+    let mut app = env.connect(Role::App).await;
+    app.open_terminal(1, &env.path("home")).await;
+    let mut conn = env.raw().await;
+    conn.send(0, Control::hello(Role::App, "0.0.0-other")).await;
+    assert_eq!(conn.control().await, (0, expected(1)));
     // A refused client is not the app: the daemon keeps waiting for one.
-    drop(env.connect(Role::App).await);
+    drop(app);
     assert!(daemon.wait_exit().success());
 }
 

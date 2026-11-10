@@ -59,10 +59,13 @@ export type ServiceMessage =
     }
   // `protocol`/`version` are the service's; `app_*` and `bundled` are added by the app side (Rust).
   // `bundled`: the app runs the `hive` its installer brought (not a development build).
+  // `terminals` (26.17): how many terminals the service runs, which restarting it would end;
+  // absent from a service before 26.17.
   | {
       type: "version_mismatch";
       protocol: number;
       version: string;
+      terminals?: number;
       app_protocol: number;
       app_version: string;
       bundled: boolean;
@@ -622,6 +625,12 @@ export type Settings = {
   };
   /** The gh config folders (24.13) besides `gh`'s own, whose accounts a space may pick. */
   gh: { config_dirs: string[] };
+  /**
+   * The remote hosts the app links to over ssh (26.17), each an alias of the user's
+   * `~/.ssh/config`, and how long a remote keeps its terminals after the link drops (1 to
+   * 10080 minutes).
+   */
+  remote: { hosts: string[]; keep_minutes: number };
 };
 
 /**

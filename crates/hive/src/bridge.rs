@@ -15,9 +15,16 @@ pub(crate) const START_TIMEOUT: Duration = Duration::from_secs(5);
 /// tokio's default 8 KiB ones (D19.7).
 const BUFFER: usize = 64 * 1024;
 
+/// How long `--replace` waits for the running service to let go of its lock.
+const REPLACE_WAIT: Duration = Duration::from_secs(15);
+
 /// Connects stdio to the service; one it starts is a remote one (`hive daemon --remote`, 26.14)
-/// when `remote`.
-pub async fn run(paths: &Paths, hive: &Path, remote: bool) -> io::Result<()> {
+/// when `remote`. With `replace` (26.17), the running service is ended first, so this bridge
+/// starts a new one: the app chose to restart a remote service of another version.
+pub async fn run(paths: &Paths, hive: &Path, remote: bool, replace: bool) -> io::Result<()> {
+    if replace {
+        end_running(paths, REPLACE_WAIT).await?;
+    }
     // Only to our own service (`Paths::connect`). A missing or insecure runtime directory goes
     // to `start_daemon`, whose `prepare_runtime` creates it or refuses it with a clear error.
     let stream = match paths.connect().await {
@@ -36,6 +43,52 @@ pub async fn run(paths: &Paths, hive: &Path, remote: bool) -> io::Result<()> {
         result = pipe(&mut stdin, &mut to_daemon) => result.map(drop),
         result = pipe(&mut from_daemon, &mut stdout) => result.map(drop),
     }
+}
+
+/// Ends the service holding the lock, if any (`--replace`): SIGTERM to the process its lockfile
+/// names, then waits up to `wait` for the lock to be free. The service lets go of its socket and
+/// lock first and then ends its terminals.
+#[cfg(unix)]
+async fn end_running(paths: &Paths, wait: Duration) -> io::Result<()> {
+    use std::fs::TryLockError;
+    use std::io::Read as _;
+    let file = match File::open(paths.lock()) {
+        Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(()),
+        file => file?,
+    };
+    match file.try_lock() {
+        Err(TryLockError::WouldBlock) => {}
+        free => return free.map_err(io::Error::from),
+    }
+    let mut text = String::new();
+    // A process id is at most 10 digits; more is not one.
+    (&file).take(16).read_to_string(&mut text)?;
+    let pid = text.trim().parse::<i32>().ok().filter(|pid| *pid > 1);
+    let pid = pid.ok_or_else(|| io::Error::other("the running hive service cannot be found"))?;
+    nix::sys::signal::kill(nix::unistd::Pid::from_raw(pid), nix::sys::signal::SIGTERM)
+        .map_err(io::Error::from)?;
+    let free = async {
+        loop {
+            match file.try_lock() {
+                Err(TryLockError::WouldBlock) => {
+                    tokio::time::sleep(Duration::from_millis(20)).await
+                }
+                free => return free,
+            }
+        }
+    };
+    tokio::time::timeout(wait, free)
+        .await
+        .map_err(|_| io::Error::other("the running hive service did not end"))?
+        .map_err(io::Error::from)
+}
+
+/// Remote services run only on Linux (Q5): there is nothing to replace here.
+#[cfg(windows)]
+async fn end_running(_: &Paths, _: Duration) -> io::Result<()> {
+    Err(io::Error::other(
+        "hive bridge --replace runs only on Linux and macOS",
+    ))
 }
 
 /// Copies `from` into `to` until `from` ends, [`BUFFER`] bytes at a time at most.
@@ -138,6 +191,59 @@ mod tests {
         assert_eq!(pipe(&mut from, &mut to).await.unwrap(), 300_000);
         assert_eq!(to, data);
         assert_eq!(from.largest, 64 * 1024);
+    }
+
+    #[tokio::test]
+    async fn replacing_ends_only_a_service_the_lockfile_names() {
+        use std::os::unix::process::ExitStatusExt;
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path();
+        let paths = Paths {
+            logs: dir.join("run"),
+            runtime: dir.join("run"),
+            data: dir.join("data"),
+            config: dir.join("config"),
+        };
+        let wait = Duration::from_millis(300);
+        // No lockfile, or a lockfile nobody holds: nothing runs, nothing to end.
+        end_running(&paths, wait).await.unwrap();
+        std::fs::create_dir_all(&paths.runtime).unwrap();
+        std::fs::write(paths.lock(), "1").unwrap();
+        end_running(&paths, wait).await.unwrap();
+        // A holder whose lockfile names no process (a service before 26.17).
+        let held = File::open(paths.lock()).unwrap();
+        held.try_lock().unwrap();
+        for text in ["", "1", "0", "-5", "12345678901234567890", "x"] {
+            std::fs::write(paths.lock(), text).unwrap();
+            let err = end_running(&paths, wait).await.unwrap_err();
+            assert_eq!(
+                err.to_string(),
+                "the running hive service cannot be found",
+                "{text}"
+            );
+        }
+        // The named process gets SIGTERM; one that keeps the lock is waited for, then given up.
+        let mut child = std::process::Command::new("sleep")
+            .arg("30")
+            .spawn()
+            .unwrap();
+        std::fs::write(paths.lock(), format!(" {}\n", child.id())).unwrap();
+        let err = end_running(&paths, wait).await.unwrap_err();
+        assert_eq!(err.to_string(), "the running hive service did not end");
+        assert_eq!(child.wait().unwrap().signal(), Some(15));
+        // Once the lock is let go the wait ends.
+        let mut child = std::process::Command::new("sleep")
+            .arg("30")
+            .spawn()
+            .unwrap();
+        std::fs::write(paths.lock(), child.id().to_string()).unwrap();
+        let release = async {
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            drop(held);
+        };
+        let (ended, ()) = tokio::join!(end_running(&paths, Duration::from_secs(5)), release);
+        ended.unwrap();
+        assert_eq!(child.wait().unwrap().signal(), Some(15));
     }
 
     #[test]
