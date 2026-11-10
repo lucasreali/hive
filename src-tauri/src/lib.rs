@@ -974,12 +974,12 @@ impl Link {
     /// The service's `terminal_reset {offset}` (26.16): terminal `channel`'s output that follows
     /// is its whole ring from `offset`, so the UI's screen is cleared first, in order with it.
     fn reset(&mut self, channel: u32, offset: u64) {
-        if let Some(term) = self.terminals.get_mut(&channel) {
+        self.terminals.entry(channel).and_modify(|term| {
             term.received = offset;
             if let Some(output) = &term.output {
                 let _ = output.send(InvokeResponseBody::Raw(CLEAR_SCREEN.to_vec()));
             }
-        }
+        });
     }
 }
 
