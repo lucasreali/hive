@@ -1869,7 +1869,7 @@ checksum = "7f24254aa9a54b5c858eaee2f5bccdb46aaf0e486a595ed5fd8f86ba55232a70"
 
 [[package]]
 name = "hive"
-version = "0.29.0"
+version = "0.29.1"
 dependencies = [
  "bytes",
  "calamine",
@@ -1894,7 +1894,7 @@ dependencies = [
 
 [[package]]
 name = "hive-app"
-version = "0.29.0"
+version = "0.29.1"
 dependencies = [
  "futures-util",
  "hive-protocol",
