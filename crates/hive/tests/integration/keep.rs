@@ -17,9 +17,12 @@ fn hello(keep_secs: Option<u64>, app_id: Option<&str>) -> Control {
     }
 }
 
-/// Connects an app with `hello(keep_secs, app_id)` and waits until the service serves it.
+/// Connects an app with `hello(keep_secs, app_id)` and waits until the service serves it; no
+/// terminal is kept.
 async fn app(env: &Env, keep_secs: Option<u64>, app_id: Option<&str>) -> Conn {
-    kept_app(env, keep_secs, app_id).await.0
+    let (app, kept) = kept_app(env, keep_secs, app_id).await;
+    assert_eq!(kept, []);
+    app
 }
 
 /// [`app`], with the `terminals_kept` (26.16) the service sent first, if any.
@@ -103,7 +106,8 @@ async fn kept_terminals_end_after_the_keep_time_unless_an_app_is_back() {
     drop(first);
     // Back within the keep time: the service stays past it, while the app is there.
     std::thread::sleep(Duration::from_millis(500));
-    let back = app(&env, Some(1), Some("a")).await;
+    let (back, kept) = kept_app(&env, Some(1), Some("a")).await;
+    assert_eq!(kept.len(), 1);
     assert!(alive_after(&mut daemon, Duration::from_secs(3)));
     // Gone again: its own keep time later, everything ends as when the local app goes.
     drop(back);
@@ -124,7 +128,8 @@ async fn bye_with_end_ends_at_once_and_bye_without_keeps() {
     closes(&mut app).await;
     assert!(alive_after(&mut daemon, Duration::from_millis(500)));
     assert!(!terminals(&env, &daemon).is_empty());
-    let mut app = self::app(&env, Some(3600), Some("b")).await;
+    let (mut app, kept) = kept_app(&env, Some(3600), Some("b")).await;
+    assert_eq!(kept.len(), 1);
     app.send(0, Control::Bye { end: true }).await;
     closes(&mut app).await;
     // Not after the hour: now.

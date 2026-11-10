@@ -795,6 +795,14 @@ impl Term {
 /// `terminal_reset` (26.16) starts on an empty screen, in order with the bytes that follow.
 const CLEAR_SCREEN: &[u8] = b"\x1bc";
 
+/// The most terminals a `terminals_kept` brings (26.16); a remote service is not trusted.
+const MAX_KEPT: usize = 256;
+/// The highest channel a kept terminal may have: far above what one app run opens, far
+/// below `u32::MAX`, so a hostile one cannot use up the channels new terminals need.
+const MAX_KEPT_CHANNEL: u32 = 1 << 20;
+/// The longest `cwd`, `worktree` or `account` of a kept terminal, in bytes: a path's.
+const MAX_KEPT_TEXT: usize = 4096;
+
 #[derive(Default)]
 struct Link {
     /// Control messages to the UI.
@@ -809,6 +817,9 @@ struct Link {
     /// which keeps the terminals.
     crashed: bool,
     last_channel: u32,
+    /// The last message read was this connection's `welcome`: only then is a `terminals_kept`
+    /// taken (26.16), so a service can send it once, as its first message.
+    after_welcome: bool,
     /// Reads the service until the connection ends; it owns the bridge process.
     reader: Option<JoinHandle<()>>,
     /// The newer release `check_update` found and downloaded, for `install_update` or the
@@ -942,12 +953,23 @@ impl Link {
     /// what it received, and the UI redraws it (`terminal_reattached`). One it does not have
     /// (the app restarted) is told to the UI as `terminal_kept`, which opens its tab and takes
     /// its output (`attach_terminal`). New terminals' channels stay above the kept ones.
+    /// A remote service is not trusted: at most [`MAX_KEPT`] terminals, each on a channel from
+    /// 1 to [`MAX_KEPT_CHANNEL`] given once, with texts of at most [`MAX_KEPT_TEXT`] bytes; a
+    /// terminal already waiting for the UI is not told again. The rest is left out.
     fn kept(&mut self, value: Value) {
         let Ok(Control::TerminalsKept { terminals }) = serde_json::from_value(value) else {
             return;
         };
-        for kept in terminals {
+        let mut seen = HashSet::new();
+        for kept in terminals.into_iter().take(MAX_KEPT) {
             let channel = kept.channel;
+            let texts = [Some(&kept.cwd), kept.worktree.as_ref(), Some(&kept.account)];
+            let long = texts.into_iter().flatten().any(|t| t.len() > MAX_KEPT_TEXT);
+            let waiting = (self.terminals.get(&channel)).is_some_and(|t| t.output.is_none());
+            let plausible = (1..=MAX_KEPT_CHANNEL).contains(&channel);
+            if !plausible || long || waiting || !seen.insert(channel) {
+                continue;
+            }
             self.last_channel = self.last_channel.max(channel);
             match self.terminals.get(&channel) {
                 Some(Term {
@@ -974,12 +996,16 @@ impl Link {
     /// The service's `terminal_reset {offset}` (26.16): terminal `channel`'s output that follows
     /// is its whole ring from `offset`, so the UI's screen is cleared first, in order with it.
     fn reset(&mut self, channel: u32, offset: u64) {
-        self.terminals.entry(channel).and_modify(|term| {
-            term.received = offset;
-            if let Some(output) = &term.output {
-                let _ = output.send(InvokeResponseBody::Raw(CLEAR_SCREEN.to_vec()));
-            }
-        });
+        // Only for a terminal the UI took: one waiting for it gets nothing, so counts nothing.
+        if let Some(Term {
+            output: Some(output),
+            received,
+            ..
+        }) = self.terminals.get_mut(&channel)
+        {
+            *received = offset;
+            let _ = output.send(InvokeResponseBody::Raw(CLEAR_SCREEN.to_vec()));
+        }
     }
 }
 
@@ -2265,11 +2291,16 @@ async fn pump<R: AsyncRead + Unpin>(
             held = next;
             let mut link = lock(link);
             for (channel, bytes) in joined {
-                if let Some(term) = link.terminals.get_mut(&channel) {
-                    term.received += bytes.len() as u64;
-                    if let Some(output) = &term.output {
-                        let _ = output.send(InvokeResponseBody::Raw(bytes));
-                    }
+                // Counted only once sent to a UI: a terminal waiting for one is replayed from
+                // what it got.
+                if let Some(Term {
+                    output: Some(output),
+                    received,
+                    ..
+                }) = link.terminals.get_mut(&channel)
+                {
+                    *received = received.saturating_add(bytes.len() as u64);
+                    let _ = output.send(InvokeResponseBody::Raw(bytes));
                 }
             }
             continue;
@@ -2288,8 +2319,10 @@ async fn pump<R: AsyncRead + Unpin>(
             continue;
         }
         value["channel"] = frame.channel.into();
+        let after_welcome = std::mem::take(&mut link.after_welcome);
         match value["type"].as_str().unwrap_or_default() {
             "welcome" => {
+                link.after_welcome = true;
                 link.welcome = Some(value.clone());
                 // The UI always gets the projects after the handshake.
                 let _ = link.send(0, &Control::ListProjects);
@@ -2307,7 +2340,9 @@ async fn pump<R: AsyncRead + Unpin>(
             // The app's own (26.16): what the UI gets of them is `terminal_kept`,
             // `terminal_reattached` and a cleared screen.
             "terminals_kept" => {
-                link.kept(value);
+                if after_welcome && frame.channel == 0 {
+                    link.kept(value);
+                }
                 continue;
             }
             "terminal_reset" => {
@@ -2352,6 +2387,10 @@ fn disconnected(link: &mut Link, reason: String) {
     for id in std::mem::take(&mut link.terminals).into_keys() {
         link.to_ui(json!({"type": "terminal_exited", "channel": id, "code": null}));
     }
+    // No terminal is left: a new connection's channels start again, whatever a remote
+    // service's `terminals_kept` raised them to (26.16).
+    link.last_channel = 0;
+    link.after_welcome = false;
     link.to_ui(json!({"type": "disconnected", "reason": reason, "bundled": link.bundled}));
 }
 
