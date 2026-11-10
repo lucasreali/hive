@@ -1000,12 +1000,7 @@ async fn pumped(frames: Vec<Frame>) -> [Vec<Vec<u8>>; 2] {
     let link = Mutex::new(Link::default());
     let mut outputs = [1, 2].map(|channel| {
         let (output, rx) = output();
-        let term = Term {
-            output,
-            cwd: "/w".into(),
-            worktree: Value::Null,
-            account: Value::Null,
-        };
+        let term = Term::new(Some(output), "/w".into());
         lock(&link).terminals.insert(channel, term);
         rx
     });
@@ -1056,12 +1051,7 @@ async fn buffered_terminal_output_reaches_the_ui_in_one_send_per_channel() {
 async fn terminal_output_goes_at_once_without_waiting_for_more() {
     let link = Mutex::new(Link::default());
     let (output, mut rx) = output();
-    let term = Term {
-        output,
-        cwd: "/w".into(),
-        worktree: Value::Null,
-        account: Value::Null,
-    };
+    let term = Term::new(Some(output), "/w".into());
     lock(&link).terminals.insert(1, term);
     let (reader, writer) = tokio::io::duplex(1 << 16);
     let mut writer = FramedWrite::new(writer, FrameCodec);
@@ -1658,6 +1648,103 @@ async fn a_ui_reloaded_after_a_web_content_crash_keeps_its_terminals() {
     closed.sort_by_key(|(channel, _)| *channel);
     let close = |channel| (channel, Control::CloseTerminal);
     assert_eq!(closed, [close(1), close(2)]);
+}
+
+/// A terminal of the service's `terminals_kept` (26.16).
+fn kept_terminal(channel: u32, offset: u64) -> hive_protocol::KeptTerminal {
+    hive_protocol::KeptTerminal {
+        channel,
+        cwd: "/r/src".into(),
+        worktree: Some("/r".into()),
+        account: "Work".into(),
+        offset,
+    }
+}
+
+#[tokio::test]
+async fn kept_terminals_the_app_does_not_have_open_from_the_ring() {
+    let (hive, mut service, mut rx) = welcomed().await;
+    let terminals = vec![kept_terminal(4, 9000), kept_terminal(7, 10)];
+    service.send(0, Control::TerminalsKept { terminals }).await;
+    // The UI opens each one's tab; nothing is asked of the service until it takes the output.
+    let kept = |channel: u32| json!({"type": "terminal_kept", "channel": channel, "cwd": "/r/src", "worktree": "/r", "account": "Work"});
+    assert_eq!(next(&mut rx).await, kept(4));
+    assert_eq!(next(&mut rx).await, kept(7));
+    let (channel, mut bytes) = output();
+    hive.attach_terminal(7, channel).unwrap();
+    assert_eq!(
+        service.control().await,
+        (7, Control::AttachTerminal { from: 0 })
+    );
+    // Its ring, after a reset: the screen is cleared first, in order with it.
+    service.send(7, Control::TerminalReset { offset: 30 }).await;
+    service
+        .writer
+        .send(Frame::terminal(7, "ring"))
+        .await
+        .unwrap();
+    assert_eq!(next(&mut bytes).await, CLEAR_SCREEN);
+    assert_eq!(next(&mut bytes).await, b"ring");
+    assert_eq!(hive.link().terminals[&7].received, 34);
+    // Its messages reach the UI, the service's own ones excepted.
+    service.send(7, Control::UnhookedAgent).await;
+    assert_eq!(
+        next(&mut rx).await,
+        json!({"type": "unhooked_agent", "channel": 7})
+    );
+    assert!(rx.try_recv().is_err());
+    // A new terminal's channel is above every kept one.
+    assert_eq!(
+        hive.open_terminal("/w".into(), 80, 24, None, output().0),
+        Ok(8)
+    );
+    // A terminal the UI did not take yet (4) gets nothing, and counts it.
+    service
+        .writer
+        .send(Frame::terminal(4, "abc"))
+        .await
+        .unwrap();
+    service.send(4, Control::TerminalReset { offset: 2 }).await;
+    service.send(0, Control::UnhookedAgent).await;
+    assert_eq!(next(&mut rx).await["channel"], 0);
+    assert_eq!(hive.link().terminals[&4].received, 2);
+}
+
+#[tokio::test]
+async fn kept_terminals_the_ui_shows_are_attached_after_what_they_received() {
+    let (hive, mut service, mut rx) = welcomed().await;
+    let (channel, mut bytes) = output();
+    let id = hive
+        .open_terminal("/w".into(), 80, 24, None, channel)
+        .unwrap();
+    service.control().await;
+    service
+        .writer
+        .send(Frame::terminal(id, "hello"))
+        .await
+        .unwrap();
+    assert_eq!(next(&mut bytes).await, b"hello");
+    let terminals = vec![kept_terminal(id, 900)];
+    service.send(0, Control::TerminalsKept { terminals }).await;
+    assert_eq!(
+        service.control().await,
+        (id, Control::AttachTerminal { from: 5 })
+    );
+    assert_eq!(
+        next(&mut rx).await,
+        json!({"type": "terminal_reattached", "channel": id})
+    );
+    // A `terminals_kept` this side cannot read changes nothing.
+    let unreadable = br#"{"type":"terminals_kept","terminals":7}"#;
+    let frame = Frame {
+        kind: FrameType::Control,
+        channel: 0,
+        payload: unreadable.to_vec().into(),
+    };
+    service.writer.send(frame).await.unwrap();
+    service.send(0, Control::UnhookedAgent).await;
+    assert_eq!(next(&mut rx).await["type"], "unhooked_agent");
+    assert_eq!(hive.link().terminals.len(), 1);
 }
 
 #[tokio::test]
@@ -3089,16 +3176,8 @@ async fn quitting_asks_the_ui_while_agents_would_end_with_the_app() {
     let exited = || exits.load(Ordering::SeqCst);
     let app = mock_builder().build(mock_context(noop_assets())).unwrap();
     let app = app.handle();
-    let (output, cwd, worktree) = (output().0, "/w".into(), Value::Null);
-    hive.link().terminals.insert(
-        5,
-        Term {
-            output,
-            cwd,
-            worktree,
-            account: Value::Null,
-        },
-    );
+    let term = Term::new(Some(output().0), "/w".into());
+    hive.link().terminals.insert(5, term);
     // Each question long after the last (`ASK_AGAIN` is tested on its own).
     let quits = |hive: &Hive| {
         hive.link().asked = None;

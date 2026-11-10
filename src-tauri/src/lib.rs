@@ -768,12 +768,32 @@ pub fn double_click_action(setting: Option<&str>) -> &'static str {
 /// An open terminal: where its output goes, and where it runs, for a UI reloaded after a
 /// WebContent crash to show its tab again (`terminal_kept`).
 struct Term {
-    output: Channel<InvokeResponseBody>,
+    /// `None` for a terminal a remote service kept (`terminals_kept`, 26.16) that no UI took
+    /// yet (`attach_terminal`): the service sends it nothing until then.
+    output: Option<Channel<InvokeResponseBody>>,
     cwd: String,
     /// Its `terminal_opened`'s `worktree` and `account` (21.7); null until then.
     worktree: Value,
     account: Value,
+    /// How many bytes of its output reached the UI (26.16): the offset a reattach asks for.
+    received: u64,
 }
+
+impl Term {
+    fn new(output: Option<Channel<InvokeResponseBody>>, cwd: String) -> Self {
+        Self {
+            output,
+            cwd,
+            worktree: Value::Null,
+            account: Value::Null,
+            received: 0,
+        }
+    }
+}
+
+/// What the UI's xterm.js takes as "clear everything" (RIS, `ESC c`): a terminal's output after
+/// `terminal_reset` (26.16) starts on an empty screen, in order with the bytes that follow.
+const CLEAR_SCREEN: &[u8] = b"\x1bc";
 
 #[derive(Default)]
 struct Link {
@@ -916,6 +936,50 @@ impl Link {
         self.send(id, message)?;
         self.last_channel = id;
         Ok(id)
+    }
+
+    /// The service's `terminals_kept` (26.16). A terminal the UI shows is attached again after
+    /// what it received, and the UI redraws it (`terminal_reattached`). One it does not have
+    /// (the app restarted) is told to the UI as `terminal_kept`, which opens its tab and takes
+    /// its output (`attach_terminal`). New terminals' channels stay above the kept ones.
+    fn kept(&mut self, value: Value) {
+        let Ok(Control::TerminalsKept { terminals }) = serde_json::from_value(value) else {
+            return;
+        };
+        for kept in terminals {
+            let channel = kept.channel;
+            self.last_channel = self.last_channel.max(channel);
+            match self.terminals.get(&channel) {
+                Some(Term {
+                    output: Some(_),
+                    received,
+                    ..
+                }) => {
+                    let from = *received;
+                    let _ = self.send(channel, &Control::AttachTerminal { from });
+                    self.to_ui(json!({"type": "terminal_reattached", "channel": channel}));
+                }
+                _ => {
+                    let mut term = Term::new(None, kept.cwd);
+                    term.worktree = kept.worktree.into();
+                    term.account = kept.account.into();
+                    let (cwd, worktree, account) = (&term.cwd, &term.worktree, &term.account);
+                    self.to_ui(json!({"type": "terminal_kept", "channel": channel, "cwd": cwd, "worktree": worktree, "account": account}));
+                    self.terminals.insert(channel, term);
+                }
+            }
+        }
+    }
+
+    /// The service's `terminal_reset {offset}` (26.16): terminal `channel`'s output that follows
+    /// is its whole ring from `offset`, so the UI's screen is cleared first, in order with it.
+    fn reset(&mut self, channel: u32, offset: u64) {
+        if let Some(term) = self.terminals.get_mut(&channel) {
+            term.received = offset;
+            if let Some(output) = &term.output {
+                let _ = output.send(InvokeResponseBody::Raw(CLEAR_SCREEN.to_vec()));
+            }
+        }
     }
 }
 
@@ -1444,15 +1508,7 @@ impl Hive {
             account,
         };
         let id = link.open(&open)?;
-        link.terminals.insert(
-            id,
-            Term {
-                output,
-                cwd,
-                worktree: Value::Null,
-                account: Value::Null,
-            },
-        );
+        link.terminals.insert(id, Term::new(Some(output), cwd));
         Ok(id)
     }
 
@@ -1462,8 +1518,10 @@ impl Hive {
         self.link().crashed = true;
     }
 
-    /// A UI reloaded after a WebContent crash takes terminal `id`'s output (`terminal_kept`).
-    /// What the dead page never acknowledged is acknowledged, so the terminal's output flows.
+    /// The UI takes terminal `id`'s output (`terminal_kept`). One a remote service kept that no
+    /// UI had yet (26.16) is attached from the service: `attach_terminal {from: 0}`, so its ring
+    /// is replayed. One kept through a WebContent crash (18.21): what the dead page never
+    /// acknowledged is acknowledged, so the terminal's output flows.
     pub fn attach_terminal(
         &self,
         id: u32,
@@ -1471,8 +1529,13 @@ impl Hive {
     ) -> Result<(), String> {
         let mut link = self.link();
         let term = link.terminals.get_mut(&id).ok_or("no such terminal")?;
-        term.output = output;
-        link.send(id, &Control::Ack { bytes: u32::MAX })
+        let message = match term.output.replace(output) {
+            None => Control::AttachTerminal {
+                from: term.received,
+            },
+            Some(_) => Control::Ack { bytes: u32::MAX },
+        };
+        link.send(id, &message)
     }
 
     /// Keystrokes or pasted text, split to fit the frame size limit.
@@ -2200,10 +2263,13 @@ async fn pump<R: AsyncRead + Unpin>(
         if frame.kind == FrameType::Terminal {
             let (joined, next) = burst(frame, &mut frames);
             held = next;
-            let link = lock(link);
+            let mut link = lock(link);
             for (channel, bytes) in joined {
-                if let Some(term) = link.terminals.get(&channel) {
-                    let _ = term.output.send(InvokeResponseBody::Raw(bytes));
+                if let Some(term) = link.terminals.get_mut(&channel) {
+                    term.received += bytes.len() as u64;
+                    if let Some(output) = &term.output {
+                        let _ = output.send(InvokeResponseBody::Raw(bytes));
+                    }
                 }
             }
             continue;
@@ -2238,6 +2304,16 @@ async fn pump<R: AsyncRead + Unpin>(
                 return End::Refused;
             }
             "terminal_exited" => drop(link.terminals.remove(&frame.channel)),
+            // The app's own (26.16): what the UI gets of them is `terminal_kept`,
+            // `terminal_reattached` and a cleared screen.
+            "terminals_kept" => {
+                link.kept(value);
+                continue;
+            }
+            "terminal_reset" => {
+                link.reset(frame.channel, value["offset"].as_u64().unwrap_or_default());
+                continue;
+            }
             // The `hive-file:` scheme's, never the UI's.
             "file_range" => {
                 link.range(value);

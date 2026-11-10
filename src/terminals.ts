@@ -268,17 +268,35 @@ export const openTerminal = (cwd: string, account?: AccountDir): Promise<number>
   );
 
 /**
- * Terminal `id`, kept by the app through a WebContent crash (18.21, `terminal_kept`), back in
- * this reloaded page: a new Terminal and tab take its output from now on. What it showed before
- * is gone; it is resized from 80×24, so a full-screen program (Claude Code) draws again once
- * its pane is fitted.
+ * Terminal `id` back in a page that does not have it (`terminal_kept`): one the app kept through
+ * a WebContent crash (18.21), or one a remote service kept while the app was gone (26.16), whose
+ * ring the service replays. A new Terminal and tab take its output from now on, then it is
+ * redrawn ({@link redraw}) and resized again once its pane is fitted.
  */
 export const reattachTerminal = (id: number, cwd: string): Promise<number> =>
   startTerminal(cwd, async (term, onData) => {
     await transport.attachTerminal(id, onData);
-    void transport.resizeTerminal(id, term.cols, term.rows);
+    redraw(id, term);
     return id;
   });
+
+/**
+ * Terminal `id`, which this page shows, attached again after a reconnect (26.16,
+ * `terminal_reattached`): redrawn over the output replayed to it.
+ */
+export function redrawTerminal(id: number): void {
+  const term = terminal(id);
+  if (term) redraw(id, term);
+}
+
+/**
+ * A resize one column wider and back (26.16, Q9): the program gets SIGWINCH and a full-screen
+ * one (Claude Code) draws its whole screen again; the service keeps no screen to restore.
+ */
+function redraw(id: number, term: Terminal): void {
+  void transport.resizeTerminal(id, term.cols + 1, term.rows);
+  void transport.resizeTerminal(id, term.cols, term.rows);
+}
 
 /** A Terminal and its tab, for the channel `connect` resolves with. */
 async function startTerminal(

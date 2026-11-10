@@ -6,7 +6,7 @@ import { apply } from "./reduce";
 import { onMoved, openLocated, restore } from "./sessions";
 import { requestQuit } from "./shell/CloseAppDialog";
 import { onUninstalled } from "./shell/UninstallDialog";
-import { dropFiles, reattachTerminal, showOpenFailure } from "./terminals";
+import { dropFiles, reattachTerminal, redrawTerminal, showOpenFailure } from "./terminals";
 import { transport } from "./transport";
 import { openTarget } from "./viewer/external";
 
@@ -32,6 +32,7 @@ function onMessage(message: ServiceMessage): void {
   if (message.type === "terminal_kept") {
     showOpenFailure(reattachTerminal(message.channel, message.cwd));
   }
+  if (message.type === "terminal_reattached") redrawTerminal(message.channel);
 }
 
 /** Connects to the service, at startup and on "Reconnect", always with the same handler. */

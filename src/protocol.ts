@@ -48,8 +48,9 @@ export type ServiceMessage =
   // the window's top left (18.1); `text` is their paths, shell-quoted, each followed by a space.
   | { type: "files_dropped"; text: string; x: number; y: number }
   // From the app side (Rust): a terminal kept through a WebContent crash (18.21), sent to the
-  // reloaded page right after `welcome`, which reattaches to it. `worktree` and `account` as
-  // `terminal_opened`'s; both null when it had not answered yet.
+  // reloaded page right after `welcome`, which reattaches to it; or one a remote service kept
+  // that the app does not have (26.16, the app restarted), whose tab opens from its ring.
+  // `worktree` and `account` as `terminal_opened`'s; both null when it had not answered yet.
   | {
       type: "terminal_kept";
       channel: number;
@@ -57,6 +58,9 @@ export type ServiceMessage =
       worktree: string | null;
       account: string | null;
     }
+  // From the app side (Rust): a terminal the UI shows was attached again after a reconnect
+  // (26.16); the UI redraws it.
+  | { type: "terminal_reattached"; channel: number }
   // `protocol`/`version` are the service's; `app_*` and `bundled` are added by the app side (Rust).
   // `bundled`: the app runs the `hive` its installer brought (not a development build).
   | {
@@ -149,6 +153,10 @@ export type ServiceMessage =
   | ({ type: "changes" } & Changes)
   | ({ type: "scripts" } & WorktreeScripts)
   | ({ type: "file" } & FileText)
+  // Consumed by the Tauri side (26.16), never forwarded to the UI: it answers with
+  // `terminal_kept` or `terminal_reattached`, and clears a reset terminal's screen in its output.
+  | { type: "terminals_kept"; terminals: KeptTerminal[] }
+  | { type: "terminal_reset"; channel: number; offset: number }
   // Consumed by the Tauri side (the `hive-file:` scheme, 24.2), never forwarded to the UI.
   | {
       type: "file_range";
@@ -212,6 +220,15 @@ export type ServiceMessage =
 
 /** Where the service runs on Windows (12.5.4). */
 export type AppMode = "wsl" | "native";
+
+/** Mirrors `hive_protocol::KeptTerminal` (26.16): a terminal a remote service kept running. */
+export type KeptTerminal = {
+  channel: number;
+  cwd: string;
+  worktree: string | null;
+  account: string;
+  offset: number;
+};
 
 /** Mirrors `hive_protocol::Worktree`: every field comes from the service. */
 export type Worktree = {
