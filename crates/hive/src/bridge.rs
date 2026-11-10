@@ -16,15 +16,20 @@ pub(crate) const START_TIMEOUT: Duration = Duration::from_secs(5);
 const BUFFER: usize = 64 * 1024;
 
 /// How long `--replace` waits for the running service to let go of its lock.
+#[cfg(unix)]
 const REPLACE_WAIT: Duration = Duration::from_secs(15);
 
 /// Connects stdio to the service; one it starts is a remote one (`hive daemon --remote`, 26.14)
 /// when `remote`. With `replace` (26.17), the running service is ended first, so this bridge
 /// starts a new one: the app chose to restart a remote service of another version.
 pub async fn run(paths: &Paths, hive: &Path, remote: bool, replace: bool) -> io::Result<()> {
+    // Remote services run only on Linux (Q5): Windows has nothing to replace.
+    #[cfg(unix)]
     if replace {
         end_running(paths, REPLACE_WAIT).await?;
     }
+    #[cfg(windows)]
+    let _ = replace;
     // Only to our own service (`Paths::connect`). A missing or insecure runtime directory goes
     // to `start_daemon`, whose `prepare_runtime` creates it or refuses it with a clear error.
     let stream = match paths.connect().await {
@@ -81,14 +86,6 @@ async fn end_running(paths: &Paths, wait: Duration) -> io::Result<()> {
         .await
         .map_err(|_| io::Error::other("the running hive service did not end"))?
         .map_err(io::Error::from)
-}
-
-/// Remote services run only on Linux (Q5): there is nothing to replace here.
-#[cfg(windows)]
-async fn end_running(_: &Paths, _: Duration) -> io::Result<()> {
-    Err(io::Error::other(
-        "hive bridge --replace runs only on Linux and macOS",
-    ))
 }
 
 /// Copies `from` into `to` until `from` ends, [`BUFFER`] bytes at a time at most.
@@ -211,6 +208,12 @@ mod tests {
         std::fs::create_dir_all(&paths.runtime).unwrap();
         std::fs::write(paths.lock(), "1").unwrap();
         end_running(&paths, wait).await.unwrap();
+        // A lockfile that cannot be read is an error, not "nothing runs".
+        use std::os::unix::fs::PermissionsExt;
+        let mode = |mode| std::fs::Permissions::from_mode(mode);
+        std::fs::set_permissions(paths.lock(), mode(0o000)).unwrap();
+        assert!(end_running(&paths, wait).await.is_err());
+        std::fs::set_permissions(paths.lock(), mode(0o600)).unwrap();
         // A holder whose lockfile names no process (a service before 26.17).
         let held = File::open(paths.lock()).unwrap();
         held.try_lock().unwrap();
