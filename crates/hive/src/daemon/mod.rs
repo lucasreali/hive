@@ -340,6 +340,9 @@ struct State {
     /// The worktree each open terminal opened in, by channel, when it is one: a subagent's
     /// own worktree with a terminal of the human's is not only the subagent's (9.35).
     terminal_worktrees: std::sync::Mutex<HashMap<u32, String>>,
+    /// Where each terminal with a ring (26.15) runs, by channel, for `terminals_kept` (26.16);
+    /// its `offset` is read from the ring when sent.
+    kept: std::sync::Mutex<HashMap<u32, hive_protocol::KeptTerminal>>,
     /// Detected agents by session id, with their terminal and state; followed by [`agents`].
     agents: Mutex<HashMap<String, Agent>>,
     /// The worktree of the app's files panel, while one is watched.
@@ -445,6 +448,7 @@ impl State {
             terminals: Mutex::new(HashMap::new()),
             inputs: Default::default(),
             terminal_worktrees: Default::default(),
+            kept: Default::default(),
             agents: Mutex::new(HashMap::new()),
             watching: Mutex::new(None),
             watched: AtomicU32::new(0),
@@ -578,6 +582,12 @@ impl State {
     ) -> std::sync::MutexGuard<'_, HashMap<u32, (mpsc::UnboundedSender<Input>, terminal::Output)>>
     {
         self.inputs
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    fn kept(&self) -> std::sync::MutexGuard<'_, HashMap<u32, hive_protocol::KeptTerminal>> {
+        self.kept
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
     }

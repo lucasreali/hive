@@ -34,6 +34,7 @@ sort! {
         | Resize
         | CloseTerminal
         | Ack
+        | AttachTerminal
         | Hook
         | StatuslineUsage
         | ListProjects
@@ -103,6 +104,8 @@ sort! {
         | VersionMismatch
         | TerminalOpened
         | TerminalExited
+        | TerminalsKept
+        | TerminalReset
         | Badge
         | UnhookedAgent
         | TerminalProgress
@@ -235,6 +238,16 @@ fn samples() -> Vec<Control> {
             account: s("Work"),
         },
         TerminalExited { code: Some(0) },
+        TerminalsKept {
+            terminals: vec![KeptTerminal {
+                channel: 2,
+                cwd: s("/r/src"),
+                worktree: Some(s("/r")),
+                account: s("Work"),
+                offset: 4096,
+            }],
+        },
+        TerminalReset { offset: 1024 },
         Badge { text: s("db") },
         UnhookedAgent,
         TerminalProgress {

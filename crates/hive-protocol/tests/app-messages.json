@@ -20,6 +20,22 @@
     "code": 0
   },
   {
+    "type": "terminals_kept",
+    "terminals": [
+      {
+        "channel": 2,
+        "cwd": "/r/src",
+        "worktree": "/r",
+        "account": "Work",
+        "offset": 4096
+      }
+    ]
+  },
+  {
+    "type": "terminal_reset",
+    "offset": 1024
+  },
+  {
     "type": "badge",
     "text": "db"
   },

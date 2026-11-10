@@ -218,6 +218,27 @@ pub enum Control {
     TerminalExited {
         code: Option<i32>,
     },
+    /// Service → app, on channel 0 right after an app connection is accepted (26.16): the
+    /// terminals a dropped or replaced connection left running (26.15), each with its place
+    /// and how many bytes of output it wrote so far. Sent only when there is one. The app
+    /// answers each with `AttachTerminal`; until then its output only fills its ring.
+    TerminalsKept {
+        terminals: Vec<KeptTerminal>,
+    },
+    /// App → service, on a kept terminal's channel (26.16): its output goes to this connection
+    /// from now on, after what it wrote from offset `from` on (what the app's screen already
+    /// holds; 0 for a terminal the app does not know). When the ring no longer holds `from`,
+    /// `TerminalReset` comes first, then the whole ring. Refused with `error` for a terminal
+    /// that is not open or not kept.
+    AttachTerminal {
+        from: u64,
+    },
+    /// Service → app, on the terminal's channel (26.16): the output after the `from` of its
+    /// `AttachTerminal` is no longer all held, so its screen is cleared; the output that
+    /// follows starts at `offset`, the oldest byte the ring still holds.
+    TerminalReset {
+        offset: u64,
+    },
     /// Raw hook payload from `hive hook`, tagged with the terminal it came from. `sent_ns` is
     /// `CLOCK_MONOTONIC` (shared by every process on the machine) when `hive hook` started:
     /// the service applies an agent's states in this order, not in arrival order.
@@ -1966,6 +1987,18 @@ pub enum UsageWindow {
     Week,
 }
 
+/// A terminal a remote service kept running while no app was attached (26.16, `TerminalsKept`):
+/// its channel, the folder it opened in, its `TerminalOpened`'s `worktree` and `account`, and
+/// `offset`, the bytes of output it wrote so far.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct KeptTerminal {
+    pub channel: u32,
+    pub cwd: String,
+    pub worktree: Option<String>,
+    pub account: String,
+    pub offset: u64,
+}
+
 /// A Claude session that ran in a Hive terminal, the folder it ran in and its terminal's Claude
 /// config folder (`None`: the default account, 12.2).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -2456,6 +2489,40 @@ mod tests {
         }
         let bye = Frame::control(0, &Control::Bye { end: true });
         assert_eq!(&bye.payload[..], br#"{"type":"bye","end":true}"#);
+    }
+
+    #[test]
+    fn reattach_messages_round_trip() {
+        let round_trip = |msg: &Control| {
+            let mut buf = encode(Frame::control(0, msg));
+            FrameCodec.decode(&mut buf).unwrap().unwrap().to_control()
+        };
+        let kept = Control::TerminalsKept {
+            terminals: vec![KeptTerminal {
+                channel: 3,
+                cwd: "/r/src".into(),
+                worktree: Some("/r".into()),
+                account: "Work".into(),
+                offset: 5_000_000_000,
+            }],
+        };
+        assert_eq!(
+            &Frame::control(0, &kept).payload[..],
+            br#"{"type":"terminals_kept","terminals":[{"channel":3,"cwd":"/r/src","worktree":"/r","account":"Work","offset":5000000000}]}"#
+        );
+        assert_eq!(round_trip(&kept).unwrap(), kept);
+        let attach = Control::AttachTerminal { from: 42 };
+        assert_eq!(
+            &Frame::control(3, &attach).payload[..],
+            br#"{"type":"attach_terminal","from":42}"#
+        );
+        assert_eq!(round_trip(&attach).unwrap(), attach);
+        let reset = Control::TerminalReset { offset: 7 };
+        assert_eq!(
+            &Frame::control(3, &reset).payload[..],
+            br#"{"type":"terminal_reset","offset":7}"#
+        );
+        assert_eq!(round_trip(&reset).unwrap(), reset);
     }
 
     #[test]

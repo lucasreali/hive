@@ -86,6 +86,9 @@ impl LastOutput {
 pub const HIGH_WATER: usize = 512 * 1024;
 /// Output the app has not acknowledged under which a paused terminal's PTY is read again.
 pub const LOW_WATER: usize = 128 * 1024;
+/// The largest terminal frame of a replay (26.16): a PTY read's size, so the app's batches stay
+/// as they are.
+const REPLAY_CHUNK: usize = 64 * 1024;
 
 /// A terminal's output on its way to the app (9.19): its queue holds at most what the app
 /// has not acknowledged as written to its screen, [`HIGH_WATER`] plus one read, so a flooding
@@ -94,7 +97,7 @@ pub const LOW_WATER: usize = 128 * 1024;
 ///
 /// A remote service's terminal (26.15) also keeps its last [`RING`] bytes, attached or not, and
 /// can be detached from a dropped app: its output then only goes into the ring, and its PTY is
-/// never paused, until an app attaches it again ([`Output::attach`], 26.16).
+/// never paused, until an app attaches it again ([`Output::reattach`], 26.16).
 #[derive(Clone)]
 pub struct Output {
     channel: u32,
@@ -185,11 +188,30 @@ impl Output {
         }
     }
 
-    /// Sends to `frames` from now on, an app's that attached this terminal (26.16), with the
-    /// flow control of 9.19 starting afresh.
-    pub fn attach(&self, frames: mpsc::UnboundedSender<Frame>) {
-        self.sink().app = Some(frames);
-        self.unacked.send_replace(0);
+    /// Sends to `frames` from now on, the queue of an app that attached this kept terminal
+    /// (26.16), starting with the output it wrote from offset `from` on: what the ring holds
+    /// of it, or, once the ring no longer holds `from`, `TerminalReset` and the whole ring. The
+    /// replay is the first output of 9.19's window afresh, and nothing the program writes
+    /// meanwhile is lost or sent twice (one lock). False, and nothing sent, for a terminal
+    /// that is not kept.
+    pub fn reattach(&self, frames: mpsc::UnboundedSender<Frame>, from: u64) -> bool {
+        let mut sink = self.sink();
+        let Some(ring) = &sink.ring else {
+            return false;
+        };
+        let replay = ring.since(from).unwrap_or_else(|| {
+            let offset = ring.start();
+            let reset = hive_protocol::Control::TerminalReset { offset };
+            let _ = frames.send(Frame::control(self.channel, &reset));
+            ring.since(offset).unwrap_or_default()
+        });
+        for chunk in replay.chunks(REPLAY_CHUNK) {
+            let chunk = Bytes::copy_from_slice(chunk);
+            let _ = frames.send(Frame::terminal(self.channel, chunk));
+        }
+        self.unacked.send_replace(replay.len());
+        sink.app = Some(frames);
+        true
     }
 
     /// What `read` makes of the ring of a kept terminal (its offsets and the bytes still held,
@@ -1322,9 +1344,10 @@ mod tests {
             .flatten()
             .unwrap();
         assert_eq!(held, vec![b'e'; RING]);
-        // Attached again (26.16), output reaches the new app, under the window afresh.
+        // Attached again (26.16) by an app that has it all: nothing replayed, and output
+        // reaches the new app, under the window afresh.
         let (again, mut requeued) = mpsc::unbounded_channel();
-        output.attach(again);
+        assert!(output.reattach(again, total));
         assert!(flows(output.send(&vec![b'f'; HIGH_WATER])).await);
         output.control(&hive_protocol::Control::CloseTerminal);
         let send = output.send(b"g");
@@ -1342,10 +1365,78 @@ mod tests {
         assert_eq!(output.kept(Ring::end), Some(total + HIGH_WATER as u64 + 2));
     }
 
+    /// What `queued` holds: each frame's channel, then its terminal bytes or its control message.
+    fn replayed(
+        queued: &mut mpsc::UnboundedReceiver<Frame>,
+    ) -> Vec<(u32, Result<Vec<u8>, hive_protocol::Control>)> {
+        std::iter::from_fn(|| queued.try_recv().ok())
+            .map(|frame| match frame.kind {
+                hive_protocol::FrameType::Terminal => (frame.channel, Ok(frame.payload.to_vec())),
+                _ => (frame.channel, Err(frame.to_control().unwrap())),
+            })
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn a_reattached_output_gets_what_its_app_missed_or_a_reset_and_the_whole_ring() {
+        let (frames, _queued) = mpsc::unbounded_channel();
+        let output = Output::new(5, frames.clone(), true);
+        output.detach(&frames);
+        // 1 MiB and 100 KiB written: the ring holds offsets 100 KiB to 1 MiB + 100 KiB.
+        let over = 100 * 1024;
+        let written: Vec<u8> = (0..RING + over).map(|i| (i % 251) as u8).collect();
+        assert!(flows(output.send(&written)).await);
+        let (start, end) = (over as u64, (RING + over) as u64);
+        let attach = |from: u64| {
+            let (app, mut queued) = mpsc::unbounded_channel();
+            assert!(output.reattach(app.clone(), from));
+            output.detach(&app);
+            replayed(&mut queued)
+        };
+        // Inside the ring: only the missing bytes, in frames of at most 64 KiB, on its channel.
+        let from = end - 70 * 1024;
+        let frames = attach(from);
+        assert_eq!(frames.len(), 2);
+        let sizes: Vec<_> = (frames.iter())
+            .map(|(channel, bytes)| (*channel, bytes.as_ref().unwrap().len()))
+            .collect();
+        assert_eq!(sizes, [(5, 64 * 1024), (5, 6 * 1024)]);
+        let bytes: Vec<u8> = frames.into_iter().flat_map(|(_, b)| b.unwrap()).collect();
+        assert_eq!(bytes, written[usize::try_from(from).unwrap()..]);
+        // At its edges: from its first byte, everything; from its end, nothing.
+        let all: Vec<u8> = (attach(start).into_iter())
+            .flat_map(|(_, b)| b.unwrap())
+            .collect();
+        assert_eq!(all, written[over..]);
+        assert_eq!(attach(end), []);
+        // Outside it, before its start or past its end: a reset, then the whole ring.
+        for from in [0, start - 1, end + 1] {
+            let mut frames = attach(from).into_iter();
+            let reset = hive_protocol::Control::TerminalReset { offset: start };
+            assert_eq!(frames.next(), Some((5, Err(reset))));
+            let all: Vec<u8> = frames.flat_map(|(_, b)| b.unwrap()).collect();
+            assert_eq!(all, written[over..]);
+        }
+        // The replay counts against the window: past the high water, the program waits.
+        let (app, mut queued) = mpsc::unbounded_channel();
+        assert!(output.reattach(app, 0));
+        let send = output.send(b"x");
+        tokio::pin!(send);
+        assert!(waits(&mut send).await);
+        output.ack(u32::try_from(RING).unwrap());
+        assert!(flows(send).await);
+        let last = replayed(&mut queued).pop();
+        assert_eq!(last, Some((5, Ok(b"x".to_vec()))));
+    }
+
     #[tokio::test]
     async fn an_output_that_is_not_kept_has_no_ring_and_stops_without_its_app() {
         let (frames, queued) = mpsc::unbounded_channel();
         let output = Output::new(1, frames.clone(), false);
+        // Nothing to reattach: it is not taken by another app.
+        let (other, mut other_queued) = mpsc::unbounded_channel();
+        assert!(!output.reattach(other, 0));
+        assert!(other_queued.try_recv().is_err());
         assert_eq!(output.kept(Ring::end), None);
         drop(queued);
         assert!(!output.send(b"x").await);
