@@ -9,10 +9,13 @@
 #   - energy.sh: its argument checks, and finding Hive's processes in and parsing canned `ps` and
 #     `top` output
 #   - release-notes.sh: the notes of a scratch repository's commits since its previous tag
+#   - linux-smoke.sh with a fake `hive`: a good one passes, each broken one fails and is stopped
+#     (TODO 26.13)
 #   - macos-bundle.sh check-updater: every macOS key of latest.json has the one tarball (TODO 26.5)
 #   - macos-bundle.sh (macOS only): its bundle check passes a correctly signed universal bundle and
-#     fails each broken one, in either architecture (TODO 17.11, 26.5); join-dsyms; smoke, with a
-#     fake `arch` (the real one under Rosetta runs in macos.yml's bundle job)
+#     fails each broken one, in either architecture (TODO 17.11, 26.5), the remote Linux builds
+#     included (26.13); join-dsyms; smoke, with a fake `arch` (the real one under Rosetta runs in
+#     macos.yml's bundle job)
 # Never touches the real environment: a temporary HOME, a scratch repository outside this one.
 # The one exception is for a CI runner only, whose keychain search list is disposable: with both
 # GITHUB_ACTIONS and REQUIRE_REAL_CERTIFICATE set (macos.yml), a real certificate signs a bundle in
@@ -489,6 +492,58 @@ check "notes: latest.json takes them with --arg, and after they are made" \
    [ "$(grep -n "name: notes" <<<"$publish" | cut -d: -f1)" -lt "$(grep -n "name: latest.json" <<<"$publish" | cut -d: -f1)" ]'
 check "notes: the release takes the same file" 'holds "$publish" "> notes.md" "--notes-file notes.md"'
 
+# --- linux-smoke.sh -----------------------------------------------------------------------------
+# A fake `hive` (Python, on both OSes): `--version`, and a `daemon` that listens on the socket
+# under XDG_RUNTIME_DIR and ends on SIGTERM; FAKE_HIVE breaks one thing, and it writes its pid to
+# FAKE_PID so a case can see it is gone afterwards.
+cat >"$tmp/fake-hive" <<'EOF'
+#!/usr/bin/env python3
+import os, signal, socket, sys, time
+mode = os.environ.get("FAKE_HIVE", "good")
+if sys.argv[1:] == ["--version"]:
+    print("hive 1.2.3")
+    sys.exit(0)
+assert sys.argv[1:] == ["daemon"], sys.argv
+open(os.environ["FAKE_PID"], "w").write(str(os.getpid()))
+if mode == "dies":
+    sys.exit(1)
+run = os.path.join(os.environ["XDG_RUNTIME_DIR"], "hive")
+os.makedirs(run)
+path = os.path.join(run, "hive.sock")
+if mode != "deaf":
+    server = socket.socket(socket.AF_UNIX)
+    server.bind(path)
+    server.listen()
+def term(*_):
+    if mode not in ("deaf", "leaves"):
+        os.unlink(path)
+    os._exit(3 if mode == "fails" else 0)
+signal.signal(signal.SIGTERM, signal.SIG_IGN if mode == "stubborn" else term)
+while True:
+    time.sleep(0.1)
+EOF
+chmod +x "$tmp/fake-hive"
+export FAKE_PID=$tmp/fake-hive.pid
+smoke() { FAKE_HIVE=$1 SMOKE_TICKS=30 scripts/linux-smoke.sh "${2:-$tmp/fake-hive}" "${3:-1.2.3}" 2>&1; }
+gone() { local t; for t in 1 2 3 4 5 6 7 8 9 10; do kill -0 "$(cat "$FAKE_PID")" 2>/dev/null || return 0; sleep 0.2; done; return 1; }
+o=$(smoke good); status=$?
+check "linux-smoke: a good hive passes" \
+  '[ $status = 0 ] && has "$o" "ok    hive 1.2.3" "ok    the daemon listens" "ok    the daemon ends on SIGTERM"'
+check "linux-smoke: another version fails" 'holds "$(smoke good "" 1.2.4)" "not '\''hive 1.2.4'\''"'
+check "linux-smoke: a daemon that ends at once fails" 'holds "$(smoke dies)" "ended before it listened"'
+check "linux-smoke: a daemon that never listens fails, and is stopped" \
+  'holds "$(smoke deaf)" "did not listen" && gone'
+check "linux-smoke: a daemon that ignores SIGTERM fails, and is stopped" \
+  'holds "$(smoke stubborn)" "still runs after SIGTERM" && gone'
+check "linux-smoke: a failing status on SIGTERM fails" 'holds "$(smoke fails)" "ended with status 3"'
+check "linux-smoke: a socket left behind fails" 'holds "$(smoke leaves)" "left its socket"'
+cp "$tmp/fake-hive" "$tmp/fake-hive-noexec"
+chmod -x "$tmp/fake-hive-noexec"
+check "linux-smoke: a file that is not executable fails" \
+  'holds "$(smoke good "$tmp/fake-hive-noexec")" "not an executable"'
+check "linux-smoke: a wrong call fails" '! scripts/linux-smoke.sh "$tmp/fake-hive" >/dev/null 2>&1'
+unset FAKE_PID
+
 # --- macos-bundle.sh check (macOS only: codesign) -----------------------------------------------
 # A small bundle shaped like Hive.app, with the real Info.plist keys and entitlements, signed
 # ad-hoc as the macos.yml bundle is; each case breaks one thing and re-signs the app.
@@ -506,6 +561,24 @@ if [ "$(uname)" = Darwin ]; then
   plutil -insert CFBundleIconName -string AppIcon "$app/Contents/Info.plist"
   cp src-tauri/icons/Assets.car "$app/Contents/Resources/Assets.car"
   new_hive() { universal "$app/Contents/Resources/hive"; }
+  plutil -insert CFBundleShortVersionString -string 1.2.3 "$app/Contents/Info.plist"
+  # A small ELF (TODO 26.13): its header, its program headers of these types (1 PT_LOAD, 3
+  # PT_INTERP, which a dynamically linked one has, 6 PT_PHDR), then the version it carries.
+  elf() { # elf <path> <e_machine> <p_type,…> <version>
+    python3 - "$@" <<'EOF'
+import struct, sys
+path, machine, version = sys.argv[1], int(sys.argv[2]), sys.argv[4]
+kinds = [int(kind) for kind in sys.argv[3].split(",")]
+header = b"\x7fELF\x02\x01\x01" + bytes(9) + struct.pack("<HHIQQQIHHHHHH", 2, machine, 1, 0, 64, 0, 0, 64, 56, len(kinds), 64, 0, 0)
+phdrs = b"".join(struct.pack("<IIQQQQQQ", kind, 5, 0, 0, 0, 0, 0, 0) for kind in kinds)
+open(path, "wb").write(header + phdrs + b"\0clap " + version.encode() + b"\0")
+EOF
+    chmod 755 "$1"
+  }
+  linux_x86=$app/Contents/Resources/hive-linux-x86_64
+  linux_arm=$app/Contents/Resources/hive-linux-aarch64
+  linux_builds() { elf "$linux_x86" 62 6,1 1.2.3 && elf "$linux_arm" 183 6,1 1.2.3; }
+  linux_builds
   seal() { codesign --force --sign - --options runtime "$@" "$app" 2>/dev/null; }
   bundle_check() { scripts/macos-bundle.sh check "$app" "$@" >/dev/null 2>&1; }
   new_hive
@@ -601,6 +674,34 @@ if [ "$(uname)" = Darwin ]; then
   mv "$tmp/Assets.car" "$app/Contents/Resources/Assets.car"
   seal --entitlements src-tauri/Entitlements.plist
   check "bundle: restored, it passes again" 'bundle_check'
+  # The remote Linux services (TODO 26.13): data to codesign, sealed by the app's signature.
+  bundle_says() { [[ $(scripts/macos-bundle.sh check "$app" 2>&1) == *"$1"* ]]; }
+  linux_case() { # linux_case <name> <expected error> <command that breaks it>
+    expected=$2
+    eval "$3"
+    seal --entitlements src-tauri/Entitlements.plist
+    check "bundle: $1 fails" 'bundle_says "$expected"'
+    linux_builds
+  }
+  linux_case "no hive-linux-x86_64" "no hive-linux-x86_64" 'rm "$linux_x86"'
+  linux_case "no hive-linux-aarch64" "no hive-linux-aarch64" 'rm "$linux_arm"'
+  linux_case "a hive-linux not executable" "not executable" 'chmod 644 "$linux_arm"'
+  linux_case "a hive-linux that is no ELF" "not a 64-bit" 'printf "#!/bin/sh\n" >"$linux_x86"'
+  linux_case "a hive-linux for the other CPU" "not built for its CPU" 'elf "$linux_x86" 183 6,1 1.2.3'
+  linux_case "a dynamically linked hive-linux" "dynamically linked" 'elf "$linux_arm" 183 6,3,1 1.2.3'
+  linux_case "a hive-linux with nothing to load" "nothing to load" 'elf "$linux_x86" 62 6 1.2.3'
+  linux_case "a hive-linux of another version" "does not carry version 1.2.3" 'elf "$linux_x86" 62 6,1 1.2.4'
+  linux_case "a hive-linux of a version that only ends like it" "does not carry version 1.2.3" \
+    'elf "$linux_arm" 183 6,1 11.2.3'
+  linux_case "no CFBundleShortVersionString" "no CFBundleShortVersionString" \
+    'plutil -remove CFBundleShortVersionString "$app/Contents/Info.plist"'
+  plutil -insert CFBundleShortVersionString -string 1.2.3 "$app/Contents/Info.plist"
+  seal --entitlements src-tauri/Entitlements.plist
+  check "bundle: with both hive-linux, it passes" 'bundle_check'
+  printf x >>"$linux_x86"
+  check "bundle: a hive-linux changed after signing fails" '! bundle_check'
+  linux_builds
+  seal --entitlements src-tauri/Entitlements.plist
   # Another signer for the nested hive: a second real identity would need a keychain on the
   # user's search list (the real environment), so a wrapper around /usr/bin/codesign reports the
   # hive's signature as a certificate's (an Authority chain and a team).

@@ -2,7 +2,11 @@
   "$schema": "https://schema.tauri.app/config/2",
   "bundle": {
     "targets": ["app", "dmg"],
-    "resources": { "resources/hive": "hive" },
+    "resources": {
+      "resources/hive": "hive",
+      "resources/hive-linux-x86_64": "hive-linux-x86_64",
+      "resources/hive-linux-aarch64": "hive-linux-aarch64"
+    },
     "macOS": {
       "signingIdentity": "-",
       "hardenedRuntime": true,

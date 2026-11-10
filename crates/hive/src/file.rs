@@ -760,17 +760,30 @@ fn relink(from: &Path, to: &Path, unlink: &dyn Fn(&Path) -> io::Result<()>) -> i
 }
 
 /// Renames `from` to `to` in one step, failing (`EEXIST`) when `to` exists, where `rename(2)`
-/// would replace an empty folder. Used by path, as [`relink`].
+/// would replace an empty folder. Used by path, as [`relink`]. The system call itself: nix wraps
+/// `renameat2` only for glibc, and the musl the remote hosts' build links (26.13) has none.
 #[cfg(target_os = "linux")]
 pub(crate) fn rename_new(from: &Path, to: &Path) -> io::Result<()> {
-    use nix::fcntl::{AT_FDCWD, RenameFlags, renameat2};
-    Ok(renameat2(
-        AT_FDCWD,
-        from,
-        AT_FDCWD,
-        to,
-        RenameFlags::RENAME_NOREPLACE,
-    )?)
+    use nix::libc;
+    use std::ffi::CString;
+    use std::os::unix::ffi::OsStrExt;
+    let c = |path: &Path| CString::new(path.as_os_str().as_bytes()).map_err(io::Error::other);
+    let (from, to) = (c(from)?, c(to)?);
+    // SAFETY: renameat2's arguments, both paths NUL-terminated strings that live until the call
+    // returns.
+    match unsafe {
+        libc::syscall(
+            libc::SYS_renameat2,
+            libc::AT_FDCWD,
+            from.as_ptr(),
+            libc::AT_FDCWD,
+            to.as_ptr(),
+            libc::RENAME_NOREPLACE,
+        )
+    } {
+        0 => Ok(()),
+        _ => Err(io::Error::last_os_error()),
+    }
 }
 
 #[cfg(target_os = "macos")]
@@ -1319,6 +1332,25 @@ mod tests {
     use serde_json::json;
     #[cfg(unix)]
     use std::os::unix::fs::PermissionsExt;
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_rename_never_replaces_an_entry() {
+        let dir = tempfile::tempdir().unwrap();
+        let at = |name: &str| dir.path().join(name);
+        fs::create_dir(at("a")).unwrap();
+        fs::create_dir(at("empty")).unwrap();
+        fs::write(at("f"), "f").unwrap();
+        for taken in ["empty", "f"] {
+            let err = rename_new(&at("a"), &at(taken)).unwrap_err();
+            assert_eq!(err.kind(), io::ErrorKind::AlreadyExists, "{taken}");
+        }
+        rename_new(&at("a"), &at("b")).unwrap();
+        assert!(at("b").is_dir() && !at("a").exists());
+        assert!(rename_new(&at("b\0"), &at("c")).is_err());
+        assert!(rename_new(&at("b"), &at("c\0")).is_err());
+        assert!(at("b").is_dir());
+    }
 
     fn file(content: Option<&str>, base: Option<&str>) -> Control {
         Control::File {

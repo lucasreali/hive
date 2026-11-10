@@ -111,8 +111,17 @@ jobs:
             target/release/bundle/nsis/*-setup.exe.sig
           if-no-files-found: error
 
-  macos:
+  # The remote Linux `hive` (TODO 26.13): static x86_64 and aarch64 builds, each run in an
+  # old-glibc container, for the macOS app to carry: they ship only inside the .dmg, never as
+  # release assets. Built without the cargo cache, from a clean tree.
+  linux-remote:
     needs: ci-green
+    uses: ./.github/workflows/linux-remote.yml
+    with:
+      cache: false
+
+  macos:
+    needs: [ci-green, linux-remote]
     # Universal, Apple Silicon and Intel (D18.8, TODO 26.5). macos-26 since GitHub retired macos-14
     # (the human, 2026-11-05).
     runs-on: macos-26
@@ -169,6 +178,14 @@ jobs:
           mkdir -p src-tauri/resources
           lipo -create -output src-tauri/resources/hive \
             target/aarch64-apple-darwin/release/hive target/x86_64-apple-darwin/release/hive
+      # Data to codesign: the app's signature seals them as resources, nothing signs them.
+      - uses: actions/download-artifact@v7
+        with:
+          pattern: hive-linux-*
+          path: src-tauri/resources
+          merge-multiple: true
+      # An artifact keeps no file mode.
+      - run: chmod 755 src-tauri/resources/hive-linux-*
       - run: bun install --frozen-lockfile
       # The frontend and the app binary of both architectures, joined, without signing anything.
       - run: bun tauri build --no-bundle --target universal-apple-darwin --config src-tauri/tauri.release.macos.conf.json

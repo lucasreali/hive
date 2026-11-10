@@ -52,6 +52,9 @@ mod pulls;
 #[cfg(unix)]
 #[cfg(test)]
 mod registry;
+#[cfg(target_os = "linux")]
+#[cfg(test)]
+mod remote;
 #[cfg(unix)]
 #[cfg(test)]
 mod scripts;
