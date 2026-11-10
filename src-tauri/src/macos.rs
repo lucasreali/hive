@@ -1339,7 +1339,7 @@ mod tests {
         };
         assert!(observe_wake(count));
         // The class exists now: a second observer is refused, and the first `wake` is kept.
-        assert!(!observe_wake(|| {}));
+        assert!(!observe_wake(count));
         let post = || {
             // SAFETY: `postNotificationName:object:` with AppKit's name and nil; delivered at
             // once, on this thread.

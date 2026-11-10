@@ -991,9 +991,25 @@ async fn the_local_settings_link_the_hosts_and_requests_go_to_each_host_s_link()
     hive.reconnect_host("gpu").unwrap();
     tokio::time::sleep(Duration::from_millis(200)).await;
     assert_eq!(lab.runs().len(), 1);
+    // After a WebContent crash a remote's terminals are kept too (18.21).
+    hive.web_content_terminated();
+    let (channel, mut crashed) = ui();
+    hive.connect(channel);
+    let kept = next_of(&mut crashed, "terminal_kept").await;
+    assert_eq!(
+        (kept["channel"].as_u64(), kept["host"].as_str()),
+        (Some(2), Some("gpu"))
+    );
+    // It asks the remote's service for what the UI shows again.
+    for asked in [Control::GetSettings, Control::ListProjects, Control::Resync] {
+        assert_eq!(remote.control().await, (0, asked));
+    }
     // A reloaded UI gets each host's state and welcome again.
     let (channel, mut reloaded) = ui();
     hive.connect(channel);
+    // Its old terminals close, the remote's too.
+    assert_eq!(local.control().await, (1, Control::CloseTerminal));
+    assert_eq!(remote.control().await, (2, Control::CloseTerminal));
     let mut seen = Vec::new();
     while !seen
         .iter()
@@ -1008,6 +1024,17 @@ async fn the_local_settings_link_the_hosts_and_requests_go_to_each_host_s_link()
     }
     let connected = |m: &Value| m["type"] == "host_link" && m["state"] == "connected";
     assert!(seen.iter().any(connected), "{seen:?}");
+    // The same host in new settings keeps its link; the keep time counts from its next link.
+    let link = hive.on(Some("gpu")).unwrap().link;
+    let mut settings = hive_protocol::Settings::default();
+    settings.remote = self::settings(&["gpu"], 7);
+    local.send(0, Control::Settings { settings }).await;
+    let remotes = hive.remotes().unwrap();
+    while remotes.keep_secs.load(SeqCst) != 7 * 60 {
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    assert!(Arc::ptr_eq(&hive.on(Some("gpu")).unwrap().link, &link));
+    assert_eq!(lab.runs().len(), 1);
     // A host taken out of the settings ends its link.
     let settings = hive_protocol::Settings::default();
     local.send(0, Control::Settings { settings }).await;

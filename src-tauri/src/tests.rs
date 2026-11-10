@@ -2036,6 +2036,8 @@ fn commands_reach_the_managed_hive() {
         .manage(sh("cat >/dev/null"))
         .invoke_handler(tauri::generate_handler![
             connect,
+            reconnect_host,
+            restart_remote,
             open_terminal,
             attach_terminal,
             write_terminal,
@@ -2263,6 +2265,12 @@ fn commands_reach_the_managed_hive() {
         assert_eq!(invoke(&webview, cmd, args.clone()), not_connected, "{cmd}");
     }
 
+    // The managed `Hive` links to no remote host.
+    let none = Err(json!("this app links to no remote host"));
+    let host = json!({"host": "gpu"});
+    assert_eq!(invoke(&webview, "reconnect_host", host.clone()), none);
+    assert_eq!(invoke(&webview, "restart_remote", host), none);
+
     let path = json!({"path": "C:\\x.bat", "reveal": false});
     let unasked = json!("Hive opens only a path the service sent: C:\\x.bat");
     assert_eq!(invoke(&webview, "open_path", path), Err(unasked));
@@ -2409,7 +2417,7 @@ async fn shutdown_kills_a_bridge_that_does_not_end() {
 #[test]
 fn the_app_exit_ends_the_connection() {
     let app = mock_builder()
-        .manage(sh("cat >/dev/null"))
+        .manage(sh("cat >/dev/null").with_remote("/nonexistent/ssh".into(), "/nonexistent".into()))
         .invoke_handler(tauri::generate_handler![connect, list_projects])
         .build(mock_context(noop_assets()))
         .unwrap();
@@ -3063,6 +3071,18 @@ fn the_window_comes_up_when_there_is_one() {
     // A Dock click brings it back only when no window shows.
     assert!(reopen(app.handle(), false));
     assert!(!reopen(app.handle(), true));
+}
+
+#[test]
+fn a_wake_reaches_the_app_s_hive_if_any() {
+    let app = mock_builder().build(mock_context(noop_assets())).unwrap();
+    woke(app.handle());
+    let app = mock_builder()
+        .manage(hive().with_remote("/nonexistent/ssh".into(), "/nonexistent".into()))
+        .build(mock_context(noop_assets()))
+        .unwrap();
+    woke(app.handle());
+    assert!(app.state::<Hive>().link().remotes.is_some());
 }
 
 /// Sends `message` from the service on `channel` and waits for the UI to get it.
