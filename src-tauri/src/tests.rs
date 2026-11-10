@@ -1001,6 +1001,7 @@ async fn pumped(frames: Vec<Frame>) -> [Vec<Vec<u8>>; 2] {
     let mut outputs = [1, 2].map(|channel| {
         let (output, rx) = output();
         let term = Term {
+            ui: channel,
             output,
             cwd: "/w".into(),
             worktree: Value::Null,
@@ -1057,6 +1058,7 @@ async fn terminal_output_goes_at_once_without_waiting_for_more() {
     let link = Mutex::new(Link::default());
     let (output, mut rx) = output();
     let term = Term {
+        ui: 1,
         output,
         cwd: "/w".into(),
         worktree: Value::Null,
@@ -1570,7 +1572,7 @@ async fn a_message_over_the_frame_limit_is_refused_and_the_link_keeps_working() 
 #[tokio::test]
 async fn channel_numbers_run_out_instead_of_wrapping() {
     let (hive, _service, _rx) = welcomed().await;
-    hive.link().last_channel = u32::MAX;
+    hive.link().ids.store(u32::MAX, SeqCst);
     let (channel, _bytes) = output();
     assert_eq!(
         hive.open_terminal("/".into(), 80, 24, None, channel),
@@ -1878,6 +1880,7 @@ async fn version_mismatch_is_final_and_not_a_disconnect() {
     let refused = Control::VersionMismatch {
         protocol: 9,
         version: "9.9.9".into(),
+        terminals: Some(2),
     };
     service.send(0, refused).await;
     assert_eq!(
@@ -1886,6 +1889,7 @@ async fn version_mismatch_is_final_and_not_a_disconnect() {
             "type": "version_mismatch",
             "protocol": 9,
             "version": "9.9.9",
+            "terminals": 2,
             "app_version": VERSION,
             "app_protocol": PROTOCOL_VERSION,
             "bundled": true,
@@ -3093,6 +3097,7 @@ async fn quitting_asks_the_ui_while_agents_would_end_with_the_app() {
     hive.link().terminals.insert(
         5,
         Term {
+            ui: 5,
             output,
             cwd,
             worktree,

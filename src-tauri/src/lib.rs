@@ -11,6 +11,7 @@ use std::future::Future;
 use std::io::Read as _;
 use std::path::{Path, PathBuf};
 use std::process::{Output, Stdio};
+use std::sync::atomic::{AtomicU32, Ordering::SeqCst};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, Instant};
 
@@ -389,7 +390,8 @@ pub struct Hive {
     bridge: Bridge,
     /// The choice of WSL or Windows (12.5.4); none on macOS.
     modes: Option<Modes>,
-    link: Arc<Mutex<Link>>,
+    /// The link to the local service; `Hive` derefs to it, so its requests go there.
+    local: Host,
     /// Held through a whole `reconnect`, so two mode switches never overlap: one would start its
     /// bridge while the other still ends the old one, whose end then cuts the new connection.
     reconnecting: tokio::sync::Mutex<()>,
@@ -768,6 +770,9 @@ pub fn double_click_action(setting: Option<&str>) -> &'static str {
 /// An open terminal: where its output goes, and where it runs, for a UI reloaded after a
 /// WebContent crash to show its tab again (`terminal_kept`).
 struct Term {
+    /// The id the UI knows it by (26.17): unique across every link, so ids never clash; the
+    /// frame channel of a terminal this app opened.
+    ui: u32,
     output: Channel<InvokeResponseBody>,
     cwd: String,
     /// Its `terminal_opened`'s `worktree` and `account` (21.7); null until then.
@@ -788,7 +793,19 @@ struct Link {
     /// The WebContent process died (18.21, D18.5): the next `connect` is its reloaded UI,
     /// which keeps the terminals.
     crashed: bool,
-    last_channel: u32,
+    /// The last terminal id given, shared by every link (26.17): an id is a new terminal's
+    /// frame channel and the UI's id for it.
+    ids: Arc<AtomicU32>,
+    /// The remote host this link reaches (26.17); `None` for the local service. Its messages
+    /// to the UI carry it as `host`.
+    host: Option<String>,
+    /// A remote's refusal of the handshake (`version_mismatch`), for its link's state.
+    refused: Option<Value>,
+    /// A remote link's last state (`host_link`), replayed to a reloaded UI.
+    status: Option<Value>,
+    /// The remote links, which the local service's `remote` settings start and end (26.17);
+    /// on the local link only.
+    remotes: Option<Arc<remote::Remotes>>,
     /// Reads the service until the connection ends; it owns the bridge process.
     reader: Option<JoinHandle<()>>,
     /// The newer release `check_update` found and downloaded, for `install_update` or the
@@ -875,6 +892,11 @@ impl Link {
             (Some("uninstalled"), _) => self.update = None,
             (Some("settings"), _) => {
                 self.confirm_close = message["settings"]["agents"]["confirm_close"].as_bool();
+                // The local service's `remote` settings say which hosts to link to (26.17).
+                if let Some(remotes) = &self.remotes {
+                    let settings = serde_json::from_value(message["settings"]["remote"].clone());
+                    remotes.sync(settings.unwrap_or_default(), self.ui.as_ref());
+                }
             }
             _ => {}
         }
@@ -907,20 +929,128 @@ impl Link {
         self.frame(Frame::control(channel, message))
     }
 
-    /// Sends `message` on a new channel and returns it.
+    /// Sends `message` on a new channel and returns it: the next id of every link's, past any
+    /// channel this link already uses (a remote's kept terminal keeps its own).
     fn open(&mut self, message: &Control) -> Result<u32, String> {
-        let id = self
-            .last_channel
-            .checked_add(1)
-            .ok_or("no terminal channel left")?;
+        // No id is taken while there is no connection.
+        if self.frames.is_none() {
+            return Err(NOT_CONNECTED.to_owned());
+        }
+        let mut id = 0;
+        // Bounded: each id tried but the last is a terminal of this link.
+        for _ in 0..=self.terminals.len() {
+            let next = |id: u32| id.checked_add(1);
+            id = (self.ids.try_update(SeqCst, SeqCst, next))
+                .map_err(|_| "no terminal channel left")?
+                + 1;
+            if !self.terminals.contains_key(&id) {
+                break;
+            }
+        }
         self.send(id, message)?;
-        self.last_channel = id;
         Ok(id)
+    }
+
+    /// Replays the connection to a reloaded UI: `welcome`, each terminal kept through a
+    /// WebContent crash (`terminal_kept`), then the settings, projects and states again.
+    fn replay(&mut self) {
+        let Some(welcome) = self.welcome.clone() else {
+            return;
+        };
+        self.to_ui(welcome);
+        let mut kept: Vec<_> = self.terminals.values().collect();
+        kept.sort_by_key(|term| term.ui);
+        for term in kept {
+            let (id, cwd, worktree, account) = (term.ui, &term.cwd, &term.worktree, &term.account);
+            let message = json!({"type": "terminal_kept", "channel": id, "cwd": cwd, "worktree": worktree, "account": account});
+            self.to_ui(self.tagged(message));
+        }
+        let _ = self.send(0, &Control::GetSettings);
+        let _ = self.send(0, &Control::ListProjects);
+        let _ = self.send(0, &Control::Resync);
+    }
+
+    /// The frame channel of the terminal the UI knows as `ui`.
+    fn channel(&self, ui: u32) -> Option<u32> {
+        let mut found = self.terminals.iter().filter(|(_, term)| term.ui == ui);
+        found.next().map(|(channel, _)| *channel)
+    }
+
+    /// Ends what this link knows of its service's terminals: each one's tab is told it exited.
+    fn end_terminals(&mut self) {
+        let mut ended: Vec<u32> = self.terminals.drain().map(|(_, term)| term.ui).collect();
+        ended.sort_unstable();
+        for ui in ended {
+            self.to_ui(
+                self.tagged(json!({"type": "terminal_exited", "channel": ui, "code": null})),
+            );
+        }
+    }
+
+    /// `message` with this link's `host`, for a remote's (26.17).
+    fn tagged(&self, mut message: Value) -> Value {
+        if let Some(host) = &self.host {
+            message["host"] = host.as_str().into();
+        }
+        message
     }
 }
 
 fn lock(link: &Mutex<Link>) -> MutexGuard<'_, Link> {
     link.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
+/// One link's requests (26.17): the local service's (`Hive` derefs to it) or a remote host's
+/// ([`Hive::on`]).
+#[derive(Clone)]
+pub struct Host {
+    link: Arc<Mutex<Link>>,
+}
+
+impl Host {
+    fn link(&self) -> MutexGuard<'_, Link> {
+        lock(&self.link)
+    }
+
+    /// Opens a terminal on a new channel; its output goes to `output`. Returns its id, also its
+    /// channel.
+    /// A terminal in `cwd` with the Claude `account` asked for (12.2; `None`: the current one).
+    pub fn open_terminal(
+        &self,
+        cwd: String,
+        cols: u16,
+        rows: u16,
+        account: Option<AccountDir>,
+        output: Channel<InvokeResponseBody>,
+    ) -> Result<u32, String> {
+        let mut link = self.link();
+        let open = Control::OpenTerminal {
+            cwd: cwd.clone(),
+            cols,
+            rows,
+            account,
+        };
+        let id = link.open(&open)?;
+        link.terminals.insert(
+            id,
+            Term {
+                ui: id,
+                output,
+                cwd,
+                worktree: Value::Null,
+                account: Value::Null,
+            },
+        );
+        Ok(id)
+    }
+}
+
+impl std::ops::Deref for Hive {
+    type Target = Host;
+
+    fn deref(&self) -> &Host {
+        &self.local
+    }
 }
 
 /// How a connection ended.
@@ -938,7 +1068,9 @@ impl Hive {
         Self {
             bridge: (program, args, false),
             modes: None,
-            link: Arc::default(),
+            local: Host {
+                link: Arc::default(),
+            },
             reconnecting: tokio::sync::Mutex::default(),
             serving: tokio::sync::Semaphore::new(SERVING),
             waiting: tokio::sync::Semaphore::new(SERVING + QUEUED),
@@ -1272,8 +1404,59 @@ impl Hive {
         self
     }
 
-    fn link(&self) -> MutexGuard<'_, Link> {
-        lock(&self.link)
+    /// Links to the remote hosts of the local service's settings (26.17) through `ssh`, which
+    /// installs on a host the Linux build of `hive` found in `builds` (`hive-linux-<cpu>`).
+    pub fn with_remote(self, ssh: OsString, builds: PathBuf) -> Self {
+        let ids = Arc::clone(&self.link().ids);
+        self.link().remotes = Some(Arc::new(remote::Remotes::new(ssh, builds, ids)));
+        self
+    }
+
+    fn remotes(&self) -> Result<Arc<remote::Remotes>, String> {
+        let remotes = self.link().remotes.clone();
+        remotes.ok_or_else(|| "this app links to no remote host".to_owned())
+    }
+
+    /// Tries the link to `host` again now (its Reconnect, 26.17), whatever stopped it.
+    pub fn reconnect_host(&self, host: &str) -> Result<(), String> {
+        self.remotes()?.reconnect(host)
+    }
+
+    /// Restarts `host`'s service of another version (Q8): `hive bridge --replace` ends it, and
+    /// its terminals with it, and starts this app's.
+    pub fn restart_remote(&self, host: &str) -> Result<(), String> {
+        self.remotes()?.restart(host)
+    }
+
+    /// The computer woke from sleep (Q7): each remote link waiting to reconnect tries at once.
+    pub fn woke(&self) {
+        if let Ok(remotes) = self.remotes() {
+            remotes.wake();
+        }
+    }
+
+    /// The link to `host` (26.17): a remote's by its alias, the local service's for `None`.
+    pub fn on(&self, host: Option<&str>) -> Result<Host, String> {
+        let Some(host) = host else {
+            return Ok(self.local.clone());
+        };
+        let remotes = self.link().remotes.clone();
+        let link = remotes.and_then(|remotes| remotes.link(host));
+        link.map(|link| Host { link })
+            .ok_or_else(|| format!("no link to the host {host}"))
+    }
+
+    /// The link holding the terminal the UI knows as `id`, and its frame channel there; the
+    /// local link and `id` itself when none does (its requests then fail as they did).
+    fn terminal(&self, id: u32) -> (Host, u32) {
+        let local = self.link().channel(id);
+        if let Some(channel) = local {
+            return (self.local.clone(), channel);
+        }
+        let remotes = self.link().remotes.clone();
+        let found = remotes.and_then(|remotes| remotes.terminal(id));
+        let found = found.map(|(link, channel)| (Host { link }, channel));
+        found.unwrap_or_else(|| (self.local.clone(), id))
     }
 
     /// Files dropped from Finder on the window (18.1), at (`x`, `y`) in points from its top
@@ -1302,10 +1485,15 @@ impl Hive {
             link.to_ui(json!({"type": "translocated", "notice": notice}));
         }
         // After a WebContent crash the agents in them live on: the UI reattaches (18.21).
-        if !std::mem::take(&mut link.crashed) {
+        let crashed = std::mem::take(&mut link.crashed);
+        if !crashed {
             for id in std::mem::take(&mut link.terminals).into_keys() {
                 let _ = link.send(id, &Control::CloseTerminal);
             }
+        }
+        // The remote links (26.17) give the same UI their own.
+        if let Some(remotes) = link.remotes.clone() {
+            remotes.connect(&ui_of(&link), crashed);
         }
         let bridge = match &self.modes {
             None => &self.bridge,
@@ -1320,19 +1508,7 @@ impl Hive {
             }
         };
         if link.frames.is_some() {
-            if let Some(welcome) = link.welcome.clone() {
-                link.to_ui(welcome);
-                let mut kept: Vec<_> = link.terminals.iter().collect();
-                kept.sort_by_key(|(id, _)| **id);
-                for (id, term) in kept {
-                    let (cwd, worktree, account) = (&term.cwd, &term.worktree, &term.account);
-                    let message = json!({"type": "terminal_kept", "channel": id, "cwd": cwd, "worktree": worktree, "account": account});
-                    link.to_ui(message);
-                }
-                let _ = link.send(0, &Control::GetSettings);
-                let _ = link.send(0, &Control::ListProjects);
-                let _ = link.send(0, &Control::Resync);
-            }
+            link.replay();
             return;
         }
         link.bundled = bridge.2;
@@ -1346,28 +1522,9 @@ impl Hive {
     }
 
     fn spawn(&self, (program, args, _): &Bridge) -> std::io::Result<()> {
-        let mut command = tokio::process::Command::new(program);
-        command
-            .args(args)
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .kill_on_drop(true);
-        #[cfg(windows)]
-        command.creation_flags(0x0800_0000); // CREATE_NO_WINDOW: no console window for wsl.exe
-        let mut child = command.spawn()?;
-        let stdin = pipe(child.stdin.take())?;
-        let stdout = pipe(child.stdout.take())?;
-        let stderr = pipe(child.stderr.take())?;
-        // Owns the child until the connection ends (it is killed on drop), then explains the end.
+        let (stdout, stdin, exit) = start(program, args)?;
         let exit = async move {
-            let mut text = Vec::new();
-            let finish = async {
-                let _ = stderr.take(STDERR_LIMIT).read_to_end(&mut text).await;
-                let _ = child.wait().await;
-            };
-            let _ = tokio::time::timeout(EXIT_WAIT, finish).await;
-            let text = String::from_utf8_lossy(&text).trim().to_owned();
+            let text = exit.await;
             if text.is_empty() {
                 "the hive bridge exited".to_owned()
             } else {
@@ -1386,20 +1543,11 @@ impl Hive {
         writer: impl AsyncWrite + Unpin + Send + 'static,
         exit: impl Future<Output = String> + Send + 'static,
     ) {
-        let (frames, mut queue) = mpsc::unbounded_channel();
-        let _ = frames.send(Frame::control(0, &Control::hello(Role::App, VERSION)));
-        self.link().frames = Some(frames);
-        tokio::spawn(async move {
-            let mut writer = FramedWrite::new(writer, FrameCodec);
-            while let Some(frame) = queue.recv().await {
-                if writer.send(frame).await.is_err() {
-                    break;
-                }
-            }
-        });
+        let hello = Control::hello(Role::App, VERSION);
+        let ended = speak(&self.link, reader, writer, &hello);
         let link = self.link.clone();
         let task = tokio::spawn(async move {
-            let reason = match pump(&link, FramedRead::new(reader, FrameCodec)).await {
+            let reason = match ended.await {
                 End::Refused => return,
                 End::Closed => exit.await,
                 End::Broken(error) => error,
@@ -1426,36 +1574,6 @@ impl Hive {
         }
     }
 
-    /// Opens a terminal on a new channel; its output goes to `output`. Returns the channel.
-    /// A terminal in `cwd` with the Claude `account` asked for (12.2; `None`: the current one).
-    pub fn open_terminal(
-        &self,
-        cwd: String,
-        cols: u16,
-        rows: u16,
-        account: Option<AccountDir>,
-        output: Channel<InvokeResponseBody>,
-    ) -> Result<u32, String> {
-        let mut link = self.link();
-        let open = Control::OpenTerminal {
-            cwd: cwd.clone(),
-            cols,
-            rows,
-            account,
-        };
-        let id = link.open(&open)?;
-        link.terminals.insert(
-            id,
-            Term {
-                output,
-                cwd,
-                worktree: Value::Null,
-                account: Value::Null,
-            },
-        );
-        Ok(id)
-    }
-
     /// The WebContent process died (18.21, D18.5); its page reloads, and that UI's `connect`
     /// keeps the terminals.
     pub fn web_content_terminated(&self) {
@@ -1469,33 +1587,128 @@ impl Hive {
         id: u32,
         output: Channel<InvokeResponseBody>,
     ) -> Result<(), String> {
-        let mut link = self.link();
-        let term = link.terminals.get_mut(&id).ok_or("no such terminal")?;
+        let (host, channel) = self.terminal(id);
+        let mut link = host.link();
+        let term = link.terminals.get_mut(&channel).ok_or("no such terminal")?;
         term.output = output;
-        link.send(id, &Control::Ack { bytes: u32::MAX })
+        link.send(channel, &Control::Ack { bytes: u32::MAX })
     }
 
-    /// Keystrokes or pasted text, split to fit the frame size limit.
+    /// Keystrokes or pasted text, split to fit the frame size limit. Each terminal request goes
+    /// to the link holding terminal `id` (26.17).
     pub fn write_terminal(&self, id: u32, data: &str) -> Result<(), String> {
-        let link = self.link();
+        let (host, channel) = self.terminal(id);
+        let link = host.link();
         data.as_bytes()
             .chunks(MAX_PAYLOAD)
-            .try_for_each(|chunk| link.frame(Frame::terminal(id, chunk.to_vec())))
+            .try_for_each(|chunk| link.frame(Frame::terminal(channel, chunk.to_vec())))
     }
 
     pub fn resize_terminal(&self, id: u32, cols: u16, rows: u16) -> Result<(), String> {
-        self.link().send(id, &Control::Resize { cols, rows })
+        let (host, channel) = self.terminal(id);
+        let sent = host.link().send(channel, &Control::Resize { cols, rows });
+        sent
     }
 
     pub fn close_terminal(&self, id: u32) -> Result<(), String> {
-        self.link().send(id, &Control::CloseTerminal)
+        let (host, channel) = self.terminal(id);
+        let sent = host.link().send(channel, &Control::CloseTerminal);
+        sent
     }
 
     /// `bytes` more of terminal `id`'s output were written to its screen (9.19).
     pub fn ack_terminal(&self, id: u32, bytes: u32) -> Result<(), String> {
-        self.link().send(id, &Control::Ack { bytes })
+        let (host, channel) = self.terminal(id);
+        let sent = host.link().send(channel, &Control::Ack { bytes });
+        sent
     }
 
+    /// The `hive-file:` scheme's answer for the URL path `path` (`/<token>/<path>`, 24.2): the
+    /// whole file, pulled from the service in reads of [`READ_LIMIT`], as the type the service
+    /// read from its bytes; a file that changes meanwhile fails. At most [`SERVING`] at once,
+    /// [`QUEUED`] more waiting; past them, `503`.
+    pub async fn serve_file(&self, path: &str) -> Response<Vec<u8>> {
+        let macos = cfg!(target_os = "macos");
+        let Ok(_place) = self.waiting.try_acquire() else {
+            let busy = Err("too many files asked for at once".to_owned());
+            let mut answer = scheme::response(busy, macos);
+            *answer.status_mut() = tauri::http::StatusCode::SERVICE_UNAVAILABLE;
+            return answer;
+        };
+        // Never closed, so this always holds a permit until the answer is built.
+        let _held = self.serving.acquire().await;
+        scheme::response(self.whole_file(path).await, macos)
+    }
+
+    async fn whole_file(&self, path: &str) -> Result<(String, Vec<u8>), String> {
+        let (token, file) = scheme::request(path).ok_or("not a file URL")?;
+        let (size, mime, version, mut body) = self.read_file(&token, &file, 0).await?;
+        for _ in 0..READS {
+            if body.len() as u64 >= size {
+                break;
+            }
+            let (_, _, now, bytes) = self.read_file(&token, &file, body.len() as u64).await?;
+            if now != version || bytes.is_empty() {
+                return Err(format!("{file} changed while it was read"));
+            }
+            body.extend(bytes);
+        }
+        Ok((mime, body))
+    }
+
+    /// One `read_file` from `offset` (24.2), answered by `file_range` and a data frame within
+    /// `read_wait` (24.4), else failed and forgotten.
+    async fn read_file(&self, token: &str, path: &str, offset: u64) -> Result<Chunk, String> {
+        let (reply, answer) = oneshot::channel();
+        let id = {
+            let mut link = self.link();
+            let id = link.last_read.wrapping_add(1);
+            let (token, path, len) = (token.to_owned(), path.to_owned(), READ_LIMIT);
+            let read = Control::ReadFile {
+                id,
+                token,
+                path,
+                offset,
+                len,
+            };
+            link.send(0, &read)?;
+            link.last_read = id;
+            link.reads.insert(id, (reply, None));
+            id
+        };
+        let Ok(answered) = tokio::time::timeout(self.read_wait, answer).await else {
+            self.link().reads.remove(&id);
+            return Err(format!("{path} took too long to read"));
+        };
+        answered.map_err(|_| NOT_CONNECTED.to_owned())?
+    }
+
+    /// What uninstalling would remove (23.5), with the app's own bundle, never one the UI
+    /// names. The answer arrives as `uninstall_list`.
+    pub fn list_uninstall(&self, keep_data: bool, accounts: bool) -> Result<(), String> {
+        let app = self.app_bundle.clone();
+        let list = Control::ListUninstall {
+            keep_data,
+            accounts,
+            app,
+        };
+        self.link().send(0, &list)
+    }
+
+    /// Uninstalls Hive (23.5): the service ends every terminal, removes what `list_uninstall`
+    /// listed and answers `uninstalled`; the UI then quits.
+    pub fn uninstall(&self, keep_data: bool, accounts: bool) -> Result<(), String> {
+        let app = self.app_bundle.clone();
+        let uninstall = Control::Uninstall {
+            keep_data,
+            accounts,
+            app,
+        };
+        self.link().send(0, &uninstall)
+    }
+}
+
+impl Host {
     /// Asks for every project with its worktrees; they arrive as `projects`.
     pub fn list_projects(&self) -> Result<(), String> {
         self.link().send(0, &Control::ListProjects)
@@ -1669,66 +1882,6 @@ impl Hive {
     }
 
     /// The answer arrives as `table`.
-    /// The `hive-file:` scheme's answer for the URL path `path` (`/<token>/<path>`, 24.2): the
-    /// whole file, pulled from the service in reads of [`READ_LIMIT`], as the type the service
-    /// read from its bytes; a file that changes meanwhile fails. At most [`SERVING`] at once,
-    /// [`QUEUED`] more waiting; past them, `503`.
-    pub async fn serve_file(&self, path: &str) -> Response<Vec<u8>> {
-        let macos = cfg!(target_os = "macos");
-        let Ok(_place) = self.waiting.try_acquire() else {
-            let busy = Err("too many files asked for at once".to_owned());
-            let mut answer = scheme::response(busy, macos);
-            *answer.status_mut() = tauri::http::StatusCode::SERVICE_UNAVAILABLE;
-            return answer;
-        };
-        // Never closed, so this always holds a permit until the answer is built.
-        let _held = self.serving.acquire().await;
-        scheme::response(self.whole_file(path).await, macos)
-    }
-
-    async fn whole_file(&self, path: &str) -> Result<(String, Vec<u8>), String> {
-        let (token, file) = scheme::request(path).ok_or("not a file URL")?;
-        let (size, mime, version, mut body) = self.read_file(&token, &file, 0).await?;
-        for _ in 0..READS {
-            if body.len() as u64 >= size {
-                break;
-            }
-            let (_, _, now, bytes) = self.read_file(&token, &file, body.len() as u64).await?;
-            if now != version || bytes.is_empty() {
-                return Err(format!("{file} changed while it was read"));
-            }
-            body.extend(bytes);
-        }
-        Ok((mime, body))
-    }
-
-    /// One `read_file` from `offset` (24.2), answered by `file_range` and a data frame within
-    /// `read_wait` (24.4), else failed and forgotten.
-    async fn read_file(&self, token: &str, path: &str, offset: u64) -> Result<Chunk, String> {
-        let (reply, answer) = oneshot::channel();
-        let id = {
-            let mut link = self.link();
-            let id = link.last_read.wrapping_add(1);
-            let (token, path, len) = (token.to_owned(), path.to_owned(), READ_LIMIT);
-            let read = Control::ReadFile {
-                id,
-                token,
-                path,
-                offset,
-                len,
-            };
-            link.send(0, &read)?;
-            link.last_read = id;
-            link.reads.insert(id, (reply, None));
-            id
-        };
-        let Ok(answered) = tokio::time::timeout(self.read_wait, answer).await else {
-            self.link().reads.remove(&id);
-            return Err(format!("{path} took too long to read"));
-        };
-        answered.map_err(|_| NOT_CONNECTED.to_owned())?
-    }
-
     pub fn open_table(&self, worktree: String, path: String) -> Result<(), String> {
         self.link().send(0, &Control::OpenTable { worktree, path })
     }
@@ -1858,30 +2011,6 @@ impl Hive {
             delete_folder,
         };
         self.link().send(0, &remove)
-    }
-
-    /// What uninstalling would remove (23.5), with the app's own bundle, never one the UI
-    /// names. The answer arrives as `uninstall_list`.
-    pub fn list_uninstall(&self, keep_data: bool, accounts: bool) -> Result<(), String> {
-        let app = self.app_bundle.clone();
-        let list = Control::ListUninstall {
-            keep_data,
-            accounts,
-            app,
-        };
-        self.link().send(0, &list)
-    }
-
-    /// Uninstalls Hive (23.5): the service ends every terminal, removes what `list_uninstall`
-    /// listed and answers `uninstalled`; the UI then quits.
-    pub fn uninstall(&self, keep_data: bool, accounts: bool) -> Result<(), String> {
-        let app = self.app_bundle.clone();
-        let uninstall = Control::Uninstall {
-            keep_data,
-            accounts,
-            app,
-        };
-        self.link().send(0, &uninstall)
     }
 
     /// The answer to each space request arrives as `spaces` or `space_failed`.
@@ -2137,6 +2266,69 @@ fn pipe<T>(pipe: Option<T>) -> std::io::Result<T> {
     pipe.ok_or(std::io::ErrorKind::BrokenPipe.into())
 }
 
+/// The UI channel of `link`, if any.
+fn ui_of(link: &Link) -> Option<Channel<Value>> {
+    link.ui.clone()
+}
+
+/// What starts a link's process: its stdout and stdin, and its end, which owns the process (it
+/// is killed on drop) and gives its stderr, trimmed, once it exits or [`EXIT_WAIT`] passed.
+type Started = (
+    tokio::process::ChildStdout,
+    tokio::process::ChildStdin,
+    std::pin::Pin<Box<dyn Future<Output = String> + Send>>,
+);
+
+/// Starts `program` with `args` (a bridge, or `ssh` for a remote, 26.17), its stdio piped.
+fn start(program: &std::ffi::OsStr, args: &[OsString]) -> std::io::Result<Started> {
+    let mut command = tokio::process::Command::new(program);
+    command
+        .args(args)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true);
+    #[cfg(windows)]
+    command.creation_flags(0x0800_0000); // CREATE_NO_WINDOW: no console window for wsl.exe
+    let mut child = command.spawn()?;
+    let stdin = pipe(child.stdin.take())?;
+    let stdout = pipe(child.stdout.take())?;
+    let stderr = pipe(child.stderr.take())?;
+    let exit = async move {
+        let mut text = Vec::new();
+        let finish = async {
+            let _ = stderr.take(STDERR_LIMIT).read_to_end(&mut text).await;
+            let _ = child.wait().await;
+        };
+        let _ = tokio::time::timeout(EXIT_WAIT, finish).await;
+        String::from_utf8_lossy(&text).trim().to_owned()
+    };
+    Ok((stdout, stdin, Box::pin(exit)))
+}
+
+/// Speaks the protocol on `link` over `reader`/`writer`, starting with `hello`: frames queued
+/// on the link are written in order, and the service's are routed until the connection ends.
+fn speak(
+    link: &Arc<Mutex<Link>>,
+    reader: impl AsyncRead + Unpin + Send + 'static,
+    writer: impl AsyncWrite + Unpin + Send + 'static,
+    hello: &Control,
+) -> impl Future<Output = End> + Send + 'static {
+    let (frames, mut queue) = mpsc::unbounded_channel();
+    let _ = frames.send(Frame::control(0, hello));
+    lock(link).frames = Some(frames);
+    tokio::spawn(async move {
+        let mut writer = FramedWrite::new(writer, FrameCodec);
+        while let Some(frame) = queue.recv().await {
+            if writer.send(frame).await.is_err() {
+                break;
+            }
+        }
+    });
+    let link = link.clone();
+    async move { pump(&link, FramedRead::new(reader, FrameCodec)).await }
+}
+
 /// The most frames, and about the most bytes, one burst of terminal output joins (19.9).
 const BURST_FRAMES: usize = 64;
 const BURST_BYTES: usize = 256 * 1024;
@@ -2217,16 +2409,31 @@ async fn pump<R: AsyncRead + Unpin>(
             continue;
         };
         // Messages for a terminal this UI did not open (e.g. one closed by a reload) are
-        // dropped.
-        if frame.channel != 0 && !link.terminals.contains_key(&frame.channel) {
-            continue;
-        }
-        value["channel"] = frame.channel.into();
+        // dropped; the others name it by its id in the UI.
+        let ui = match frame.channel {
+            0 => 0,
+            channel => match link.terminals.get(&channel) {
+                Some(term) => term.ui,
+                None => continue,
+            },
+        };
+        value["channel"] = ui.into();
+        let remote = link.host.is_some();
+        value = link.tagged(value);
         match value["type"].as_str().unwrap_or_default() {
             "welcome" => {
                 link.welcome = Some(value.clone());
                 // The UI always gets the projects after the handshake.
                 let _ = link.send(0, &Control::ListProjects);
+                if remote {
+                    remote::welcomed(&mut link);
+                }
+            }
+            // A remote's refusal is its link's state (26.17), not the local service's dialog.
+            "version_mismatch" if remote => {
+                link.refused = Some(value);
+                link.frames = None;
+                return End::Refused;
             }
             "version_mismatch" => {
                 // The UI shows both sides, so it gets the app's own versions too.
@@ -2243,15 +2450,17 @@ async fn pump<R: AsyncRead + Unpin>(
                 link.range(value);
                 continue;
             }
-            "file" => scheme::with_url(&mut value, cfg!(target_os = "macos")),
+            // The scheme reads the local service's files only.
+            "file" if !remote => scheme::with_url(&mut value, cfg!(target_os = "macos")),
             "terminal_opened" => {
                 if let Some(term) = link.terminals.get_mut(&frame.channel) {
                     term.worktree = value["worktree"].clone();
                     term.account = value["account"].clone();
                 }
             }
-            // A path the app may open once (`open_path`).
-            "editor_target" | "session_located" => {
+            // A path the app may open once (`open_path`); never a remote's (26.17): it names a
+            // path on another machine.
+            "editor_target" | "session_located" if !remote => {
                 if let Some(path) = value["windows_path"].as_str() {
                     link.approve(path.to_owned(), value["reveal"] == true);
                 }
@@ -2265,6 +2474,14 @@ async fn pump<R: AsyncRead + Unpin>(
 
 /// Ends the connection: every open terminal exits, then the UI gets `disconnected`.
 fn disconnected(link: &mut Link, reason: String) {
+    dropped(link);
+    link.end_terminals();
+    link.to_ui(json!({"type": "disconnected", "reason": reason, "bundled": link.bundled}));
+}
+
+/// Forgets what a connection that ended told: its terminals stay, for the caller to end (or,
+/// on a remote link, to reattach, 26.17).
+fn dropped(link: &mut Link) {
     link.frames = None;
     link.welcome = None;
     // The agents end with the connection; a new one sends the live ones' states again.
@@ -2273,10 +2490,6 @@ fn disconnected(link: &mut Link, reason: String) {
     link.approved.clear();
     // Each waiting `hive-file:` read fails.
     link.reads.clear();
-    for id in std::mem::take(&mut link.terminals).into_keys() {
-        link.to_ui(json!({"type": "terminal_exited", "channel": id, "code": null}));
-    }
-    link.to_ui(json!({"type": "disconnected", "reason": reason, "bundled": link.bundled}));
 }
 
 /// What a request to quit does (D17.3): quit now, or ask the UI first.
@@ -2339,6 +2552,14 @@ pub fn web_content_terminated<R: Runtime>(webview: &tauri::Webview<R>) {
     let _ = webview.reload();
 }
 
+/// The computer woke from sleep (Q7, macOS's `NSWorkspaceDidWakeNotification`):
+/// [`Hive::woke`] for the app's `Hive`.
+pub fn woke<R: Runtime>(app: &AppHandle<R>) {
+    if let Some(hive) = app.try_state::<Hive>() {
+        hive.woke();
+    }
+}
+
 /// A click on the Dock icon (`RunEvent::Reopen`): with no visible window (minimized, hidden)
 /// the window comes back. True when it did.
 pub fn reopen<R: Runtime>(app: &AppHandle<R>, has_visible_windows: bool) -> bool {
@@ -2350,6 +2571,9 @@ pub fn reopen<R: Runtime>(app: &AppHandle<R>, has_visible_windows: bool) -> bool
 pub fn on_run_event<R: Runtime>(app: &AppHandle<R>, event: RunEvent) {
     if let RunEvent::Exit = event {
         let hive = app.state::<Hive>();
+        if let Ok(remotes) = hive.remotes() {
+            remotes.end();
+        }
         tauri::async_runtime::block_on(hive.shutdown(EXIT_WAIT));
         // An update downloaded but not applied is installed now: the next start runs it.
         let _ = hive.install_pending();
@@ -2401,16 +2625,30 @@ pub mod commands {
         });
     }
 
+    /// Tries the link to `host` again now (26.17).
+    #[tauri::command]
+    pub fn reconnect_host(hive: State<'_, Hive>, host: String) -> Result<(), String> {
+        hive.reconnect_host(&host)
+    }
+
+    /// Restarts `host`'s service of another version (Q8).
+    #[tauri::command]
+    pub fn restart_remote(hive: State<'_, Hive>, host: String) -> Result<(), String> {
+        hive.restart_remote(&host)
+    }
+
     #[tauri::command]
     pub fn open_terminal(
         hive: State<'_, Hive>,
+        host: Option<String>,
         cwd: String,
         cols: u16,
         rows: u16,
         account: Option<AccountDir>,
         on_data: Channel<InvokeResponseBody>,
     ) -> Result<u32, String> {
-        hive.open_terminal(cwd, cols, rows, account, on_data)
+        hive.on(host.as_deref())?
+            .open_terminal(cwd, cols, rows, account, on_data)
     }
 
     #[tauri::command]
@@ -2448,272 +2686,342 @@ pub mod commands {
     }
 
     #[tauri::command]
-    pub fn list_projects(hive: State<'_, Hive>) -> Result<(), String> {
-        hive.list_projects()
+    pub fn list_projects(hive: State<'_, Hive>, host: Option<String>) -> Result<(), String> {
+        hive.on(host.as_deref())?.list_projects()
     }
 
     #[tauri::command]
-    pub fn add_project(hive: State<'_, Hive>, path: String) -> Result<(), String> {
-        hive.add_project(path)
+    pub fn add_project(
+        hive: State<'_, Hive>,
+        host: Option<String>,
+        path: String,
+    ) -> Result<(), String> {
+        hive.on(host.as_deref())?.add_project(path)
     }
 
     #[tauri::command]
-    pub fn remove_project(hive: State<'_, Hive>, id: String) -> Result<(), String> {
-        hive.remove_project(id)
+    pub fn remove_project(
+        hive: State<'_, Hive>,
+        host: Option<String>,
+        id: String,
+    ) -> Result<(), String> {
+        hive.on(host.as_deref())?.remove_project(id)
     }
 
     #[tauri::command]
-    pub fn init_git(hive: State<'_, Hive>, id: String) -> Result<(), String> {
-        hive.init_git(id)
+    pub fn init_git(hive: State<'_, Hive>, host: Option<String>, id: String) -> Result<(), String> {
+        hive.on(host.as_deref())?.init_git(id)
     }
 
     #[tauri::command]
     pub fn create_project(
         hive: State<'_, Hive>,
+        host: Option<String>,
         parent: String,
         name: String,
         git: bool,
     ) -> Result<(), String> {
-        hive.create_project(parent, name, git)
+        hive.on(host.as_deref())?.create_project(parent, name, git)
     }
 
     #[tauri::command]
-    pub fn create_dir(hive: State<'_, Hive>, parent: String, name: String) -> Result<(), String> {
-        hive.create_dir(parent, name)
+    pub fn create_dir(
+        hive: State<'_, Hive>,
+        host: Option<String>,
+        parent: String,
+        name: String,
+    ) -> Result<(), String> {
+        hive.on(host.as_deref())?.create_dir(parent, name)
     }
 
     #[tauri::command]
-    pub fn list_branches(hive: State<'_, Hive>, project: String) -> Result<(), String> {
-        hive.list_branches(project)
+    pub fn list_branches(
+        hive: State<'_, Hive>,
+        host: Option<String>,
+        project: String,
+    ) -> Result<(), String> {
+        hive.on(host.as_deref())?.list_branches(project)
     }
 
     #[tauri::command]
     pub fn validate_worktree_name(
         hive: State<'_, Hive>,
+        host: Option<String>,
         project: String,
         name: String,
     ) -> Result<(), String> {
-        hive.validate_worktree_name(project, name)
+        hive.on(host.as_deref())?
+            .validate_worktree_name(project, name)
     }
 
     #[tauri::command]
     pub fn create_worktree(
         hive: State<'_, Hive>,
+        host: Option<String>,
         project: String,
         name: String,
         base: Option<String>,
     ) -> Result<(), String> {
-        hive.create_worktree(project, name, base)
+        hive.on(host.as_deref())?
+            .create_worktree(project, name, base)
     }
 
     #[tauri::command]
     pub fn create_issue_worktree(
         hive: State<'_, Hive>,
+        host: Option<String>,
         project: String,
         number: u64,
         base: Option<String>,
     ) -> Result<(), String> {
-        hive.create_issue_worktree(project, number, base)
+        hive.on(host.as_deref())?
+            .create_issue_worktree(project, number, base)
     }
 
     #[tauri::command]
-    pub fn remove_worktree(hive: State<'_, Hive>, path: String, force: bool) -> Result<(), String> {
-        hive.remove_worktree(path, force)
+    pub fn remove_worktree(
+        hive: State<'_, Hive>,
+        host: Option<String>,
+        path: String,
+        force: bool,
+    ) -> Result<(), String> {
+        hive.on(host.as_deref())?.remove_worktree(path, force)
     }
 
     #[tauri::command]
     pub fn rename_worktree(
         hive: State<'_, Hive>,
+        host: Option<String>,
         path: String,
         name: String,
     ) -> Result<(), String> {
-        hive.rename_worktree(path, name)
+        hive.on(host.as_deref())?.rename_worktree(path, name)
     }
 
     #[tauri::command]
-    pub fn list_sessions(hive: State<'_, Hive>) -> Result<(), String> {
-        hive.list_sessions()
+    pub fn list_sessions(hive: State<'_, Hive>, host: Option<String>) -> Result<(), String> {
+        hive.on(host.as_deref())?.list_sessions()
     }
 
     #[tauri::command]
     pub fn locate_session(
         hive: State<'_, Hive>,
+        host: Option<String>,
         id: String,
         target: SessionTarget,
     ) -> Result<(), String> {
-        hive.locate_session(id, target)
+        hive.on(host.as_deref())?.locate_session(id, target)
     }
 
     #[tauri::command]
-    pub fn delete_session(hive: State<'_, Hive>, id: String) -> Result<(), String> {
-        hive.delete_session(id)
+    pub fn delete_session(
+        hive: State<'_, Hive>,
+        host: Option<String>,
+        id: String,
+    ) -> Result<(), String> {
+        hive.on(host.as_deref())?.delete_session(id)
     }
 
     #[tauri::command]
     pub fn move_session(
         hive: State<'_, Hive>,
+        host: Option<String>,
         id: String,
         config_dir: Option<String>,
     ) -> Result<(), String> {
-        hive.move_session(id, config_dir)
+        hive.on(host.as_deref())?.move_session(id, config_dir)
     }
 
     #[tauri::command]
     pub fn list_dirs(
         hive: State<'_, Hive>,
+        host: Option<String>,
         path: String,
         windows: bool,
         hidden: bool,
     ) -> Result<(), String> {
-        hive.list_dirs(path, windows, hidden)
+        hive.on(host.as_deref())?.list_dirs(path, windows, hidden)
     }
 
     #[tauri::command]
     pub fn search_files(
         hive: State<'_, Hive>,
+        host: Option<String>,
         worktree: String,
         query: String,
     ) -> Result<(), String> {
-        hive.search_files(worktree, query)
+        hive.on(host.as_deref())?.search_files(worktree, query)
     }
 
     #[tauri::command]
     pub fn watch_worktree(
         hive: State<'_, Hive>,
+        host: Option<String>,
         path: String,
         base: DiffBase,
     ) -> Result<(), String> {
-        hive.watch_worktree(path, base)
+        hive.on(host.as_deref())?.watch_worktree(path, base)
     }
 
     #[tauri::command]
-    pub fn unwatch_worktree(hive: State<'_, Hive>) -> Result<(), String> {
-        hive.unwatch_worktree()
+    pub fn unwatch_worktree(hive: State<'_, Hive>, host: Option<String>) -> Result<(), String> {
+        hive.on(host.as_deref())?.unwatch_worktree()
     }
 
     #[tauri::command]
     pub fn expand_ignored(
         hive: State<'_, Hive>,
+        host: Option<String>,
         path: String,
         folders: Vec<String>,
     ) -> Result<(), String> {
-        hive.expand_ignored(path, folders)
+        hive.on(host.as_deref())?.expand_ignored(path, folders)
     }
 
     #[tauri::command]
     pub fn set_view(
         hive: State<'_, Hive>,
+        host: Option<String>,
         terminal: Option<u32>,
         focused: bool,
         visible: bool,
     ) -> Result<(), String> {
-        hive.set_view(terminal, focused, visible)
+        hive.on(host.as_deref())?
+            .set_view(terminal, focused, visible)
     }
 
     #[tauri::command]
-    pub fn list_changes(hive: State<'_, Hive>, path: String, base: DiffBase) -> Result<(), String> {
-        hive.list_changes(path, base)
+    pub fn list_changes(
+        hive: State<'_, Hive>,
+        host: Option<String>,
+        path: String,
+        base: DiffBase,
+    ) -> Result<(), String> {
+        hive.on(host.as_deref())?.list_changes(path, base)
     }
 
     #[tauri::command]
-    pub fn list_scripts(hive: State<'_, Hive>, path: String) -> Result<(), String> {
-        hive.list_scripts(path)
+    pub fn list_scripts(
+        hive: State<'_, Hive>,
+        host: Option<String>,
+        path: String,
+    ) -> Result<(), String> {
+        hive.on(host.as_deref())?.list_scripts(path)
     }
 
     #[tauri::command]
     pub fn open_file(
         hive: State<'_, Hive>,
+        host: Option<String>,
         worktree: String,
         path: String,
         base: DiffBase,
     ) -> Result<(), String> {
-        hive.open_file(worktree, path, base)
+        hive.on(host.as_deref())?.open_file(worktree, path, base)
     }
 
     #[tauri::command]
-    pub fn open_table(hive: State<'_, Hive>, worktree: String, path: String) -> Result<(), String> {
-        hive.open_table(worktree, path)
+    pub fn open_table(
+        hive: State<'_, Hive>,
+        host: Option<String>,
+        worktree: String,
+        path: String,
+    ) -> Result<(), String> {
+        hive.on(host.as_deref())?.open_table(worktree, path)
     }
 
     #[tauri::command]
     pub fn edit_table(
         hive: State<'_, Hive>,
+        host: Option<String>,
         worktree: String,
         path: String,
         content: String,
         edit: Option<TableEdit>,
     ) -> Result<(), String> {
-        hive.edit_table(worktree, path, content, edit)
+        hive.on(host.as_deref())?
+            .edit_table(worktree, path, content, edit)
     }
 
     #[tauri::command]
     pub fn save_file(
         hive: State<'_, Hive>,
+        host: Option<String>,
         worktree: String,
         path: String,
         content: String,
         version: Option<String>,
     ) -> Result<(), String> {
-        hive.save_file(worktree, path, content, version)
+        hive.on(host.as_deref())?
+            .save_file(worktree, path, content, version)
     }
 
     #[tauri::command]
     pub fn create_file(
         hive: State<'_, Hive>,
+        host: Option<String>,
         worktree: String,
         folder: String,
         name: String,
     ) -> Result<(), String> {
-        hive.create_file(worktree, folder, name)
+        hive.on(host.as_deref())?
+            .create_file(worktree, folder, name)
     }
 
     #[tauri::command]
     pub fn rename_file(
         hive: State<'_, Hive>,
+        host: Option<String>,
         worktree: String,
         path: String,
         name: String,
     ) -> Result<(), String> {
-        hive.rename_file(worktree, path, name)
+        hive.on(host.as_deref())?.rename_file(worktree, path, name)
     }
 
     #[tauri::command]
     pub fn move_file(
         hive: State<'_, Hive>,
+        host: Option<String>,
         worktree: String,
         path: String,
         folder: String,
     ) -> Result<(), String> {
-        hive.move_file(worktree, path, folder)
+        hive.on(host.as_deref())?.move_file(worktree, path, folder)
     }
 
     #[tauri::command]
     pub fn delete_file(
         hive: State<'_, Hive>,
+        host: Option<String>,
         worktree: String,
         path: String,
     ) -> Result<(), String> {
-        hive.delete_file(worktree, path)
+        hive.on(host.as_deref())?.delete_file(worktree, path)
     }
 
     #[tauri::command]
     pub fn create_folder(
         hive: State<'_, Hive>,
+        host: Option<String>,
         worktree: String,
         folder: String,
         name: String,
     ) -> Result<(), String> {
-        hive.create_folder(worktree, folder, name)
+        hive.on(host.as_deref())?
+            .create_folder(worktree, folder, name)
     }
 
     #[tauri::command]
     pub fn open_in_editor(
         hive: State<'_, Hive>,
+        host: Option<String>,
         worktree: String,
         path: String,
         reveal: bool,
     ) -> Result<(), String> {
-        hive.open_in_editor(worktree, path, reveal)
+        hive.on(host.as_deref())?
+            .open_in_editor(worktree, path, reveal)
     }
 
     // ponytail: sync like every command here (an `async` command left a macro line uncovered);
@@ -2724,18 +3032,26 @@ pub mod commands {
     }
 
     #[tauri::command]
-    pub fn get_settings(hive: State<'_, Hive>) -> Result<(), String> {
-        hive.get_settings()
+    pub fn get_settings(hive: State<'_, Hive>, host: Option<String>) -> Result<(), String> {
+        hive.on(host.as_deref())?.get_settings()
     }
 
     #[tauri::command]
-    pub fn set_settings(hive: State<'_, Hive>, settings: Settings) -> Result<(), String> {
-        hive.set_settings(settings)
+    pub fn set_settings(
+        hive: State<'_, Hive>,
+        host: Option<String>,
+        settings: Settings,
+    ) -> Result<(), String> {
+        hive.on(host.as_deref())?.set_settings(settings)
     }
 
     #[tauri::command]
-    pub fn create_account(hive: State<'_, Hive>, name: String) -> Result<(), String> {
-        hive.create_account(name)
+    pub fn create_account(
+        hive: State<'_, Hive>,
+        host: Option<String>,
+        name: String,
+    ) -> Result<(), String> {
+        hive.on(host.as_deref())?.create_account(name)
     }
 
     #[tauri::command]
@@ -2755,134 +3071,182 @@ pub mod commands {
     #[tauri::command]
     pub fn remove_account(
         hive: State<'_, Hive>,
+        host: Option<String>,
         config_dir: String,
         delete_folder: bool,
     ) -> Result<(), String> {
-        hive.remove_account(config_dir, delete_folder)
+        hive.on(host.as_deref())?
+            .remove_account(config_dir, delete_folder)
     }
 
     #[tauri::command]
-    pub fn create_space(hive: State<'_, Hive>, name: String, env: SpaceEnv) -> Result<(), String> {
-        hive.create_space(name, env)
+    pub fn create_space(
+        hive: State<'_, Hive>,
+        host: Option<String>,
+        name: String,
+        env: SpaceEnv,
+    ) -> Result<(), String> {
+        hive.on(host.as_deref())?.create_space(name, env)
     }
 
     #[tauri::command]
     pub fn update_space(
         hive: State<'_, Hive>,
+        host: Option<String>,
         id: String,
         name: String,
         env: SpaceEnv,
     ) -> Result<(), String> {
-        hive.update_space(id, name, env)
+        hive.on(host.as_deref())?.update_space(id, name, env)
     }
 
     #[tauri::command]
-    pub fn delete_space(hive: State<'_, Hive>, id: String) -> Result<(), String> {
-        hive.delete_space(id)
+    pub fn delete_space(
+        hive: State<'_, Hive>,
+        host: Option<String>,
+        id: String,
+    ) -> Result<(), String> {
+        hive.on(host.as_deref())?.delete_space(id)
     }
 
     #[tauri::command]
-    pub fn select_space(hive: State<'_, Hive>, id: String) -> Result<(), String> {
-        hive.select_space(id)
+    pub fn select_space(
+        hive: State<'_, Hive>,
+        host: Option<String>,
+        id: String,
+    ) -> Result<(), String> {
+        hive.on(host.as_deref())?.select_space(id)
     }
 
     #[tauri::command]
-    pub fn list_claude_logins(hive: State<'_, Hive>) -> Result<(), String> {
-        hive.list_claude_logins()
+    pub fn list_claude_logins(hive: State<'_, Hive>, host: Option<String>) -> Result<(), String> {
+        hive.on(host.as_deref())?.list_claude_logins()
     }
 
     #[tauri::command]
     pub fn list_gh_accounts(
         hive: State<'_, Hive>,
+        host: Option<String>,
         gh_config_dir: Option<String>,
     ) -> Result<(), String> {
-        hive.list_gh_accounts(gh_config_dir)
+        hive.on(host.as_deref())?.list_gh_accounts(gh_config_dir)
     }
 
     #[tauri::command]
     pub fn switch_gh_account(
         hive: State<'_, Hive>,
+        host: Option<String>,
         gh_config_dir: Option<String>,
         account: GhAccount,
     ) -> Result<(), String> {
-        hive.switch_gh_account(gh_config_dir, account)
+        hive.on(host.as_deref())?
+            .switch_gh_account(gh_config_dir, account)
     }
 
     #[tauri::command]
     pub fn get_gh_identity(
         hive: State<'_, Hive>,
+        host: Option<String>,
         gh_config_dir: Option<String>,
         account: GhAccount,
     ) -> Result<(), String> {
-        hive.get_gh_identity(gh_config_dir, account)
+        hive.on(host.as_deref())?
+            .get_gh_identity(gh_config_dir, account)
     }
 
     #[tauri::command]
-    pub fn list_pulls(hive: State<'_, Hive>, project: String, force: bool) -> Result<(), String> {
-        hive.list_pulls(project, force)
+    pub fn list_pulls(
+        hive: State<'_, Hive>,
+        host: Option<String>,
+        project: String,
+        force: bool,
+    ) -> Result<(), String> {
+        hive.on(host.as_deref())?.list_pulls(project, force)
     }
 
     #[tauri::command]
-    pub fn open_pull(hive: State<'_, Hive>, project: String, number: u64) -> Result<(), String> {
-        hive.open_pull(project, number)
+    pub fn open_pull(
+        hive: State<'_, Hive>,
+        host: Option<String>,
+        project: String,
+        number: u64,
+    ) -> Result<(), String> {
+        hive.on(host.as_deref())?.open_pull(project, number)
     }
 
     #[tauri::command]
     pub fn act_on_pull(
         hive: State<'_, Hive>,
+        host: Option<String>,
         project: String,
         number: u64,
         action: PullAction,
     ) -> Result<(), String> {
-        hive.act_on_pull(project, number, action)
+        hive.on(host.as_deref())?
+            .act_on_pull(project, number, action)
     }
 
     #[tauri::command]
     pub fn create_pull(
         hive: State<'_, Hive>,
+        host: Option<String>,
         worktree: String,
         title: String,
         body: String,
         base: String,
         draft: bool,
     ) -> Result<(), String> {
-        hive.create_pull(worktree, title, body, base, draft)
+        hive.on(host.as_deref())?
+            .create_pull(worktree, title, body, base, draft)
     }
 
     #[tauri::command]
     pub fn list_runs(
         hive: State<'_, Hive>,
+        host: Option<String>,
         project: String,
         branch: Option<String>,
         force: bool,
     ) -> Result<(), String> {
-        hive.list_runs(project, branch, force)
+        hive.on(host.as_deref())?.list_runs(project, branch, force)
     }
 
     #[tauri::command]
-    pub fn open_run(hive: State<'_, Hive>, project: String, run: u64) -> Result<(), String> {
-        hive.open_run(project, run)
+    pub fn open_run(
+        hive: State<'_, Hive>,
+        host: Option<String>,
+        project: String,
+        run: u64,
+    ) -> Result<(), String> {
+        hive.on(host.as_deref())?.open_run(project, run)
     }
 
     #[tauri::command]
-    pub fn open_job_log(hive: State<'_, Hive>, project: String, job: u64) -> Result<(), String> {
-        hive.open_job_log(project, job)
+    pub fn open_job_log(
+        hive: State<'_, Hive>,
+        host: Option<String>,
+        project: String,
+        job: u64,
+    ) -> Result<(), String> {
+        hive.on(host.as_deref())?.open_job_log(project, job)
     }
 
     #[tauri::command]
     pub fn act_on_run(
         hive: State<'_, Hive>,
+        host: Option<String>,
         project: String,
         run: u64,
         action: RunAction,
         branch: Option<String>,
     ) -> Result<(), String> {
-        hive.act_on_run(project, run, action, branch)
+        hive.on(host.as_deref())?
+            .act_on_run(project, run, action, branch)
     }
 
     #[tauri::command]
-    pub fn open_settings_file(hive: State<'_, Hive>) -> Result<(), String> {
-        hive.open_settings_file()
+    pub fn open_settings_file(hive: State<'_, Hive>, host: Option<String>) -> Result<(), String> {
+        hive.on(host.as_deref())?.open_settings_file()
     }
 
     /// What the UI does on a double click on the empty title bar (macOS): `zoom`, `minimize`
@@ -2893,18 +3257,18 @@ pub mod commands {
     }
 
     #[tauri::command]
-    pub fn get_diagnostics(hive: State<'_, Hive>) -> Result<(), String> {
-        hive.get_diagnostics()
+    pub fn get_diagnostics(hive: State<'_, Hive>, host: Option<String>) -> Result<(), String> {
+        hive.on(host.as_deref())?.get_diagnostics()
     }
 
     #[tauri::command]
-    pub fn get_shared(hive: State<'_, Hive>) -> Result<(), String> {
-        hive.get_shared()
+    pub fn get_shared(hive: State<'_, Hive>, host: Option<String>) -> Result<(), String> {
+        hive.on(host.as_deref())?.get_shared()
     }
 
     #[tauri::command]
-    pub fn open_shared(hive: State<'_, Hive>) -> Result<(), String> {
-        hive.open_shared()
+    pub fn open_shared(hive: State<'_, Hive>, host: Option<String>) -> Result<(), String> {
+        hive.on(host.as_deref())?.open_shared()
     }
 
     #[tauri::command]
@@ -2968,6 +3332,7 @@ pub mod commands {
 pub mod macos;
 pub mod menu;
 pub mod quote;
+pub mod remote;
 pub mod scheme;
 pub mod tray;
 
