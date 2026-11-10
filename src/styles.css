@@ -99,25 +99,27 @@
   color-scheme: dark;
 }
 
-/* The `appearance.theme` setting (6.2): Zed's One Light, from its `one.json`. */
+/* The `appearance.theme` setting (6.2): Zed's One Light (`one.json`), softened so a full window
+   does not glare: an off-white, slightly warm background instead of #fafafa, gentler steps between
+   surfaces and selections, text short of black. */
 :root[data-theme="one-light"] {
-  --bg: #fafafa;
-  --panel: #ebebec;
-  --bar: #dcdcdd;
-  --hover: #dfdfe0;
-  --selected: #cacaca;
-  --selected-hover: #bfbfc0;
-  --border: #c9c9ca;
-  --border-subtle: #dfdfe0;
-  --tree-line: #c9c9ca;
+  --bg: #f0f0ee;
+  --panel: #e6e6e3;
+  --bar: #dbdbd8;
+  --hover: #dcdcd9;
+  --selected: #d2d2ce;
+  --selected-hover: #c8c8c4;
+  --border: #cfcfcb;
+  --border-subtle: #dcdcd9;
+  --tree-line: #cfcfcb;
   --focus: #7d82e8;
   --accent: #5c78e2;
   --accent-hover: #4a67d6;
-  --on-accent: #fafafa;
-  --text: #242529;
-  --text-2: #58585a;
-  --text-3: #7e8086;
-  --text-4: #b4b4bb;
+  --on-accent: #f7f7f5;
+  --text: #2e3036;
+  --text-2: #55575c;
+  --text-3: #74767c;
+  --text-4: #aaacb1;
   --active-line: rgba(0, 0, 0, 0.04);
   --editor-selection: #5c78e23d;
 

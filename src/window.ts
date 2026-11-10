@@ -147,7 +147,7 @@ type AppliedTheme = Exclude<Theme, "system">;
 /** Each theme's `--bg` (src/styles.css): the window's background behind the page. */
 export const THEME_BACKGROUND: Record<AppliedTheme, string> = {
   "one-dark": "#282c33",
-  "one-light": "#fafafa",
+  "one-light": "#f0f0ee",
 };
 
 /**

@@ -306,8 +306,8 @@ test("the window takes Hive's theme: appearance and background", async () => {
     expect.arrayContaining([
       ["plugin:window|set_theme", "light"],
       ["plugin:window|set_theme", "dark"],
-      ["plugin:window|set_background_color", "#fafafa"],
-      ["plugin:webview|set_webview_background_color", "#fafafa"],
+      ["plugin:window|set_background_color", "#f0f0ee"],
+      ["plugin:webview|set_webview_background_color", "#f0f0ee"],
       ["plugin:window|set_background_color", "#282c33"],
       ["plugin:webview|set_webview_background_color", "#282c33"],
     ]),
@@ -316,11 +316,11 @@ test("the window takes Hive's theme: appearance and background", async () => {
   const of = (cmd: string) => sent.filter(([c]) => c === cmd).map(([, v]) => v);
   expect(of("plugin:window|set_theme")).toEqual(["light", "dark", null]);
   expect(of("plugin:webview|set_webview_background_color")).toEqual([
-    "#fafafa",
+    "#f0f0ee",
     "#282c33",
-    "#fafafa",
+    "#f0f0ee",
   ]);
-  expect(color(THEME_BACKGROUND["one-light"])).toEqual([250, 250, 250]);
+  expect(color(THEME_BACKGROUND["one-light"])).toEqual([240, 240, 238]);
 });
 
 test("outside Tauri the theme stays in the page", () => {

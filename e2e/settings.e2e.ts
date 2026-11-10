@@ -39,7 +39,7 @@ test("settings: Ctrl+, opens them; font size and theme apply live", async ({ pag
   await dialog.getByRole("button", { name: "Appearance" }).click();
   await dialog.getByRole("combobox", { name: "Theme" }).click();
   await page.getByRole("option", { name: "One Light" }).click();
-  await expect.poll(() => cssVar(page, "--bg")).toBe("#fafafa");
+  await expect.poll(() => cssVar(page, "--bg")).toBe("#f0f0ee");
 
   await page.keyboard.press("Escape");
   await expect(dialog).toBeHidden();
