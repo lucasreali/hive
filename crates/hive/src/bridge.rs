@@ -193,6 +193,7 @@ mod tests {
         assert_eq!(from.largest, 64 * 1024);
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn replacing_ends_only_a_service_the_lockfile_names() {
         use std::os::unix::process::ExitStatusExt;

@@ -200,10 +200,8 @@ fn an_upload_starts_with_its_byte_count_and_checksum() {
 /// A folder for one test, removed on drop, with a fake `ssh` (`tests/fixtures/fake_ssh.c`), a
 /// home, a `PATH` whose `uname` says Linux, and this app's Linux build: a script that answers
 /// `--version` and, as `bridge`, pipes to the socket `s` (a test service).
-#[cfg(unix)]
 struct Lab(PathBuf);
 
-#[cfg(unix)]
 impl Lab {
     fn new(name: &str) -> Self {
         let root = std::env::temp_dir().join(format!("hive-ssh-{name}-{}", std::process::id()));
@@ -288,7 +286,6 @@ impl Lab {
     }
 }
 
-#[cfg(unix)]
 impl Drop for Lab {
     fn drop(&mut self) {
         let _ = std::fs::remove_dir_all(&self.0);
@@ -297,7 +294,6 @@ impl Drop for Lab {
 
 /// Runs `script`'s remote command as sshd would, with `/bin/sh` as the login shell, in the
 /// lab's `home`, with `stdin`.
-#[cfg(unix)]
 fn remote(lab: &Lab, script: Script, home: &str, stdin: &[u8]) -> std::process::Output {
     use std::io::Write as _;
     let mut child = std::process::Command::new("/bin/sh")
@@ -315,13 +311,11 @@ fn remote(lab: &Lab, script: Script, home: &str, stdin: &[u8]) -> std::process::
     child.wait_with_output().unwrap()
 }
 
-#[cfg(unix)]
 fn mode(path: &std::path::Path) -> u32 {
     use std::os::unix::fs::PermissionsExt;
     std::fs::metadata(path).unwrap().permissions().mode() & 0o777
 }
 
-#[cfg(unix)]
 #[test]
 fn the_check_runs_a_bridge_of_this_version_only_else_names_the_platform() {
     let lab = Lab::new("check");
@@ -354,7 +348,6 @@ fn the_check_runs_a_bridge_of_this_version_only_else_names_the_platform() {
     assert_eq!(ran, bridges);
 }
 
-#[cfg(unix)]
 #[test]
 fn an_upload_is_checked_before_it_runs_and_renamed_only_once_it_runs() {
     let lab = Lab::new("upload");
@@ -539,7 +532,6 @@ fn fake_clock(remotes: &mut Remotes) -> mpsc::UnboundedReceiver<Duration> {
     rx
 }
 
-#[cfg(unix)]
 #[tokio::test]
 async fn a_new_host_gets_this_app_s_hive_then_links_with_its_keep_time_and_app_id() {
     let lab = Lab::new("install");
@@ -583,7 +575,6 @@ async fn a_new_host_gets_this_app_s_hive_then_links_with_its_keep_time_and_app_i
     remotes.end();
 }
 
-#[cfg(unix)]
 #[tokio::test]
 async fn failures_that_will_not_pass_stop_with_their_reason_and_nothing_uploaded() {
     let lab = Lab::new("fatal");
@@ -619,7 +610,6 @@ async fn failures_that_will_not_pass_stop_with_their_reason_and_nothing_uploaded
     }
 }
 
-#[cfg(unix)]
 #[tokio::test]
 async fn a_host_that_cannot_be_reached_is_retried_on_the_ladder_then_on_wake() {
     let lab = Lab::new("ladder");
@@ -652,7 +642,6 @@ async fn a_host_that_cannot_be_reached_is_retried_on_the_ladder_then_on_wake() {
     remotes.end();
 }
 
-#[cfg(unix)]
 #[tokio::test]
 async fn a_wake_ends_the_wait_on_the_real_clock() {
     let lab = Lab::new("wake");
@@ -669,7 +658,6 @@ async fn a_wake_ends_the_wait_on_the_real_clock() {
     remotes.end();
 }
 
-#[cfg(unix)]
 #[test]
 fn the_app_s_wake_and_exit_reach_its_remote_links() {
     use tauri::test::{mock_builder, mock_context, noop_assets};
@@ -701,7 +689,6 @@ fn the_app_s_wake_and_exit_reach_its_remote_links() {
     assert_eq!(gone, Some("no link to the host gpu".into()));
 }
 
-#[cfg(unix)]
 #[tokio::test]
 async fn a_dropped_link_keeps_its_terminals_and_retries_every_30_s_while_it_does() {
     let lab = Lab::new("kept");
@@ -764,7 +751,6 @@ async fn a_dropped_link_keeps_its_terminals_and_retries_every_30_s_while_it_does
     remotes.end();
 }
 
-#[cfg(unix)]
 #[tokio::test]
 async fn a_service_of_another_version_is_restarted_only_when_asked() {
     let lab = Lab::new("version");
@@ -805,7 +791,6 @@ async fn a_service_of_another_version_is_restarted_only_when_asked() {
     remotes.end();
 }
 
-#[cfg(unix)]
 #[tokio::test]
 async fn installs_that_fail_say_why_and_stop() {
     let lab = Lab::new("install-fails");
@@ -852,7 +837,6 @@ async fn installs_that_fail_say_why_and_stop() {
     }
 }
 
-#[cfg(unix)]
 #[tokio::test]
 async fn an_upload_without_a_build_or_ssh_or_time_fails() {
     let lab = Lab::new("upload-fails");
@@ -886,7 +870,6 @@ async fn an_upload_without_a_build_or_ssh_or_time_fails() {
     );
 }
 
-#[cfg(unix)]
 #[tokio::test]
 async fn without_ssh_or_with_a_broken_stream_the_link_retries() {
     let lab = Lab::new("broken");
@@ -937,7 +920,6 @@ fn raw(message: &Value) -> Frame {
 }
 
 /// A `Hive` linked to the remote hosts of `lab`, its local link up (the test service `local`).
-#[cfg(unix)]
 fn linked(lab: &Lab) -> (Hive, crate::tests::Service, mpsc::UnboundedReceiver<Value>) {
     let hive = Hive::new("/nonexistent/hive-test".into(), vec![])
         .with_remote(lab.path("ssh").into(), lab.path("builds"));
@@ -947,7 +929,6 @@ fn linked(lab: &Lab) -> (Hive, crate::tests::Service, mpsc::UnboundedReceiver<Va
     (hive, service, rx)
 }
 
-#[cfg(unix)]
 #[tokio::test]
 async fn the_local_settings_link_the_hosts_and_requests_go_to_each_host_s_link() {
     let lab = Lab::new("hosts");
@@ -1087,7 +1068,6 @@ async fn the_local_settings_link_the_hosts_and_requests_go_to_each_host_s_link()
     tokio::time::timeout(WAIT, closed).await.unwrap();
 }
 
-#[cfg(unix)]
 #[tokio::test]
 async fn a_new_terminal_skips_the_channels_its_link_already_uses() {
     let lab = Lab::new("adopted");
