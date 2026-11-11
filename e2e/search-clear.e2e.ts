@@ -25,7 +25,7 @@ for (const theme of ["one-dark", "one-light"]) {
       document.documentElement.dataset.theme = theme;
     }, theme);
     expect(await token(page, "--bg")).toBe(
-      theme === "one-light" ? "rgb(250, 250, 250)" : "rgb(40, 44, 51)",
+      theme === "one-light" ? "rgb(240, 240, 238)" : "rgb(40, 44, 51)",
     );
     const search = page.getByRole("searchbox", { name: "Find files" });
     const clear = page.getByRole("button", { name: "Clear search" });

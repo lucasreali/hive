@@ -66,17 +66,20 @@ const ONE_DARK: ITheme = {
   brightWhite: "#dce0e5",
 };
 
-/** Zed's One Light terminal colors, beside the `one-light` tokens in `src/styles.css`. */
+/**
+ * Zed's One Light terminal colors on the softened `one-light` background of `src/styles.css`;
+ * black is One Light's text gray, not #000, which painted solid black bands (Claude Code's prompt).
+ */
 const ONE_LIGHT: ITheme = {
-  background: "#fafafa",
-  foreground: "#2a2c33",
+  background: "#f0f0ee",
+  foreground: "#2e3036",
   cursor: "#5c78e2",
-  cursorAccent: "#fafafa",
+  cursorAccent: "#f0f0ee",
   selectionBackground: "#5c78e23d",
   scrollbarSliderBackground: "#383a414c",
   scrollbarSliderHoverBackground: "#383a4180",
   scrollbarSliderActiveBackground: "#383a4180",
-  black: "#000000",
+  black: "#383a42",
   red: "#de3e35",
   green: "#3f953a",
   yellow: "#d2b67c",
@@ -84,14 +87,14 @@ const ONE_LIGHT: ITheme = {
   magenta: "#950095",
   cyan: "#0997b3",
   white: "#bbbbbb",
-  brightBlack: "#000000",
+  brightBlack: "#696c77",
   brightRed: "#de3e35",
   brightGreen: "#3f953a",
   brightYellow: "#d2b67c",
   brightBlue: "#2f5af3",
   brightMagenta: "#a00095",
   brightCyan: "#0bbcd6",
-  brightWhite: "#ffffff",
+  brightWhite: "#f7f7f5",
 };
 
 /** The font sizes the settings allow (`terminal.font_size`), which ⌘= / ⌘- stay within. */
@@ -677,8 +680,8 @@ const MATCHES: Record<AppliedTheme, NonNullable<ISearchOptions["decorations"]>> 
     activeMatchColorOverviewRuler: "#e08a5a",
   },
   "one-light": {
-    matchBackground: "#eadfc8",
-    activeMatchBackground: "#dac495",
+    matchBackground: "#e4d9c2",
+    activeMatchBackground: "#d6c091",
     activeMatchBorder: "#b08d45",
     matchOverviewRuler: "#d2b67c",
     activeMatchColorOverviewRuler: "#e08a5a",
