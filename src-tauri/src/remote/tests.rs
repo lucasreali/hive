@@ -416,10 +416,14 @@ fn output() -> (
     (channel, rx)
 }
 
+/// The most UI messages [`until`] and [`next_of`] read: a link that never stops (a mutated
+/// ladder) fails the test instead of hanging it.
+const MOST: usize = 200;
+
 /// The UI messages up to the first `host_link` in `state`, which is last.
 async fn until(rx: &mut mpsc::UnboundedReceiver<Value>, state: &str) -> Vec<Value> {
     let mut seen = Vec::new();
-    loop {
+    for _ in 0..MOST {
         let message = tokio::time::timeout(WAIT, rx.recv())
             .await
             .unwrap()
@@ -430,11 +434,12 @@ async fn until(rx: &mut mpsc::UnboundedReceiver<Value>, state: &str) -> Vec<Valu
             return seen;
         }
     }
+    panic!("no host_link {state} in {MOST} messages: {seen:?}")
 }
 
 /// The next UI message of type `kind`, past any other.
 async fn next_of(rx: &mut mpsc::UnboundedReceiver<Value>, kind: &str) -> Value {
-    loop {
+    for _ in 0..MOST {
         let message = tokio::time::timeout(WAIT, rx.recv())
             .await
             .unwrap()
@@ -443,6 +448,7 @@ async fn next_of(rx: &mut mpsc::UnboundedReceiver<Value>, kind: &str) -> Value {
             return message;
         }
     }
+    panic!("no {kind} in {MOST} messages")
 }
 
 /// The remote's service end of a link: the test service the fake `ssh` pipes to.
@@ -996,12 +1002,18 @@ async fn the_local_settings_link_the_hosts_and_requests_go_to_each_host_s_link()
     // A remote's path never opens here; its files get no `hive-file:` URL.
     let target = json!({"type": "editor_target", "worktree": "/r", "path": "a", "windows_path": "/etc/passwd", "reveal": false});
     remote.writer.send(raw(&target)).await.unwrap();
-    let media = json!({"token": "t", "mime": "image/png"});
+    let media = json!({"token": "t", "version": "1", "mime": "image/png"});
     let file = json!({"type": "file", "worktree": "/r", "path": "a.png", "media": media});
     remote.writer.send(raw(&file)).await.unwrap();
     let target = next_of(&mut rx, "editor_target").await;
     assert_eq!(target["host"], "gpu");
-    assert!(hive.open_path("/etc/passwd".into(), false).is_err());
+    let unasked = "Hive opens only a path the service sent: /etc/passwd";
+    assert_eq!(
+        hive.open_path("/etc/passwd".into(), false),
+        Err(unasked.into())
+    );
+    let gpu = hive.on(Some("gpu")).unwrap().link;
+    assert!(lock(&gpu).approved.is_empty());
     let file = next_of(&mut rx, "file").await;
     assert_eq!(file["media"], media);
     // Reconnect, restart and wake reach the host's link.
