@@ -2326,8 +2326,11 @@ fn speak(
         }
     });
     let link = link.clone();
-    async move { pump(&link, FramedRead::new(reader, FrameCodec)).await }
+    async move { pump(&link, FramedRead::new(Box::new(reader), FrameCodec)).await }
 }
+
+/// Any connection's reader: one [`pump`] for the local service and the remotes alike.
+type Reader<'a> = Box<dyn AsyncRead + Unpin + Send + 'a>;
 
 /// The most frames, and about the most bytes, one burst of terminal output joins (19.9).
 const BURST_FRAMES: usize = 64;
@@ -2372,10 +2375,7 @@ fn burst(
 }
 
 /// Routes service frames until the connection ends.
-async fn pump<R: AsyncRead + Unpin>(
-    link: &Mutex<Link>,
-    mut frames: FramedRead<R, FrameCodec>,
-) -> End {
+async fn pump(link: &Mutex<Link>, mut frames: FramedRead<Reader<'_>, FrameCodec>) -> End {
     let mut held = None;
     while let Some(frame) = match held.take() {
         Some(next) => next,

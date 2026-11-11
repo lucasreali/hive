@@ -1010,7 +1010,11 @@ async fn pumped(frames: Vec<Frame>) -> [Vec<Vec<u8>>; 2] {
         lock(&link).terminals.insert(channel, term);
         rx
     });
-    let end = pump(&link, FramedRead::new(bytes.as_slice(), FrameCodec)).await;
+    let end = pump(
+        &link,
+        FramedRead::new(Box::new(bytes.as_slice()), FrameCodec),
+    )
+    .await;
     assert!(matches!(end, End::Closed));
     outputs.each_mut().map(|rx| {
         let mut sent = Vec::new();
@@ -1072,7 +1076,10 @@ async fn terminal_output_goes_at_once_without_waiting_for_more() {
         // Sent while the connection stays open, with nothing more to read.
         assert_eq!(next(&mut rx).await, b"a");
     };
-    let (end, ()) = tokio::join!(pump(&link, FramedRead::new(reader, FrameCodec)), service);
+    let (end, ()) = tokio::join!(
+        pump(&link, FramedRead::new(Box::new(reader), FrameCodec)),
+        service
+    );
     assert!(matches!(end, End::Closed));
 }
 
