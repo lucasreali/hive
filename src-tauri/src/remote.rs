@@ -657,5 +657,6 @@ async fn supervise(remotes: Arc<Remotes>, remote: Arc<Remote>) {
 }
 
 // The fake `ssh` and the scripts need a Unix (macOS or Linux; Windows is frozen, D17.0).
-#[cfg(all(test, unix))]
+#[cfg(test)]
+#[cfg(unix)]
 mod tests;
