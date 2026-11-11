@@ -299,7 +299,7 @@ A project is `{id, name, path, worktrees, error}`: `id` and `path` are the main 
 4. The bridge retries the connection for up to 5 s. If the daemon never listens, the bridge fails with "the hive service did not start; see <log>".
 5. `hive bridge --replace` (26.17, Q8, a remote's restart) first ends the running service: the service writes its process id into the lockfile once it holds it (again when it takes a lock put back, `daemon::claim`), and the bridge, finding the lock held, sends that process SIGTERM and waits up to 15 s for the lock to be free (no lockfile, a free lock: nothing to end; a lockfile naming no process: an error). Then it goes on as above and starts its own service.
 6. Two bridges racing is harmless: the second daemon cannot take the lockfile and exits. A daemon tries the lockfile again for up to 5 s (the bridge's wait), because a service that is ending keeps it until its terminals have ended (up to their 2 s grace); that service drops its listener and removes the socket as soon as it stops serving, so a bridge started meanwhile starts the new service.
-6. The bridge then copies bytes in both directions without looking at them. When either side closes, the bridge exits.
+7. The bridge then copies bytes in both directions without looking at them. When either side closes, the bridge exits.
 
 ### App connect (app side)
 1. The UI calls `connect(onMessage)` at startup (`connect` in `src/connect.ts`, called by `src/main.tsx`), handing a `Channel` to Rust. "Reconnect" goes through the same function, so every connection has the same handler.
