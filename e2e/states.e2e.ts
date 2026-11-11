@@ -177,7 +177,7 @@ test("states: a seen and an unseen agent waiting for you side by side, dark and 
   const both = seen.locator("xpath=ancestor::ul[1]");
   const themes = {
     dark: ["rgb(224, 138, 90)", "rgb(220, 224, 229)", "rgb(169, 175, 188)", "rgb(135, 138, 152)"],
-    light: ["rgb(173, 110, 37)", "rgb(36, 37, 41)", "rgb(88, 88, 90)", "rgb(126, 128, 134)"],
+    light: ["rgb(173, 110, 37)", "rgb(46, 48, 54)", "rgb(85, 87, 92)", "rgb(116, 118, 124)"],
   };
   for (const [theme, [you, text, text2, text3]] of Object.entries(themes)) {
     await page.evaluate((light) => {

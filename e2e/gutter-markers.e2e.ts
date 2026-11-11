@@ -72,7 +72,7 @@ test("the editor marks added, modified and deleted lines in its gutter, in dark 
   await page.evaluate(() => {
     document.documentElement.dataset.theme = "one-light";
   });
-  await expect.poll(() => cssVar(page, "--bg")).toBe("#fafafa");
+  await expect.poll(() => cssVar(page, "--bg")).toBe("#f0f0ee");
   await check();
   await page.screenshot({ path: "target/e2e/gutter-markers-light.png" });
 });

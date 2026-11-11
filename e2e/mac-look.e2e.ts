@@ -75,7 +75,7 @@ test("the page launches in the last run's theme, before the service's settings",
   await page.goto("/?mock=disconnected");
   await expect(page.getByRole("alertdialog")).toBeVisible();
   expect(await page.evaluate(() => (window as { launch?: string }).launch)).toBe("one-light");
-  await expect(page.locator("body")).toHaveCSS("background-color", "rgb(250, 250, 250)");
+  await expect(page.locator("body")).toHaveCSS("background-color", "rgb(240, 240, 238)");
 });
 
 test("System follows the system's appearance, live (18.33)", async ({ page }) => {

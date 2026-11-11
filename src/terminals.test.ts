@@ -212,7 +212,7 @@ test("new settings apply at once to open terminals, and the shown one refits", a
       cursorBlink: true,
       screenReaderMode: true,
     });
-    expect(t.options.theme?.background).toBe("#fafafa");
+    expect(t.options.theme?.background).toBe("#f0f0ee");
   }
   expect(fit).toHaveBeenCalledTimes(1);
   // Anything else changing in the store leaves them alone.
@@ -225,7 +225,7 @@ test("new settings apply at once to open terminals, and the shown one refits", a
   settings.appearance.theme = "system";
   apply({ type: "settings", settings: structuredClone(settings) });
   setSystemTheme("one-light");
-  expect(term.options.theme?.background).toBe("#fafafa");
+  expect(term.options.theme?.background).toBe("#f0f0ee");
   setSystemTheme("one-dark");
   expect(term.options.theme?.background).toBe("#282c33");
   settings.appearance.theme = "one-dark";

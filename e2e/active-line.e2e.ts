@@ -48,7 +48,7 @@ for (const theme of ["one-dark", "one-light"]) {
     }, theme);
     const bg = () =>
       page.evaluate(() => getComputedStyle(document.documentElement).getPropertyValue("--bg"));
-    expect(await bg()).toBe(theme === "one-light" ? "#fafafa" : "#282c33");
+    expect(await bg()).toBe(theme === "one-light" ? "#f0f0ee" : "#282c33");
 
     const lines = view.locator(".cm-line");
     const second = await rightOf(lines.nth(1));

@@ -79,7 +79,7 @@ for (const theme of ["one-dark", "one-light"]) {
       .poll(() =>
         page.evaluate(() => getComputedStyle(document.documentElement).getPropertyValue("--bg")),
       )
-      .toBe(theme === "one-light" ? "#fafafa" : "#282c33");
+      .toBe(theme === "one-light" ? "#f0f0ee" : "#282c33");
 
     // The read-only diff (`createViewer`) uses the browser's own selection.
     const native = await view
