@@ -193,12 +193,16 @@ impl Output {
     /// of it, or, once the ring no longer holds `from`, `TerminalReset` and the whole ring. The
     /// replay is the first output of 9.19's window afresh, and nothing the program writes
     /// meanwhile is lost or sent twice (one lock). False, and nothing sent, for a terminal
-    /// that is not kept.
+    /// that is not kept. Only a detached output is attached: one an app already takes does
+    /// nothing, so a flood of `attach_terminal` never replays the ring into a queue again.
     pub fn reattach(&self, frames: mpsc::UnboundedSender<Frame>, from: u64) -> bool {
         let mut sink = self.sink();
         let Some(ring) = &sink.ring else {
             return false;
         };
+        if sink.app.is_some() {
+            return true;
+        }
         let replay = ring.since(from).unwrap_or_else(|| {
             let offset = ring.start();
             let reset = hive_protocol::Control::TerminalReset { offset };
@@ -1421,7 +1425,7 @@ mod tests {
         }
         // The replay counts against the window: past the high water, the program waits.
         let (app, mut queued) = mpsc::unbounded_channel();
-        assert!(output.reattach(app, 0));
+        assert!(output.reattach(app.clone(), 0));
         let send = output.send(b"x");
         tokio::pin!(send);
         assert!(waits(&mut send).await);
@@ -1429,6 +1433,16 @@ mod tests {
         assert!(flows(send).await);
         let last = replayed(&mut queued).pop();
         assert_eq!(last, Some((5, Ok(b"x".to_vec()))));
+        // Attached already, by this app or another: nothing is replayed, the window stays.
+        let (other, mut other_queued) = mpsc::unbounded_channel();
+        for again in [app, other] {
+            assert!(output.reattach(again, 0));
+        }
+        assert!(queued.try_recv().is_err());
+        assert!(other_queued.try_recv().is_err());
+        assert_eq!(*output.unacked.borrow(), 1);
+        assert!(flows(output.send(b"y")).await);
+        assert_eq!(replayed(&mut queued), [(5, Ok(b"y".to_vec()))]);
     }
 
     #[tokio::test]

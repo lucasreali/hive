@@ -297,16 +297,21 @@ async fn a_reattached_terminal_gets_every_byte_its_ring_still_holds_in_order() {
         .inspect(|(i, n)| assert_eq!(*n, first + 1 + *i as u32))
         .last();
     assert_eq!(last.map(|(_, n)| n), Some(300_000));
-    // From inside the ring: only the bytes after it.
+    // Attached already: nothing is replayed again, so the next frame is the answer that a
+    // terminal no longer open gets, its exit.
+    app.send(1, Control::AttachTerminal { from: 0 }).await;
+    app.send(9, Control::AttachTerminal { from: 0 }).await;
+    let exited = Control::TerminalExited { code: None };
+    assert_eq!(app.control().await, (9, exited));
+    // Back once more, from inside the ring: only the bytes after it.
+    drop(app);
+    let (mut app, kept) = kept_app(&env, Some(60), Some("a")).await;
+    assert_eq!(kept.len(), 1);
     let tail = 4096;
     let from = start + (ring - tail) as u64;
     app.send(1, Control::AttachTerminal { from }).await;
     let (reset, after) = replay(&mut app, 1, tail).await;
     assert_eq!((reset, after.as_slice()), (None, &bytes[ring - tail..]));
-    // A terminal no longer open answers its exit.
-    app.send(9, Control::AttachTerminal { from: 0 }).await;
-    let exited = Control::TerminalExited { code: None };
-    assert_eq!(app.control().await, (9, exited));
     stop(daemon);
 }
 
