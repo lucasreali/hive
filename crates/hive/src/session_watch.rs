@@ -412,8 +412,10 @@ mod tests {
 
         // A watched folder removed or renamed loses its watch, and is watched again once back.
         let removed = EventKind::Remove(RemoveKind::Folder);
+        // An unwatched folder removed changes no watch (on Linux the shop's log folder is one).
+        let watched = watch.watched.clone();
         assert!(!watch.saw(event(removed, &[Path::new("/elsewhere")]), &shop));
-        assert_eq!(watch.watched.len(), 2);
+        assert_eq!(watch.watched, watched);
         assert!(!watch.saw(event(removed, &[&records]), &shop));
         assert!(!watch.watched.contains_key(&records));
         let renamed = EventKind::Modify(ModifyKind::Name(RenameMode::From));
