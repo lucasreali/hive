@@ -1080,13 +1080,17 @@ impl Link {
     /// The window after `welcome` closed (26.17): each terminal this link kept across a drop
     /// that the service did not list in its `terminals_kept` (or sent none) ended meanwhile.
     fn confirmed(&mut self) {
-        let mut ended: Vec<_> = std::mem::take(&mut self.unconfirmed).into_iter().collect();
+        let unconfirmed = std::mem::take(&mut self.unconfirmed);
+        // One the UI closed meanwhile is gone already.
+        let terminals = &mut self.terminals;
+        let gone = unconfirmed
+            .into_iter()
+            .filter_map(|channel| terminals.remove(&channel));
+        let mut ended: Vec<u32> = gone.map(|term| term.ui).collect();
         ended.sort_unstable();
-        for channel in ended {
-            if let Some(term) = self.terminals.remove(&channel) {
-                let message = json!({"type": "terminal_exited", "channel": term.ui, "code": null});
-                self.to_ui(self.tagged(message));
-            }
+        for ui in ended {
+            let message = json!({"type": "terminal_exited", "channel": ui, "code": null});
+            self.to_ui(self.tagged(message));
         }
     }
 

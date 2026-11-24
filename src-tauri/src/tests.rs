@@ -1737,6 +1737,15 @@ async fn kept_terminals_the_app_does_not_have_open_from_the_ring() {
     assert_eq!(next(&mut bytes).await, CLEAR_SCREEN);
     assert_eq!(next(&mut bytes).await, b"x");
     assert_eq!(hive.link().terminals[&7].received, u64::MAX);
+    // Kept again on a link back (26.17): the one waiting for the UI (4) is not told again, and
+    // one that needs an id once none is left is left out.
+    hive.link().after_welcome = true;
+    (hive.link().ids).store(u32::MAX, std::sync::atomic::Ordering::SeqCst);
+    let terminals = vec![kept_terminal(4, 1), kept_terminal(9, 1)];
+    let got = told(&mut service, &mut rx, terminals).await;
+    assert_eq!(got, Vec::<Value>::new());
+    assert!(hive.link().terminals.contains_key(&4));
+    assert!(!hive.link().terminals.contains_key(&9));
     // Once the connection ends, no terminal is left.
     disconnected(&mut hive.link(), "gone".into());
     assert!(hive.link().terminals.is_empty());
