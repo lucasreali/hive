@@ -1769,9 +1769,13 @@ async fn a_remote_services_kept_terminals_are_checked_before_they_are_taken() {
     // Given twice, told once; the highest channel there may be is fine.
     terminals.extend([kept_terminal(3, 1), kept_terminal(3, 1)]);
     terminals.push(kept_terminal(1 << 20, 1));
+    // Texts of the longest length there may be are fine.
+    let mut longest = kept_terminal(4, 1);
+    longest.cwd = "x".repeat(4096);
+    terminals.push(longest);
     let got = told(&mut service, &mut rx, terminals).await;
     let channels: Vec<_> = got.iter().map(|m| m["channel"].clone()).collect();
-    assert_eq!(channels, [json!(3), json!(1 << 20)]);
+    assert_eq!(channels, [json!(3), json!(1 << 20), json!(4)]);
     // Only right after `welcome`: a later one is ignored.
     let got = told(&mut service, &mut rx, vec![kept_terminal(5, 1)]).await;
     assert_eq!(got, Vec::<Value>::new());
