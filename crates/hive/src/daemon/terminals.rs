@@ -5,7 +5,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, PoisonError};
 use std::time::{Duration, Instant};
 
-use hive_protocol::{AccountDir, Control, Frame};
+use hive_protocol::{AccountDir, Control, Frame, KeptTerminal};
 use tokio::io::AsyncReadExt;
 use tokio::sync::mpsc;
 
@@ -27,6 +27,46 @@ impl State {
         if let Some((_, output)) = self.inputs().get(&channel) {
             output.ack(bytes);
         }
+    }
+
+    /// The terminals a dropped or replaced app connection left running (26.15), for a new one
+    /// (`terminals_kept`, 26.16), by channel; `None` when there is none.
+    pub(super) fn terminals_kept(&self) -> Option<Control> {
+        let places: Vec<KeptTerminal> = self.kept().values().cloned().collect();
+        let inputs = self.inputs();
+        let mut terminals: Vec<KeptTerminal> = (places.into_iter())
+            .filter_map(|place| {
+                let (_, output) = inputs.get(&place.channel)?;
+                let offset = output.kept(crate::ring::Ring::end)?;
+                Some(KeptTerminal { offset, ..place })
+            })
+            .collect();
+        terminals.sort_by_key(|t| t.channel);
+        (!terminals.is_empty()).then_some(Control::TerminalsKept { terminals })
+    }
+
+    /// The app's `attach_terminal` (26.16): terminal `channel`'s output goes to `frames`, its
+    /// connection's queue, after what it wrote from offset `from` on ([`terminal::Output::reattach`]).
+    /// One that ended meanwhile answers `terminal_exited` (its exit went to no app); one that
+    /// is not kept, an error.
+    pub(super) async fn attach(
+        &self,
+        channel: u32,
+        from: u64,
+        frames: mpsc::UnboundedSender<Frame>,
+    ) {
+        let output = self
+            .inputs()
+            .get(&channel)
+            .map(|(_, output)| output.clone());
+        let reply = match output {
+            None => Control::TerminalExited { code: None },
+            Some(output) if output.reattach(frames, from) => return,
+            Some(_) => Control::Error {
+                message: format!("terminal {channel} is not kept"),
+            },
+        };
+        self.to_app(channel, &reply).await;
     }
 
     /// Opens a terminal of `(cols, rows)` in `cwd`, as the `account` asked for (12.2; its
@@ -97,6 +137,16 @@ impl State {
                             slot.insert(terminal);
                             let output = terminal::Output::new(channel, frames, kept);
                             self.inputs().insert(channel, (input, output.clone()));
+                            if kept {
+                                let place = KeptTerminal {
+                                    channel,
+                                    cwd: cwd.to_owned(),
+                                    worktree: worktree.clone(),
+                                    account: account.clone(),
+                                    offset: 0,
+                                };
+                                self.kept().insert(channel, place);
+                            }
                             // Before the pump starts: a shell that exits at once removes it.
                             if let Some(worktree) = worktree.clone() {
                                 let mut worktrees = self
@@ -241,6 +291,7 @@ async fn pump(
         let mut terminals = state.terminals.lock().await;
         terminals.remove(&channel);
         state.inputs().remove(&channel);
+        state.kept().remove(&channel);
         state
             .terminal_worktrees
             .lock()
@@ -437,5 +488,80 @@ mod tests {
         assert!(!state.ticking().await);
         state.send_usage().await;
         assert!(state.ticking().await);
+    }
+
+    /// Registers terminal `channel`'s output to `frames`, with a ring when `kept`, as `open` does.
+    fn output(
+        state: &State,
+        channel: u32,
+        frames: &mpsc::UnboundedSender<Frame>,
+        kept: bool,
+    ) -> terminal::Output {
+        let output = terminal::Output::new(channel, frames.clone(), kept);
+        let (input, _) = mpsc::unbounded_channel();
+        state.inputs().insert(channel, (input, output.clone()));
+        if kept {
+            state.kept().insert(channel, place(channel, 0));
+        }
+        output
+    }
+
+    /// Terminal `channel`'s place, as `terminals_kept` gives it with `offset`.
+    fn place(channel: u32, offset: u64) -> KeptTerminal {
+        KeptTerminal {
+            channel,
+            cwd: format!("/r/{channel}"),
+            worktree: Some("/r".into()),
+            account: "Work".into(),
+            offset,
+        }
+    }
+
+    #[tokio::test]
+    async fn only_terminals_with_a_ring_are_kept_with_their_offsets_in_channel_order() {
+        let dir = tempfile::tempdir().unwrap();
+        let state = super::super::test_state(dir.path());
+        let (frames, _queued) = mpsc::unbounded_channel();
+        // The local app's terminals: nothing to tell.
+        output(&state, 1, &frames, false);
+        assert_eq!(state.terminals_kept(), None);
+        for channel in [9, 4] {
+            let kept = output(&state, channel, &frames, true);
+            assert!(kept.send(&vec![b'x'; channel as usize]).await);
+        }
+        let terminals = vec![place(4, 4), place(9, 9)];
+        let kept = Some(Control::TerminalsKept { terminals });
+        assert_eq!(state.terminals_kept(), kept);
+    }
+
+    #[tokio::test]
+    async fn an_attach_replays_the_ring_or_says_why_it_cannot() {
+        let dir = tempfile::tempdir().unwrap();
+        let state = super::super::test_state(dir.path());
+        let (app, mut to_app) = mpsc::unbounded_channel();
+        *state.app.lock().await = Some(app);
+        let (frames, _queued) = mpsc::unbounded_channel();
+        output(&state, 1, &frames, false);
+        let kept = output(&state, 2, &frames, true);
+        kept.detach(&frames);
+        assert!(kept.send(b"abc").await);
+        let (new, mut replayed) = mpsc::unbounded_channel();
+        // A kept one: what it wrote after `from` goes to the new connection's queue.
+        state.attach(2, 1, new.clone()).await;
+        let frame = replayed.try_recv().unwrap();
+        assert_eq!((frame.channel, &frame.payload[..]), (2, &b"bc"[..]));
+        assert!(to_app.try_recv().is_err());
+        // One without a ring: refused. One no longer open: its exit.
+        state.attach(1, 0, new.clone()).await;
+        state.attach(3, 0, new).await;
+        let answers: Vec<_> = std::iter::from_fn(|| to_app.try_recv().ok())
+            .map(|frame| (frame.channel, frame.to_control().unwrap()))
+            .collect();
+        let refused = Control::Error {
+            message: "terminal 1 is not kept".into(),
+        };
+        let exited = Control::TerminalExited { code: None };
+        assert_eq!(answers, [(1, refused), (3, exited)]);
+        assert!(replayed.try_recv().is_err());
     }
 }

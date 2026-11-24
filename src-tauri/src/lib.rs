@@ -773,12 +773,41 @@ struct Term {
     /// The id the UI knows it by (26.17): unique across every link, so ids never clash; the
     /// frame channel of a terminal this app opened.
     ui: u32,
-    output: Channel<InvokeResponseBody>,
+    /// `None` for a terminal a remote service kept (`terminals_kept`, 26.16) that no UI took
+    /// yet (`attach_terminal`): the service sends it nothing until then.
+    output: Option<Channel<InvokeResponseBody>>,
     cwd: String,
     /// Its `terminal_opened`'s `worktree` and `account` (21.7); null until then.
     worktree: Value,
     account: Value,
+    /// How many bytes of its output reached the UI (26.16): the offset a reattach asks for.
+    received: u64,
 }
+
+impl Term {
+    fn new(ui: u32, output: Option<Channel<InvokeResponseBody>>, cwd: String) -> Self {
+        Self {
+            ui,
+            output,
+            cwd,
+            worktree: Value::Null,
+            account: Value::Null,
+            received: 0,
+        }
+    }
+}
+
+/// What the UI's xterm.js takes as "clear everything" (RIS, `ESC c`): a terminal's output after
+/// `terminal_reset` (26.16) starts on an empty screen, in order with the bytes that follow.
+const CLEAR_SCREEN: &[u8] = b"\x1bc";
+
+/// The most terminals a `terminals_kept` brings (26.16); a remote service is not trusted.
+const MAX_KEPT: usize = 256;
+/// The highest channel a kept terminal may have: far above what one app run opens, far
+/// below `u32::MAX`, so a hostile one cannot use up the channels new terminals need.
+const MAX_KEPT_CHANNEL: u32 = 1 << 20;
+/// The longest `cwd`, `worktree` or `account` of a kept terminal, in bytes: a path's.
+const MAX_KEPT_TEXT: usize = 4096;
 
 #[derive(Default)]
 struct Link {
@@ -796,6 +825,12 @@ struct Link {
     /// The last terminal id given, shared by every link (26.17): an id is a new terminal's
     /// frame channel and the UI's id for it.
     ids: Arc<AtomicU32>,
+    /// The last frame read was this connection's first `welcome`: only then is a
+    /// `terminals_kept` taken (26.16), so a service can send it once, as its first message.
+    after_welcome: bool,
+    /// The terminals this link had when its service welcomed it (kept across a drop): each one
+    /// the service's `terminals_kept` does not list ended with the old connection (26.17).
+    unconfirmed: HashSet<u32>,
     /// The remote host this link reaches (26.17); `None` for the local service. Its messages
     /// to the UI carry it as `host`.
     host: Option<String>,
@@ -987,6 +1022,108 @@ impl Link {
         }
     }
 
+    /// The service's `terminals_kept` (26.16), the first message after its `welcome`. A
+    /// terminal the UI shows is attached again after what it received, and the UI redraws it
+    /// (`terminal_reattached`). One it does not have (the app restarted) gets a new id and is
+    /// told to the UI as `terminal_kept`, which opens its tab and takes its output
+    /// (`attach_terminal`). New terminals' ids pass over the kept ones ([`Link::kept_id`]).
+    /// A remote service is not trusted: at most [`MAX_KEPT`] terminals, each on a channel from
+    /// 1 to [`MAX_KEPT_CHANNEL`] given once, with texts of at most [`MAX_KEPT_TEXT`] bytes; a
+    /// terminal already waiting for the UI is not told again. The rest is left out. Then each
+    /// terminal this link kept that the service does not list ended ([`Link::confirmed`]).
+    fn kept(&mut self, value: Value) {
+        let terminals = match serde_json::from_value(value) {
+            Ok(Control::TerminalsKept { terminals }) => terminals,
+            _ => Vec::new(),
+        };
+        let mut seen = HashSet::new();
+        for kept in terminals.into_iter().take(MAX_KEPT) {
+            let channel = kept.channel;
+            let texts = [Some(&kept.cwd), kept.worktree.as_ref(), Some(&kept.account)];
+            let long = texts.into_iter().flatten().any(|t| t.len() > MAX_KEPT_TEXT);
+            let plausible = (1..=MAX_KEPT_CHANNEL).contains(&channel);
+            if !plausible || long || !seen.insert(channel) {
+                continue;
+            }
+            self.unconfirmed.remove(&channel);
+            match self.terminals.get(&channel) {
+                // Already waiting for the UI's `attach_terminal`.
+                Some(Term { output: None, .. }) => {}
+                Some(Term {
+                    ui,
+                    output: Some(_),
+                    received,
+                    ..
+                }) => {
+                    let (ui, from) = (*ui, *received);
+                    let _ = self.send(channel, &Control::AttachTerminal { from });
+                    let message = json!({"type": "terminal_reattached", "channel": ui});
+                    self.to_ui(self.tagged(message));
+                }
+                None => {
+                    let Some(ui) = self.kept_id(channel) else {
+                        break;
+                    };
+                    let mut term = Term::new(ui, None, kept.cwd);
+                    term.worktree = kept.worktree.into();
+                    term.account = kept.account.into();
+                    let (cwd, worktree, account) = (&term.cwd, &term.worktree, &term.account);
+                    let message = json!({"type": "terminal_kept", "channel": ui, "cwd": cwd, "worktree": worktree, "account": account});
+                    self.to_ui(self.tagged(message));
+                    self.terminals.insert(channel, term);
+                }
+            }
+        }
+        self.confirmed();
+    }
+
+    /// The window after `welcome` closed (26.17): each terminal this link kept across a drop
+    /// that the service did not list in its `terminals_kept` (or sent none) ended meanwhile.
+    fn confirmed(&mut self) {
+        let mut ended: Vec<_> = std::mem::take(&mut self.unconfirmed).into_iter().collect();
+        ended.sort_unstable();
+        for channel in ended {
+            if let Some(term) = self.terminals.remove(&channel) {
+                let message = json!({"type": "terminal_exited", "channel": term.ui, "code": null});
+                self.to_ui(self.tagged(message));
+            }
+        }
+    }
+
+    /// The UI's id for a kept terminal on `channel` this app does not have: the channel itself
+    /// when it is past every id given (no link's terminal has it, as before the app restarted),
+    /// then new terminals' ids pass it; else a new id.
+    fn kept_id(&self, channel: u32) -> Option<u32> {
+        let last = self.ids.fetch_max(channel, SeqCst);
+        if channel > last {
+            Some(channel)
+        } else {
+            self.next_id()
+        }
+    }
+
+    /// The next terminal id of every link's; `None` once they ran out.
+    fn next_id(&self) -> Option<u32> {
+        let next = |id: u32| id.checked_add(1);
+        let last = self.ids.try_update(SeqCst, SeqCst, next).ok()?;
+        Some(last + 1)
+    }
+
+    /// The service's `terminal_reset {offset}` (26.16): terminal `channel`'s output that follows
+    /// is its whole ring from `offset`, so the UI's screen is cleared first, in order with it.
+    fn reset(&mut self, channel: u32, offset: u64) {
+        // Only for a terminal the UI took: one waiting for it gets nothing, so counts nothing.
+        if let Some(Term {
+            output: Some(output),
+            received,
+            ..
+        }) = self.terminals.get_mut(&channel)
+        {
+            *received = offset;
+            let _ = output.send(InvokeResponseBody::Raw(CLEAR_SCREEN.to_vec()));
+        }
+    }
+
     /// `message` with this link's `host`, for a remote's (26.17).
     fn tagged(&self, mut message: Value) -> Value {
         if let Some(host) = &self.host {
@@ -1031,16 +1168,7 @@ impl Host {
             account,
         };
         let id = link.open(&open)?;
-        link.terminals.insert(
-            id,
-            Term {
-                ui: id,
-                output,
-                cwd,
-                worktree: Value::Null,
-                account: Value::Null,
-            },
-        );
+        link.terminals.insert(id, Term::new(id, Some(output), cwd));
         Ok(id)
     }
 }
@@ -1548,7 +1676,9 @@ impl Hive {
         let link = self.link.clone();
         let task = tokio::spawn(async move {
             let reason = match ended.await {
-                End::Refused => return,
+                // The UI shows the refusal (`version_mismatch`), not `disconnected`; nothing of
+                // the connection is kept for the next one.
+                End::Refused => return refused(&mut lock(&link)),
                 End::Closed => exit.await,
                 End::Broken(error) => error,
             };
@@ -1580,8 +1710,10 @@ impl Hive {
         self.link().crashed = true;
     }
 
-    /// A UI reloaded after a WebContent crash takes terminal `id`'s output (`terminal_kept`).
-    /// What the dead page never acknowledged is acknowledged, so the terminal's output flows.
+    /// The UI takes terminal `id`'s output (`terminal_kept`). One a remote service kept that no
+    /// UI had yet (26.16) is attached from the service: `attach_terminal {from: 0}`, so its ring
+    /// is replayed. One kept through a WebContent crash (18.21): what the dead page never
+    /// acknowledged is acknowledged, so the terminal's output flows.
     pub fn attach_terminal(
         &self,
         id: u32,
@@ -1590,8 +1722,13 @@ impl Hive {
         let (host, channel) = self.terminal(id);
         let mut link = host.link();
         let term = link.terminals.get_mut(&channel).ok_or("no such terminal")?;
-        term.output = output;
-        link.send(channel, &Control::Ack { bytes: u32::MAX })
+        let message = match term.output.replace(output) {
+            None => Control::AttachTerminal {
+                from: term.received,
+            },
+            Some(_) => Control::Ack { bytes: u32::MAX },
+        };
+        link.send(channel, &message)
     }
 
     /// Keystrokes or pasted text, split to fit the frame size limit. Each terminal request goes
@@ -2376,6 +2513,9 @@ fn burst(
 /// Routes service frames until the connection ends.
 async fn pump(link: &Mutex<Link>, mut frames: FramedRead<Reader<'_>, FrameCodec>) -> End {
     let mut held = None;
+    // This connection's handshake came (26.16): kept per call, so a connection that ended
+    // without `disconnected` (a refused one) never makes the next one's `welcome` look repeated.
+    let mut welcomed = false;
     while let Some(frame) = match held.take() {
         Some(next) => next,
         None => frames.next().await,
@@ -2384,6 +2524,12 @@ async fn pump(link: &Mutex<Link>, mut frames: FramedRead<Reader<'_>, FrameCodec>
             Ok(frame) => frame,
             Err(error) => return End::Broken(error.to_string()),
         };
+        // Any frame closes the window `welcome` opened for `terminals_kept` (26.16); one that
+        // is not it says the service kept none of this link's terminals (26.17).
+        let after_welcome = std::mem::take(&mut lock(link).after_welcome);
+        if after_welcome && !is_kept(&frame) {
+            lock(link).confirmed();
+        }
         if frame.kind == FrameType::Data {
             lock(link).data(frame.channel, frame.payload.to_vec());
             continue;
@@ -2391,10 +2537,18 @@ async fn pump(link: &Mutex<Link>, mut frames: FramedRead<Reader<'_>, FrameCodec>
         if frame.kind == FrameType::Terminal {
             let (joined, next) = burst(frame, &mut frames);
             held = next;
-            let link = lock(link);
+            let mut link = lock(link);
             for (channel, bytes) in joined {
-                if let Some(term) = link.terminals.get(&channel) {
-                    let _ = term.output.send(InvokeResponseBody::Raw(bytes));
+                // Counted only once sent to a UI: a terminal waiting for one is replayed from
+                // what it got.
+                if let Some(Term {
+                    output: Some(output),
+                    received,
+                    ..
+                }) = link.terminals.get_mut(&channel)
+                {
+                    *received = received.saturating_add(bytes.len() as u64);
+                    let _ = output.send(InvokeResponseBody::Raw(bytes));
                 }
             }
             continue;
@@ -2420,7 +2574,13 @@ async fn pump(link: &Mutex<Link>, mut frames: FramedRead<Reader<'_>, FrameCodec>
         let remote = link.host.is_some();
         value = link.tagged(value);
         match value["type"].as_str().unwrap_or_default() {
+            // A connection has one handshake: a remote service's second `welcome` is
+            // ignored, so it never opens the window for `terminals_kept` again (26.16).
+            "welcome" if welcomed => continue,
             "welcome" => {
+                welcomed = true;
+                link.after_welcome = true;
+                link.unconfirmed = link.terminals.keys().copied().collect();
                 link.welcome = Some(value.clone());
                 // The UI always gets the projects after the handshake.
                 let _ = link.send(0, &Control::ListProjects);
@@ -2444,6 +2604,18 @@ async fn pump(link: &Mutex<Link>, mut frames: FramedRead<Reader<'_>, FrameCodec>
                 return End::Refused;
             }
             "terminal_exited" => drop(link.terminals.remove(&frame.channel)),
+            // The app's own (26.16): what the UI gets of them is `terminal_kept`,
+            // `terminal_reattached` and a cleared screen.
+            "terminals_kept" => {
+                if after_welcome && frame.channel == 0 {
+                    link.kept(value);
+                }
+                continue;
+            }
+            "terminal_reset" => {
+                link.reset(frame.channel, value["offset"].as_u64().unwrap_or_default());
+                continue;
+            }
             // The `hive-file:` scheme's, never the UI's.
             "file_range" => {
                 link.range(value);
@@ -2471,11 +2643,27 @@ async fn pump(link: &Mutex<Link>, mut frames: FramedRead<Reader<'_>, FrameCodec>
     End::Closed
 }
 
+/// Whether `frame` is the service's `terminals_kept` (26.16), on channel 0.
+fn is_kept(frame: &Frame) -> bool {
+    let kept = || {
+        let value = serde_json::from_slice::<Value>(&frame.payload).ok();
+        value.is_some_and(|value| value["type"] == "terminals_kept")
+    };
+    frame.kind == FrameType::Control && frame.channel == 0 && kept()
+}
+
 /// Ends the connection: every open terminal exits, then the UI gets `disconnected`.
 fn disconnected(link: &mut Link, reason: String) {
     dropped(link);
     link.end_terminals();
     link.to_ui(json!({"type": "disconnected", "reason": reason, "bundled": link.bundled}));
+}
+
+/// The local service refused the handshake (`version_mismatch`): its terminals end with the
+/// connection, as on `disconnected`, without that message: the UI shows the refusal.
+fn refused(link: &mut Link) {
+    dropped(link);
+    link.end_terminals();
 }
 
 /// Forgets what a connection that ended told: its terminals stay, for the caller to end (or,
@@ -2489,6 +2677,9 @@ fn dropped(link: &mut Link) {
     link.approved.clear();
     // Each waiting `hive-file:` read fails.
     link.reads.clear();
+    // A new connection has its own handshake and its own `terminals_kept`.
+    link.after_welcome = false;
+    link.unconfirmed.clear();
 }
 
 /// What a request to quit does (D17.3): quit now, or ask the UI first.

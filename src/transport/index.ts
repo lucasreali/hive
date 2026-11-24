@@ -40,8 +40,10 @@ export interface Transport {
     account?: AccountDir,
   ): Promise<number>;
   /**
-   * A page reloaded after a WebContent crash (18.21) takes the output of terminal `id`, one the
-   * app kept (`terminal_kept`), in `onData`. Rejects for a terminal that is not open.
+   * The page takes the output of terminal `id`, one it does not have (`terminal_kept`), in
+   * `onData`: kept by the app through a WebContent crash (18.21), or by a remote service while
+   * the app was gone (26.16), whose ring then arrives first. Rejects for a terminal that is not
+   * open.
    */
   attachTerminal(id: number, onData: (bytes: Uint8Array) => void): Promise<void>;
   writeTerminal(id: number, data: string): Promise<void>;

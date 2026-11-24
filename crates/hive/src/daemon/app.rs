@@ -232,6 +232,10 @@ where
         let _ = writer.send(Frame::control(0, &message)).await;
         return None;
     }
+    // First after `welcome`: the terminals a dropped connection left, for the app to attach.
+    if let Some(kept) = state.terminals_kept() {
+        state.to_app(0, &kept).await;
+    }
     *state.listed() = None;
     *state.scripted() = None;
     state.send_settings().await;
@@ -333,6 +337,7 @@ async fn app_frame(
         }
         Ok(Control::Resize { cols, rows }) => state.input(channel, Input::Resize { cols, rows }),
         Ok(Control::Ack { bytes }) => state.ack(channel, bytes),
+        Ok(Control::AttachTerminal { from }) => state.attach(channel, from, output.clone()).await,
         Ok(Control::CloseTerminal) => state.close(channel),
         Ok(Control::WatchWorktree { path, base }) => state.watch_worktree(Some((path, base))).await,
         Ok(Control::UnwatchWorktree) => state.watch_worktree(None).await,

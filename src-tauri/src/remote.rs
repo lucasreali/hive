@@ -570,16 +570,10 @@ fn status(link: &mut Link, mut fields: Value) {
     link.to_ui(message);
 }
 
-/// The remote's service welcomed the link: it is connected, and its kept terminals reattach.
+/// The remote's service welcomed the link: it is connected. Its terminals kept across the drop
+/// reattach after the service's `terminals_kept` (26.16, `Link::kept`).
 pub(crate) fn welcomed(link: &mut Link) {
     status(link, json!({"state": "connected"}));
-    reattach(link);
-}
-
-/// The hook for the terminals this link kept across a drop (26.16 attaches them to its service's
-/// kept terminals). Until the service can attach one, each is told to the UI as ended.
-fn reattach(link: &mut Link) {
-    link.end_terminals();
 }
 
 /// Drives `remote`'s link until it is ended: connects, installs this app's `hive` when the host

@@ -577,6 +577,10 @@ function reduce(s: HiveState, m: ServiceMessage): Partial<HiveState> {
     case "files_dropped":
     // The `hive-file:` scheme's, kept by the Tauri side (24.2).
     case "file_range":
+    // The reattach's (26.16): kept by the Tauri side, or a redraw (`connect`).
+    case "terminals_kept":
+    case "terminal_reset":
+    case "terminal_reattached":
     // Kept in the inbox by `notify`.
     case "pull_ended":
     case "command_finished":

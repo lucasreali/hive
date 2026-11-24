@@ -720,14 +720,24 @@ async fn a_dropped_link_keeps_its_terminals_and_retries_every_30_s_while_it_does
     service.welcome(60).await;
     until(&mut rx, "connected").await;
     let link = remotes.link("gpu").unwrap();
-    let (output, _bytes) = output();
+    let (shown, mut bytes) = output();
     let host = crate::Host {
         link: Arc::clone(&link),
     };
     let id = host
-        .open_terminal("/w".into(), 80, 24, None, output)
+        .open_terminal("/w".into(), 80, 24, None, shown)
         .unwrap();
     assert_eq!(service.control().await.0, id);
+    service
+        .writer
+        .send(Frame::terminal(id, b"abc".to_vec()))
+        .await
+        .unwrap();
+    let shown = tokio::time::timeout(WAIT, bytes.recv()).await.unwrap();
+    assert_eq!(shown.unwrap(), b"abc");
+    // A terminal the service will not keep, shown as 99.
+    let gone = Term::new(99, Some(output().0), "/gone".into());
+    lock(&link).terminals.insert(50, gone);
     drop(service);
     // Seven tries on the ladder and past it, each failing, then the eighth links again.
     let mut service = Service::accept(&listener).await;
@@ -739,12 +749,53 @@ async fn a_dropped_link_keeps_its_terminals_and_retries_every_30_s_while_it_does
     assert!(lock(&link).terminals.contains_key(&id));
     service.welcome(60).await;
     until(&mut rx, "connected").await;
-    // Reattaching is 26.16's: until then the kept terminal is told ended.
+    // The service kept the terminal shown, and one this app never had (26.16).
+    let kept = |channel, cwd: &str| hive_protocol::KeptTerminal {
+        channel,
+        cwd: cwd.into(),
+        worktree: Some("/r".into()),
+        account: "Work".into(),
+        offset: 9,
+    };
+    let terminals = vec![kept(id, "/w"), kept(70, "/r/src")];
+    service.send(0, Control::TerminalsKept { terminals }).await;
+    // The one shown attaches after what it showed, and the UI redraws it.
+    assert_eq!(
+        service.control().await,
+        (id, Control::AttachTerminal { from: 3 })
+    );
+    let reattached = next_of(&mut rx, "terminal_reattached").await;
+    assert_eq!(
+        reattached,
+        json!({"type": "terminal_reattached", "channel": id, "host": "gpu"})
+    );
+    // The other keeps its channel as its id, past every link's, and waits for the UI to take
+    // it.
+    let new = next_of(&mut rx, "terminal_kept").await;
+    assert_eq!(
+        new,
+        json!({"type": "terminal_kept", "channel": 70, "cwd": "/r/src", "worktree": "/r", "account": "Work", "host": "gpu"})
+    );
+    // The one the service did not keep ended.
     let exited = next_of(&mut rx, "terminal_exited").await;
     assert_eq!(
         exited,
-        json!({"type": "terminal_exited", "channel": id, "code": null, "host": "gpu"})
+        json!({"type": "terminal_exited", "channel": 99, "code": null, "host": "gpu"})
     );
+    // Its ring no longer held what the UI showed: the screen is cleared, then the ring follows.
+    service.send(id, Control::TerminalReset { offset: 1 }).await;
+    let cleared = tokio::time::timeout(WAIT, bytes.recv()).await.unwrap();
+    assert_eq!(cleared.unwrap(), b"\x1bc");
+    assert_eq!(lock(&link).terminals[&id].received, 1);
+    // Both end on the service: a link without terminals waits less.
+    for channel in [id, 70] {
+        let exited = Control::TerminalExited { code: None };
+        service.send(channel, exited).await;
+    }
+    let exited = next_of(&mut rx, "terminal_exited").await;
+    assert_eq!(exited["channel"], id);
+    let exited = next_of(&mut rx, "terminal_exited").await;
+    assert_eq!(exited["channel"], 70);
     assert!(lock(&link).terminals.is_empty());
     // A link that was welcomed starts the ladder over when it drops.
     drop(service);
@@ -754,6 +805,42 @@ async fn a_dropped_link_keeps_its_terminals_and_retries_every_30_s_while_it_does
         slept.push(wait.as_secs());
     }
     assert_eq!(slept, [1, 2, 5, 10, 30]);
+    remotes.end();
+}
+
+#[tokio::test]
+async fn a_service_that_kept_none_ends_the_terminals_its_link_kept() {
+    let lab = Lab::new("none-kept");
+    let listener = lab.listen();
+    let mut remotes = lab.remotes(Arc::default());
+    let _clock = fake_clock(&mut remotes);
+    let remotes = Arc::new(remotes);
+    lab.plan(&[lab.pipe(), lab.pipe()]);
+    let (channel, mut rx) = ui();
+    remotes.sync(settings(&["gpu"], 1), Some(&channel));
+    let mut service = Service::accept(&listener).await;
+    service.welcome(60).await;
+    until(&mut rx, "connected").await;
+    let link = remotes.link("gpu").unwrap();
+    let host = crate::Host {
+        link: Arc::clone(&link),
+    };
+    let id = host
+        .open_terminal("/w".into(), 80, 24, None, output().0)
+        .unwrap();
+    assert_eq!(service.control().await.0, id);
+    drop(service);
+    // Linked again, the service's first message is not `terminals_kept`: it kept none.
+    let mut service = Service::accept(&listener).await;
+    service.welcome(60).await;
+    assert!(lock(&link).terminals.contains_key(&id));
+    service.send(0, Control::UnhookedAgent).await;
+    let exited = next_of(&mut rx, "terminal_exited").await;
+    assert_eq!(
+        exited,
+        json!({"type": "terminal_exited", "channel": id, "code": null, "host": "gpu"})
+    );
+    assert!(lock(&link).terminals.is_empty());
     remotes.end();
 }
 
@@ -1111,13 +1198,7 @@ async fn a_new_terminal_skips_the_channels_its_link_already_uses() {
     let link = remotes.link("gpu").unwrap();
     // Kept terminals the service knows by channels 1 and 2 (26.16), shown as 7 and 8.
     for (channel, ui) in [(1, 7), (2, 8)] {
-        let term = Term {
-            ui,
-            output: output().0,
-            cwd: "/k".into(),
-            worktree: Value::Null,
-            account: Value::Null,
-        };
+        let term = Term::new(ui, Some(output().0), "/k".into());
         lock(&link).terminals.insert(channel, term);
     }
     let host = crate::Host {
