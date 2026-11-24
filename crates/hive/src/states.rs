@@ -334,14 +334,25 @@ impl Agent {
             .iter()
             .filter_map(|t| t.get("id").and_then(Value::as_str))
             .collect();
-        for id in self.waiting.clone() {
+        let mut gone = Vec::new();
+        for id in &self.waiting {
             let ids = self.launched.entry(id.clone()).or_default();
             ids.retain(|t| live.contains(t.as_str()));
             if ids.is_empty() {
-                self.leave(&id);
-            } else if let Some(sub) = self.subagents.iter_mut().find(|s| s.id == id) {
-                sub.state = AgentState::Working;
+                gone.push(id.clone());
             }
+        }
+        for id in &gone {
+            self.leave(id);
+        }
+        // A waiting subagent is listed: its launches were recorded on its line.
+        let waiting = &self.waiting;
+        for sub in self
+            .subagents
+            .iter_mut()
+            .filter(|s| waiting.contains(&s.id))
+        {
+            sub.state = AgentState::Working;
         }
     }
 

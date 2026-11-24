@@ -1,6 +1,7 @@
 import { afterEach, beforeAll, expect, spyOn, test } from "bun:test";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { notice } from "../../test/notice";
+import { detachAfterAll } from "../../test/transport";
 import { LINK_DOWN, unsent } from "../../test/unsent";
 import { App } from "../App";
 import { apply } from "../reduce";
@@ -9,6 +10,8 @@ import { closeTerminal } from "../terminals";
 import { transport } from "../transport";
 import { MOCK_ISSUES, MOCK_REPOS } from "../transport/mock";
 import { issueNumber } from "./NewWorktreeDialog";
+
+detachAfterAll();
 
 // Tests run outside Tauri, so the mock service answers every request once connected. It keeps
 // its state for the whole run, so each test creates a worktree with its own name.

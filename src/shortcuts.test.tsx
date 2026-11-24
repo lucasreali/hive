@@ -9,6 +9,7 @@ import {
   waitFor,
 } from "@testing-library/react";
 import { asMac } from "../test/mac";
+import { detachAfterAll } from "../test/transport";
 import { App } from "./App";
 import type { AgentState, Project } from "./protocol";
 import { apply } from "./reduce";
@@ -18,6 +19,8 @@ import { initialState, openModal, renderedShown, select, setOpenFile, useHive } 
 import { closeTerminal, openTerminal, terminal } from "./terminals";
 import { transport } from "./transport";
 import { agentStatus, MOCK_GROUP, MOCK_REPOS } from "./transport/mock";
+
+detachAfterAll();
 
 beforeAll(async () => {
   await transport.connect(apply);

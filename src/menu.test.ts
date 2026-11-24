@@ -1,11 +1,14 @@
-import { afterAll, afterEach, expect, spyOn, test } from "bun:test";
+import { afterEach, expect, spyOn, test } from "bun:test";
+import { detachAfterAll } from "../test/transport";
 import { connect } from "./connect";
 import { HELP_URL, ISSUE_URL, MENU_ITEMS, runMenuItem } from "./menu";
 import { apply } from "./reduce";
 import { COMMANDS } from "./shortcuts";
-import { initialState, openModal, useHive } from "./store";
+import { openModal, useHive } from "./store";
 import { transport } from "./transport";
 import { MOCK_REPOS } from "./transport/mock";
+
+detachAfterAll();
 
 // 17.13: the app menu's own items reach the UI as `menu {item}`; the mock transport sends it for
 // `menu <item>` typed in a terminal.
@@ -22,7 +25,6 @@ afterEach(() => {
   for (const dialog of document.querySelectorAll("dialog")) dialog.remove();
   useHive.setState({ notices: [], sidebarShown: true, rightPanel: "files" });
 });
-afterAll(() => useHive.setState(initialState, true));
 
 test("the UI knows every item of the app side's menu but Quit, which the app side answers", () => {
   // As `src-tauri/src/menu.rs`'s `MENUS` (its test lists the same ids).

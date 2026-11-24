@@ -22,6 +22,9 @@ afterEach(() => {
   viewer?.destroy();
   viewer = null;
   document.body.innerHTML = "";
+  // CodeMirror selects in the document: a selection left behind makes a later file's click
+  // read as the end of a text selection.
+  window.getSelection()?.removeAllRanges();
 });
 
 /** Scrolls `view` to `top` as the user does; the scroll it then keeps. */

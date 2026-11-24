@@ -12,6 +12,7 @@ import { FitAddon } from "@xterm/addon-fit";
 import type { Terminal } from "@xterm/xterm";
 import { asMac } from "../test/mac";
 import { notice } from "../test/notice";
+import { detachAfterAll } from "../test/transport";
 import LIGATURES from "./assets/fonts/ligatures.json";
 import { Marks } from "./marks";
 import type { AgentState } from "./protocol";
@@ -20,6 +21,8 @@ import { DEFAULT_SETTINGS, initialState, setSystemTheme, setWidth, useHive } fro
 import { shownTerminals } from "./tabs";
 import { transport } from "./transport";
 import { agentStatus } from "./transport/mock";
+
+detachAfterAll();
 
 // happy-dom has no WebGL: a fake addon records what the manager does with the renderer.
 let webglFails = false;

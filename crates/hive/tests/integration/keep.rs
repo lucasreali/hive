@@ -83,9 +83,11 @@ async fn a_kept_terminal_writes_on_past_the_window_once_the_link_drops() {
     let daemon = env.daemon();
     let mut app = app(&env, Some(60), Some("a")).await;
     app.open_terminal(1, &env.path("home")).await;
-    // 4 MiB, far past the 512 KiB the app may leave unacknowledged, then a mark.
+    // Twice what the app may leave unacknowledged (512 KiB), then a mark: kept small, as
+    // draining it through a PTY on a loaded macOS runner must fit `wait_until`'s deadline.
     let done = env.path("done");
-    let flood = format!("yes | head -c 4194304; touch '{}'\r", done.display());
+    let bytes = 2 * hive::terminal::HIGH_WATER;
+    let flood = format!("yes | head -c {bytes}; touch '{}'\r", done.display());
     app.input(1, &flood).await;
     // The flood has begun; the app acknowledges none of it, so the terminal soon waits for
     // the app (9.19), and then the app goes mid-flood.
