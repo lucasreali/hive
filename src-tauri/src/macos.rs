@@ -2364,10 +2364,11 @@ mod tests {
     extern "C" fn no_handler(_: Id, _: Sel, _: Id) -> Id {
         null_mut()
     }
+    /// Removes the handler of the scheme `ipc`, the only one removed (a panic here aborts the
+    /// test).
     extern "C" fn remove(_: Id, _: Sel, name: Id) {
-        if unsafe { from_utf8(name) }.as_deref() == Some("ipc") {
-            REMOVED.fetch_add(1, SeqCst);
-        }
+        assert_eq!(unsafe { from_utf8(name) }.as_deref(), Some("ipc"));
+        REMOVED.fetch_add(1, SeqCst);
     }
     extern "C" fn main_frame(_: Id, _: Sel) -> Bool {
         MAIN_FRAME.load(SeqCst) as Bool
@@ -2457,10 +2458,11 @@ mod tests {
         assert!(!unsafe { guard_ipc(webview, "HiveMissingDelegate", check) });
         assert_eq!(REMOVED.load(SeqCst), 1);
         // No `ipc` scheme handler: only the messages are guarded.
-        assert!(!unsafe { guard_ipc(bare, "HiveIpcDelegate", |_: &str| true) });
+        assert!(!unsafe { guard_ipc(bare, "HiveIpcDelegate", check) });
         assert_eq!(REMOVED.load(SeqCst), 1);
-        // Both: guarded (again, harmlessly), the first check kept.
-        assert!(unsafe { guard_ipc(webview, "HiveIpcDelegate", |_: &str| true) });
+        // Both: guarded (again, harmlessly), the first check kept. (The same check each time:
+        // one instantiation takes every path.)
+        assert!(unsafe { guard_ipc(webview, "HiveIpcDelegate", check) });
 
         // Messages: only the main frame at the app's URL is handed on.
         let send = message::<unsafe extern "C" fn(Id, Sel, Id, Id)>;

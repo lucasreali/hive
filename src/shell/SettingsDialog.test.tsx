@@ -3,6 +3,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testi
 import { version } from "../../package.json";
 import { asMac } from "../../test/mac";
 import { expectClearButton } from "../../test/searchClear";
+import { detachAfterAll } from "../../test/transport";
 import { App } from "../App";
 import { apply } from "../reduce";
 import { COMMANDS } from "../shortcuts";
@@ -17,6 +18,8 @@ import {
 } from "../transport/mock";
 import { isMac } from "../window";
 import { SECTIONS } from "./SettingsDialog";
+
+detachAfterAll();
 
 beforeAll(async () => {
   // The mock service keeps the settings and answers with them.

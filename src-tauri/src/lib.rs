@@ -2194,11 +2194,7 @@ impl Hive {
             checked => return self.checked(manual, checked.err().map(|e| e.to_string())),
         };
         let bytes = update.download(|_, _| {}, || {}).await;
-        let bytes = bytes.map_err(|error| error.to_string());
-        if let Err(error) = &bytes {
-            self.checked(manual, Some(error.clone()));
-        }
-        self.downloaded(update, bytes);
+        self.downloaded(update, bytes.map_err(|error| error.to_string()), manual);
     }
 
     /// A check that found nothing to offer: `update_checked {error}` (null: up to date) when the
@@ -2211,10 +2207,13 @@ impl Hive {
     }
 
     /// A downloaded update, its signature checked, is saved to wait for `install_update` or the
-    /// app's exit, and goes to the UI as `update_ready {version}`. A failed download or save
-    /// sends nothing, like a failed check: the next start tries again.
-    fn downloaded(&self, update: Update, bytes: Result<Vec<u8>, String>) {
-        let Ok(bytes) = bytes else { return };
+    /// app's exit, and goes to the UI as `update_ready {version}`. A failed download is
+    /// answered as a failed check; a failed save sends nothing: the next start tries again.
+    fn downloaded(&self, update: Update, bytes: Result<Vec<u8>, String>, manual: bool) {
+        let bytes = match bytes {
+            Ok(bytes) => bytes,
+            Err(error) => return self.checked(manual, Some(error)),
+        };
         let Some(dir) = &self.update_dir else { return };
         // The one saved before goes first: it is the same file.
         drop(self.link().update.take());

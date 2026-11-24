@@ -72,12 +72,7 @@ pub struct Watch {
 impl Watch {
     pub fn new() -> io::Result<Self> {
         let (tx, events) = mpsc::channel(EVENT_QUEUE);
-        let handler = move |event: notify::Result<Event>| {
-            if !matches!(&event, Ok(event) if event.kind.is_access()) {
-                // Full: a burst is already waiting to be seen.
-                let _ = tx.try_send(event);
-            }
-        };
+        let handler = move |event| queue(&tx, event);
         let watcher =
             RecommendedWatcher::new(handler, files::watch_config()).map_err(io::Error::other)?;
         Ok(Self {
@@ -173,6 +168,14 @@ impl Watch {
 }
 
 /// The followed projects' folders as Claude names their log folders.
+/// Queues `event` to be seen, unless it is a read; dropped when the queue is full: a burst is
+/// already waiting to be seen.
+fn queue(tx: &mpsc::Sender<notify::Result<Event>>, event: notify::Result<Event>) {
+    if !matches!(&event, Ok(event) if event.kind.is_access()) {
+        let _ = tx.try_send(event);
+    }
+}
+
 fn prefixes(folders: &[String]) -> Vec<String> {
     folders.iter().map(|f| normalized(f)).collect()
 }
@@ -409,6 +412,8 @@ mod tests {
 
         // A watched folder removed or renamed loses its watch, and is watched again once back.
         let removed = EventKind::Remove(RemoveKind::Folder);
+        assert!(!watch.saw(event(removed, &[Path::new("/elsewhere")]), &shop));
+        assert_eq!(watch.watched.len(), 2);
         assert!(!watch.saw(event(removed, &[&records]), &shop));
         assert!(!watch.watched.contains_key(&records));
         let renamed = EventKind::Modify(ModifyKind::Name(RenameMode::From));
@@ -436,6 +441,37 @@ mod tests {
             .await
             .expect("the log written was not seen");
         assert!(started.elapsed() >= QUIET);
+    }
+
+    #[test]
+    fn reads_are_not_queued_and_a_full_queue_drops_the_event() {
+        let (tx, mut rx) = mpsc::channel(1);
+        let read = EventKind::Access(notify::event::AccessKind::Any);
+        queue(&tx, event(read, &[Path::new("/a")]));
+        assert!(rx.try_recv().is_err());
+        let written = EventKind::Modify(ModifyKind::Data(DataChange::Any));
+        queue(&tx, event(written, &[Path::new("/a")]));
+        queue(&tx, event(written, &[Path::new("/b")]));
+        assert_eq!(rx.try_recv().unwrap().unwrap().paths, [PathBuf::from("/a")]);
+        assert!(rx.try_recv().is_err());
+    }
+
+    #[tokio::test]
+    async fn an_event_that_does_not_count_starts_no_burst() {
+        let mut watch = Watch::new().unwrap();
+        let (tx, events) = mpsc::channel(2);
+        watch.events = events;
+        let written = EventKind::Modify(ModifyKind::Data(DataChange::Any));
+        let elsewhere = Path::new("/elsewhere/-w-shop/s.jsonl");
+        tx.try_send(event(written, &[elsewhere])).unwrap();
+        let waited = tokio::time::timeout(2 * QUIET, watch.changed(shop)).await;
+        assert!(waited.is_err(), "a change was seen");
+        assert!(watch.burst.is_none());
+        // An error counts.
+        tx.try_send(Err(notify::Error::generic("lost"))).unwrap();
+        tokio::time::timeout(Duration::from_secs(10), watch.changed(shop))
+            .await
+            .expect("the error was not seen");
     }
 
     #[tokio::test]

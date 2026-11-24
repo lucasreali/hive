@@ -256,10 +256,9 @@ async fn shell_path(program: &OsStr, args: &[OsString], timeout: Duration) -> Op
     };
     // ponytail: only the shell is killed on a timeout; a process it left behind lives on.
     let out = tokio::time::timeout(timeout, run).await.ok()??;
-    let line = out
-        .strip_suffix(b"\n")?
-        .rsplit(|&byte| byte == b'\n')
-        .next()?;
+    // `rsplit` yields at least one piece: the whole output when it is one line.
+    let mut lines = out.strip_suffix(b"\n")?.rsplit(|&byte| byte == b'\n');
+    let line = lines.next().unwrap_or_default();
     (!line.is_empty()).then(|| crate::git::os_string(line))
 }
 

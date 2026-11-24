@@ -1,9 +1,12 @@
 import { afterAll, expect, test } from "bun:test";
+import { detachAfterAll } from "../test/transport";
 import { connect } from "./connect";
 import { DEFAULT_SETTINGS, initialState, useHive } from "./store";
 import { transport } from "./transport";
 import { MOCK_REPOS } from "./transport/mock";
 import { followTray } from "./tray";
+
+detachAfterAll();
 
 // 17.22: choosing a pending agent in the menu bar icon's menu goes to it, as the mock transport
 // sends the choice (`tray-click` typed in a terminal stands in for it: the first pending agent).

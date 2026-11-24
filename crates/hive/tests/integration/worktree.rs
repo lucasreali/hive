@@ -430,8 +430,9 @@ fn hook_create_prints_only_the_path() {
 fn hook_create_failures_print_nothing() {
     let repo = Repo::new();
     let payload = |name: &str| json!({"name": name, "cwd": repo.root}).to_string();
-    let cases: [(Vec<u8>, &str); 6] = [
+    let cases: [(Vec<u8>, &str); 7] = [
         (b"not json".to_vec(), "invalid hook input"),
+        (b"[]".to_vec(), "invalid hook input"),
         (
             json!({"cwd": repo.root}).to_string().into_bytes(),
             "no string field \"name\"",

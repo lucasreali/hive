@@ -584,6 +584,10 @@ mod tests {
         // Unchanged: nothing is sent again.
         append(&f.log, &spent("m2", 100, 0));
         assert_eq!(read(&mut agent), None);
+        // A line that is not JSON is skipped; the ones after it still count.
+        append(&f.log, "not json\n");
+        append(&f.log, &spent("m2b", 120, 0));
+        assert_eq!(read(&mut agent), usage(120, CONTEXT_LIMIT, 5));
         // A line still being written waits for its end.
         let next = spent("m3", 300_000, 2);
         append(&f.log, &next[..9]);

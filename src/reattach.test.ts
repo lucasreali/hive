@@ -1,12 +1,15 @@
-import { afterAll, expect, spyOn, test } from "bun:test";
+import { expect, spyOn, test } from "bun:test";
 import type { Terminal } from "@xterm/xterm";
 import { notice } from "../test/notice";
+import { detachAfterAll } from "../test/transport";
 import { connect } from "./connect";
 import type { ServiceMessage } from "./protocol";
 import { initialState, useHive } from "./store";
 import { closeTerminal, terminal } from "./terminals";
 import { transport } from "./transport";
 import { MOCK_REPOS } from "./transport/mock";
+
+detachAfterAll();
 
 // 18.21: after a WebContent crash the app keeps the terminals and tells the reloaded page about
 // each one (`terminal_kept`), which reattaches to it.
@@ -19,8 +22,6 @@ const screen = (term: Terminal) =>
   new Promise<string>((resolve) =>
     term.write("", () => resolve(term.buffer.active.getLine(0)?.translateToString(true) ?? "")),
   );
-
-afterAll(() => useHive.setState(initialState, true));
 
 test("a kept terminal gets its tab and its output back in the reloaded page", async () => {
   await connect();

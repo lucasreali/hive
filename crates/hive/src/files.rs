@@ -920,12 +920,9 @@ pub(crate) mod tests {
                 .collect::<BTreeSet<_>>()
         };
 
-        // Swapped after git named it an ignored folder, right before it is read.
-        watcher.hook = |step, root, folder| {
-            if matches!(step, Step::Read) && folder == "deps" {
-                swap(root, folder);
-            }
-        };
+        // Swapped after git named it an ignored folder, right before it is read (the only
+        // folder read, and none is watched yet).
+        watcher.hook = |_, root, folder| swap(root, folder);
         let listing = watcher.list().unwrap();
         assert_eq!(listing.ignored, ["deps/"]);
         assert_eq!(watched(&watcher), [""]);
@@ -1024,6 +1021,9 @@ pub(crate) mod tests {
             git(dir.path(), None, &["--version"], exact).unwrap(),
             (full, false)
         );
+        // An argument git cannot be given runs nothing.
+        let err = git(dir.path(), None, &["a\0b"], 1024).unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
     }
 
     #[test]
@@ -1155,6 +1155,22 @@ pub(crate) mod tests {
     }
 
     #[tokio::test]
+    async fn an_event_that_does_not_count_starts_no_burst() {
+        let (_dir, root) = repo();
+        let mut watcher = Watcher::new(&root).unwrap();
+        let (tx, events) = mpsc::channel(2);
+        watcher.events = events;
+        // A folder's own change.
+        std::fs::create_dir(root.join("src")).unwrap();
+        let own = Event::new(EventKind::Modify(ModifyKind::Any)).add_path(root.join("src"));
+        tx.try_send(Ok(own)).unwrap();
+        assert!(!changes(&mut watcher, NEVER).await);
+        // An error counts.
+        tx.try_send(Err(notify::Error::generic("lost"))).unwrap();
+        assert!(changes(&mut watcher, SOON).await);
+    }
+
+    #[tokio::test]
     async fn ignored_trees_are_neither_listed_nor_watched() {
         let (_dir, root) = repo();
         std::fs::write(root.join(".gitignore"), "ignored/\n").unwrap();
@@ -1188,6 +1204,12 @@ pub(crate) mod tests {
         assert!(!watcher.saw(modified(ModifyKind::Any, "src")));
         assert!(!watcher.saw(modified(metadata, "src")));
         assert!(watcher.saw(modified(ModifyKind::Any, "src/a.rs")));
+        // A folder removed outside the worktree drops none of its watched folders.
+        let outside = notify::event::RemoveKind::Folder;
+        let outside =
+            Event::new(EventKind::Remove(outside)).add_path(PathBuf::from("/elsewhere/src"));
+        assert!(!watcher.saw(Ok(outside)));
+        assert_eq!(watched(&watcher), ["", "empty", "src"]);
         // A new folder is.
         std::fs::create_dir(root.join("fresh")).unwrap();
         assert!(changes(&mut watcher, SOON).await);

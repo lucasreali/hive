@@ -3305,18 +3305,19 @@ mod tests {
 
     #[test]
     fn worktree_status_is_tagged_json() {
-        let status = Control::WorktreeStatus {
+        let with_lines = |added, removed| Control::WorktreeStatus {
             path: "/r/w".into(),
             status: Some(WorktreeStatus {
                 changes: 3,
-                added: 12,
-                removed: 4,
+                added,
+                removed,
                 ahead: Some(2),
                 behind: None,
                 merged: false,
                 last_commit_ms: 1000,
             }),
         };
+        let status = with_lines(12, 4);
         assert_eq!(
             &Frame::control(0, &status).payload[..],
             br#"{"type":"worktree_status","path":"/r/w","status":{"changes":3,"added":12,"removed":4,"ahead":2,"behind":null,"merged":false,"last_commit_ms":1000}}"#
@@ -3324,14 +3325,10 @@ mod tests {
         assert_eq!(Frame::control(0, &status).to_control().unwrap(), status);
         // A service from before the line counts is still read: none.
         let old = br#"{"type":"worktree_status","path":"/r/w","status":{"changes":3,"ahead":2,"behind":null,"merged":false,"last_commit_ms":1000}}"#;
-        let mut none = status;
-        if let Control::WorktreeStatus {
-            status: Some(s), ..
-        } = &mut none
-        {
-            (s.added, s.removed) = (0, 0);
-        }
-        assert_eq!(serde_json::from_slice::<Control>(old).unwrap(), none);
+        assert_eq!(
+            serde_json::from_slice::<Control>(old).unwrap(),
+            with_lines(0, 0)
+        );
     }
 
     #[test]

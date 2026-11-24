@@ -812,6 +812,18 @@ fn found(path: PathBuf, config_dir: &Option<String>) -> Option<Found> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn only_a_log_named_in_utf8_with_a_valid_id_is_found() {
+        use std::os::unix::ffi::OsStrExt;
+        let tmp = tempfile::tempdir().unwrap();
+        let log = tmp.path().join("abc-1.jsonl");
+        std::fs::write(&log, "{}\n").unwrap();
+        assert_eq!(found(log, &None).map(|f| f.id).as_deref(), Some("abc-1"));
+        let not_utf8 = tmp.path().join(std::ffi::OsStr::from_bytes(b"\xff.jsonl"));
+        assert!(found(not_utf8, &None).is_none());
+    }
     use hive_protocol::Worktree;
 
     fn var<'a>(vars: &'a [(&'a str, &'a str)]) -> impl Fn(&str) -> Option<OsString> + 'a {

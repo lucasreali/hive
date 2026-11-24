@@ -7,7 +7,7 @@ use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use serde_json::Value;
+use serde_json::{Map, Value};
 
 use crate::git::{self, Stdout};
 use crate::paths::canonical;
@@ -388,7 +388,7 @@ pub fn rename(root: &Path, path: &Path, name: &str) -> io::Result<PathBuf> {
 /// `WorktreeCreate` hook: creates the worktree `name` in the repository of `cwd`, or
 /// reuses it when it is already a Hive worktree (`claude -w <existing>` reopens it, as
 /// Claude Code does without the hook).
-pub fn hook_create(payload: &Value) -> io::Result<Created> {
+pub fn hook_create(payload: &Map<String, Value>) -> io::Result<Created> {
     let name = field(payload, "name")?;
     let cwd = Path::new(field(payload, "cwd")?);
     match existing(cwd, name)? {
@@ -412,7 +412,7 @@ fn existing(dir: &Path, name: &str) -> io::Result<Option<PathBuf>> {
 
 /// `WorktreeRemove` hook: removes `worktree_path`, which must be a worktree directly under
 /// its repository's `.claude/worktrees/`.
-pub fn hook_remove(payload: &Value) -> io::Result<()> {
+pub fn hook_remove(payload: &Map<String, Value>) -> io::Result<()> {
     let path = canonical(Path::new(field(payload, "worktree_path")?))?;
     let root = main_root(&path)?;
     if path.parent() != Some(canonical(&worktrees_dir(&root))?.as_path()) {
@@ -435,13 +435,13 @@ pub fn remove_path(root: &Path, path: &Path, force: bool) -> io::Result<()> {
     git::run(root, &args, &[], &[0], OUTPUT_LIMIT).map(drop)
 }
 
-/// A worktree hook's JSON input, at most [`HOOK_INPUT_LIMIT`] bytes.
-pub fn read_payload(input: &mut dyn Read) -> io::Result<Value> {
+/// A worktree hook's JSON object input, at most [`HOOK_INPUT_LIMIT`] bytes.
+pub fn read_payload(input: &mut dyn Read) -> io::Result<Map<String, Value>> {
     serde_json::from_slice(&git::read_limited(input, HOOK_INPUT_LIMIT)?)
         .map_err(|err| io::Error::other(format!("invalid hook input: {err}")))
 }
 
-fn field<'a>(payload: &'a Value, key: &str) -> io::Result<&'a str> {
+fn field<'a>(payload: &'a Map<String, Value>, key: &str) -> io::Result<&'a str> {
     payload
         .get(key)
         .and_then(Value::as_str)

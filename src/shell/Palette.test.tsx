@@ -2,6 +2,7 @@ import { afterEach, beforeAll, expect, spyOn, test } from "bun:test";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { Profiler } from "react";
 import { asMac } from "../../test/mac";
+import { detachAfterAll } from "../../test/transport";
 import { App } from "../App";
 import type { Project } from "../protocol";
 import { apply } from "../reduce";
@@ -11,6 +12,8 @@ import { closeTerminal } from "../terminals";
 import { transport } from "../transport";
 import { agentStatus, MOCK_FOLDER, MOCK_GROUP, MOCK_REPOS } from "../transport/mock";
 import { FILE_LIMIT, fuzzy, Palette, type PaletteItem, paletteCommands, rank } from "./Palette";
+
+detachAfterAll();
 
 beforeAll(async () => {
   await transport.connect(apply);

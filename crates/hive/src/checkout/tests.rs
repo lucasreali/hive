@@ -226,6 +226,45 @@ fn a_failed_create_on_an_existing_branch_keeps_the_branch() {
     assert!(worktree::has_branch(dir, "kept"));
 }
 
+#[cfg(unix)]
+#[test]
+fn a_new_branch_is_checked_copied_into_and_removed_with_a_failed_create() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path();
+    git(dir, &["init", "-q", "-b", "main"]);
+    std::fs::write(dir.join(".gitignore"), ".env\n").unwrap();
+    std::fs::write(dir.join(".worktreeinclude"), ".env\n").unwrap();
+    std::fs::create_dir(dir.join(".claude")).unwrap();
+    let hook = r#"{"hooks":{"WorktreeCreate":[{"hooks":[{"type":"command","command":"x"}]}]}}"#;
+    std::fs::write(dir.join(".claude/settings.json"), hook).unwrap();
+    git(dir, &["add", "."]);
+    git(dir, &["commit", "-q", "-m", "x"]);
+    let new = |start| Head::New {
+        branch: "fresh",
+        start,
+    };
+    let err = worktree::create_on(dir, "fresh", new(Some("-x"))).unwrap_err();
+    assert!(err.to_string().contains("invalid base branch"), "{err}");
+    // Its own hook is warned of, and the included file copied.
+    let env = dir.join(".env");
+    std::fs::write(&env, "SECRET=1").unwrap();
+    let made = worktree::create_on(dir, "fresh", new(None)).unwrap();
+    let hooked = ".claude/settings.json defines its own WorktreeCreate hook";
+    assert!(made.notes[0].contains(hooked), "{:?}", made.notes);
+    assert_eq!(made.notes[1], "copied 1 file listed in .worktreeinclude");
+    // A failed copy removes the new worktree and its new branch.
+    std::fs::set_permissions(&env, std::fs::Permissions::from_mode(0o000)).unwrap();
+    let new = Head::New {
+        branch: "broken",
+        start: None,
+    };
+    let made = worktree::create_on(dir, "broken", new);
+    std::fs::set_permissions(&env, std::fs::Permissions::from_mode(0o600)).unwrap();
+    assert!(made.unwrap_err().to_string().contains("Permission denied"));
+    assert!(!dir.join(".claude/worktrees/broken").exists());
+    assert!(!worktree::has_branch(dir, "broken"));
+}
+
 /// A followed repository whose remote `origin` names github.com/o/r but is fetched from a
 /// bare repository beside it (`url.<bare>.insteadOf`), and a fake `gh` that logs each call's
 /// arguments and answers `pr view` / `issue view` from `pr-<n>.json` / `issue-<n>.json`.
