@@ -2,6 +2,7 @@ import { afterEach, beforeAll, expect, spyOn, test } from "bun:test";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { asMac } from "../../test/mac";
 import { notice } from "../../test/notice";
+import { detachAfterAll } from "../../test/transport";
 import { LINK_DOWN, unsent } from "../../test/unsent";
 import { App } from "../App";
 import { apply } from "../reduce";
@@ -10,6 +11,8 @@ import { closeTerminal } from "../terminals";
 import { transport } from "../transport";
 import { MOCK_REPOS, MOCK_SHARE, MOCK_SHARE_WARNING } from "../transport/mock";
 import { savedParent, savedWindows } from "./AddProjectDialog";
+
+detachAfterAll();
 
 beforeAll(async () => {
   // The mock service answers listings and adds.

@@ -1,5 +1,6 @@
 import { afterEach, beforeAll, expect, spyOn, test } from "bun:test";
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { detachAfterAll } from "../../test/transport";
 import { apply } from "../reduce";
 import { type HiveState, initialState, useHive } from "../store";
 import { closeTerminal, mountTerminals, openTerminal, terminal } from "../terminals";
@@ -15,6 +16,8 @@ import {
   sendReview,
   startComment,
 } from "./review";
+
+detachAfterAll();
 
 beforeAll(async () => {
   await transport.connect(apply);

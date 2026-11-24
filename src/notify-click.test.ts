@@ -1,8 +1,11 @@
-import { afterAll, expect, test } from "bun:test";
+import { expect, test } from "bun:test";
+import { detachAfterAll } from "../test/transport";
 import { connect } from "./connect";
-import { DEFAULT_SETTINGS, initialState, useHive } from "./store";
+import { DEFAULT_SETTINGS, useHive } from "./store";
 import { transport } from "./transport";
 import { MOCK_REPOS } from "./transport/mock";
+
+detachAfterAll();
 
 // 13.5: a click on an OS notification goes to its agent, as the mock transport sends the click
 // (`notification-click` typed in a terminal stands in for it).
@@ -18,8 +21,6 @@ const NO_ENV = {
   gh_account: null,
   claude_account: null,
 };
-
-afterAll(() => useHive.setState(initialState, true));
 
 test("clicking an agent's notification goes to it, in its space; a gone agent changes nothing", async () => {
   await connect();

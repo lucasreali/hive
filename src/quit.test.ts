@@ -1,8 +1,11 @@
-import { afterAll, afterEach, expect, test } from "bun:test";
+import { afterEach, expect, test } from "bun:test";
+import { detachAfterAll } from "../test/transport";
 import { connect } from "./connect";
-import { DEFAULT_SETTINGS, initialState, openModal, useHive } from "./store";
+import { DEFAULT_SETTINGS, openModal, useHive } from "./store";
 import { transport } from "./transport";
 import { MOCK_REPOS } from "./transport/mock";
+
+detachAfterAll();
 
 // 17.7 (D17.3): ⌘Q, the Dock's Quit and logging out reach the UI as `quit_requested` while
 // agents would end; the mock transport sends it for `quit-app` typed in a terminal.
@@ -18,7 +21,6 @@ afterEach(() => {
   openModal(null);
   delete document.documentElement.dataset.closed;
 });
-afterAll(() => useHive.setState(initialState, true));
 
 test("a quit request asks through the close dialog while an agent works, else quits", async () => {
   await connect();
