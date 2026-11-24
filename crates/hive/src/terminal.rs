@@ -193,14 +193,16 @@ impl Output {
     /// of it, or, once the ring no longer holds `from`, `TerminalReset` and the whole ring. The
     /// replay is the first output of 9.19's window afresh, and nothing the program writes
     /// meanwhile is lost or sent twice (one lock). False, and nothing sent, for a terminal
-    /// that is not kept. Only a detached output is attached: one an app already takes does
-    /// nothing, so a flood of `attach_terminal` never replays the ring into a queue again.
+    /// that is not kept. One already going to `frames` does nothing, so a flood of
+    /// `attach_terminal` never replays the ring into a queue again; another connection's (a
+    /// takeover's, before the replaced one detached) is taken over, and that one's
+    /// [`Output::detach`] then leaves it alone.
     pub fn reattach(&self, frames: mpsc::UnboundedSender<Frame>, from: u64) -> bool {
         let mut sink = self.sink();
         let Some(ring) = &sink.ring else {
             return false;
         };
-        if sink.app.is_some() {
+        if (sink.app.as_ref()).is_some_and(|app| app.same_channel(&frames)) {
             return true;
         }
         let replay = ring.since(from).unwrap_or_else(|| {
@@ -1433,16 +1435,23 @@ mod tests {
         assert!(flows(send).await);
         let last = replayed(&mut queued).pop();
         assert_eq!(last, Some((5, Ok(b"x".to_vec()))));
-        // Attached already, by this app or another: nothing is replayed, the window stays.
-        let (other, mut other_queued) = mpsc::unbounded_channel();
-        for again in [app, other] {
-            assert!(output.reattach(again, 0));
-        }
+        // Attached already by this app: nothing is replayed, the window stays.
+        assert!(output.reattach(app.clone(), 0));
         assert!(queued.try_recv().is_err());
-        assert!(other_queued.try_recv().is_err());
         assert_eq!(*output.unacked.borrow(), 1);
         assert!(flows(output.send(b"y")).await);
         assert_eq!(replayed(&mut queued), [(5, Ok(b"y".to_vec()))]);
+        // A takeover's app attaching before the replaced one detached: it gets the replay,
+        // and the late detach leaves it attached.
+        let (new, mut new_queued) = mpsc::unbounded_channel();
+        let from = end + 2 - 1;
+        assert!(output.reattach(new.clone(), from));
+        assert_eq!(replayed(&mut new_queued), [(5, Ok(b"y".to_vec()))]);
+        assert_eq!(*output.unacked.borrow(), 1);
+        output.detach(&app);
+        assert!(flows(output.send(b"z")).await);
+        assert_eq!(replayed(&mut new_queued), [(5, Ok(b"z".to_vec()))]);
+        assert!(queued.try_recv().is_err());
     }
 
     #[tokio::test]
