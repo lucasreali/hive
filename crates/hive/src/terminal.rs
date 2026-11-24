@@ -1110,11 +1110,13 @@ pub mod conpty {
                 ("term", "xterm-256color"),
             ]);
             assert_eq!(env, want);
-            // No `PATH`, or an empty one: only the bin dir.
+            // No `PATH`, or an empty one: only the bin dir. (Vectors, as above: one
+            // instantiation takes every path.)
             let bin = pairs(&[("HIVE_BIN_DIR", "/c/hive/bin"), ("Path", r"C:\hive\bin")]);
-            assert_eq!(environment([], [], Path::new(r"C:\hive\bin")), bin);
+            let none = environment(Vec::new(), Vec::new(), Path::new(r"C:\hive\bin"));
+            assert_eq!(none, bin);
             let empty = pairs(&[("PATH", "")]);
-            let env = environment(empty, [], Path::new(r"C:\hive\bin"));
+            let env = environment(empty, Vec::new(), Path::new(r"C:\hive\bin"));
             let bin = pairs(&[("HIVE_BIN_DIR", "/c/hive/bin"), ("PATH", r"C:\hive\bin")]);
             assert_eq!(env, bin);
         }

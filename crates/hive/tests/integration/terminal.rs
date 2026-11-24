@@ -204,9 +204,10 @@ async fn closing_a_terminal_ends_its_shell() {
         matches!(message, Control::TerminalExited { .. }),
         "{message:?}"
     );
-    // Closing or typing into a terminal that is gone is ignored.
+    // Closing, typing into or acknowledging a terminal that is gone is ignored.
     app.send(3, Control::CloseTerminal).await;
     app.input(3, "ignored\r").await;
+    app.send(3, Control::Ack { bytes: 1 }).await;
     app.open_terminal(4, &env.path("home")).await;
     drop(app);
     assert!(daemon.wait_exit().success());

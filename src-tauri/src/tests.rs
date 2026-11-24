@@ -1140,7 +1140,13 @@ async fn terminal_messages_and_bytes_travel_on_their_channel() {
         worktree: None,
         account: String::new(),
     };
-    service.send(7, stray).await;
+    service.send(7, stray.clone()).await;
+    // Channel 0 is no terminal: nothing is kept for it.
+    service.send(0, stray).await;
+    assert_eq!(
+        next(&mut rx).await,
+        json!({"type": "terminal_opened", "channel": 0, "worktree": null, "account": ""})
+    );
     let error = Control::Error {
         message: "m".into(),
     };
@@ -2591,7 +2597,7 @@ async fn no_newer_release_or_a_failed_check_offers_nothing() {
 async fn an_uninstalled_app_installs_no_update_when_it_quits() {
     let (hive, mut rx, installed) = hive_installing(Ok(()));
     let app = updater_app(&release_server("99.0.0"), hive_with_ui().0);
-    hive.downloaded(newer_update(&app).await, Ok(b"setup".to_vec()));
+    hive.downloaded(newer_update(&app).await, Ok(b"setup".to_vec()), false);
     next(&mut rx).await;
     // Another message keeps it.
     hive.link()
@@ -2609,7 +2615,7 @@ async fn a_downloaded_update_is_offered_then_installed_once_and_restarts() {
     let (tx, restarted) = std::sync::mpsc::channel();
     let hive = hive.with_restart(move || tx.send(()).unwrap());
     let app = updater_app(&release_server("99.0.0"), hive_with_ui().0);
-    hive.downloaded(newer_update(&app).await, Ok(b"setup".to_vec()));
+    hive.downloaded(newer_update(&app).await, Ok(b"setup".to_vec()), false);
     assert_eq!(
         next(&mut rx).await,
         json!({"type": "update_ready", "version": "99.0.0"})
@@ -2630,8 +2636,8 @@ async fn a_downloaded_update_is_offered_then_installed_once_and_restarts() {
 async fn a_newer_download_replaces_the_saved_one() {
     let (hive, mut rx, installed) = hive_installing(Ok(()));
     let app = updater_app(&release_server("99.0.0"), hive_with_ui().0);
-    hive.downloaded(newer_update(&app).await, Ok(b"setup".to_vec()));
-    hive.downloaded(newer_update(&app).await, Ok(b"newer".to_vec()));
+    hive.downloaded(newer_update(&app).await, Ok(b"setup".to_vec()), false);
+    hive.downloaded(newer_update(&app).await, Ok(b"newer".to_vec()), false);
     next(&mut rx).await;
     next(&mut rx).await;
     assert_eq!(hive.install_pending(), Some(Ok(())));
@@ -2644,7 +2650,7 @@ async fn an_update_that_cannot_be_saved_or_read_back_is_not_installed() {
     let dir = hive.update_dir.clone().unwrap();
     let app = updater_app(&release_server("99.0.0"), hive_with_ui().0);
     // Changed on disk after the download: refused, and removed.
-    hive.downloaded(newer_update(&app).await, Ok(b"setup".to_vec()));
+    hive.downloaded(newer_update(&app).await, Ok(b"setup".to_vec()), false);
     next(&mut rx).await;
     std::fs::write(dir.join(download::FILE), "other").unwrap();
     hive.install_update().await;
@@ -2655,11 +2661,11 @@ async fn an_update_that_cannot_be_saved_or_read_back_is_not_installed() {
     // A cache folder that is a file: nothing saved, nothing offered.
     std::fs::remove_dir(&dir).unwrap();
     std::fs::write(&dir, "").unwrap();
-    hive.downloaded(newer_update(&app).await, Ok(b"setup".to_vec()));
+    hive.downloaded(newer_update(&app).await, Ok(b"setup".to_vec()), false);
     assert_eq!(hive.install_pending(), None);
     // An app with no cache folder keeps no download either.
     let (bare, mut bare_rx) = hive_with_ui();
-    bare.downloaded(newer_update(&app).await, Ok(b"setup".to_vec()));
+    bare.downloaded(newer_update(&app).await, Ok(b"setup".to_vec()), false);
     assert_eq!(bare.install_pending(), None);
     assert!(rx.try_recv().is_err());
     assert!(bare_rx.try_recv().is_err());
@@ -2762,7 +2768,7 @@ async fn a_translocated_app_does_not_run_the_installer() {
         .with_translocated(true)
         .with_restart(move || tx.send(()).unwrap());
     let app = updater_app(&release_server("99.0.0"), hive_with_ui().0);
-    hive.downloaded(newer_update(&app).await, Ok(b"setup".to_vec()));
+    hive.downloaded(newer_update(&app).await, Ok(b"setup".to_vec()), false);
     next(&mut rx).await;
     hive.install_update().await;
     let failed = json!({"type": "update_failed", "error": TRANSLOCATED});
@@ -2775,9 +2781,15 @@ async fn a_translocated_app_does_not_run_the_installer() {
 async fn a_failed_download_offers_nothing() {
     let (hive, mut rx, _installed) = hive_installing(Ok(()));
     let app = updater_app(&release_server("99.0.0"), hive_with_ui().0);
-    hive.downloaded(newer_update(&app).await, Err("offline".into()));
+    hive.downloaded(newer_update(&app).await, Err("offline".into()), false);
     assert_eq!(hive.install_pending(), None);
     assert!(rx.try_recv().is_err());
+    // Asked from the menu, it says why.
+    hive.downloaded(newer_update(&app).await, Err("offline".into()), true);
+    assert_eq!(
+        next(&mut rx).await,
+        json!({"type": "update_checked", "error": "offline"})
+    );
 }
 
 #[tokio::test]
@@ -2786,7 +2798,7 @@ async fn a_failed_install_says_why_and_does_not_restart() {
     let (tx, restarted) = std::sync::mpsc::channel();
     let hive = hive.with_restart(move || tx.send(()).unwrap());
     let app = updater_app(&release_server("99.0.0"), hive_with_ui().0);
-    hive.downloaded(newer_update(&app).await, Ok(b"setup".to_vec()));
+    hive.downloaded(newer_update(&app).await, Ok(b"setup".to_vec()), false);
     next(&mut rx).await;
     hive.install_update().await;
     assert_eq!(
@@ -2802,7 +2814,7 @@ async fn a_downloaded_update_is_installed_when_the_app_exits() {
     let app = updater_app(&release_server("99.0.0"), hive);
     let update = newer_update(&app).await;
     app.state::<Hive>()
-        .downloaded(update, Ok(b"setup".to_vec()));
+        .downloaded(update, Ok(b"setup".to_vec()), false);
     // `on_run_event` blocks on the runtime, which a Tokio test cannot do from its own thread.
     let handle = app.handle().clone();
     std::thread::spawn(move || on_run_event(&handle, RunEvent::Exit))
@@ -2868,6 +2880,16 @@ fn a_notification_click_names_its_agent_to_the_ui_with_or_without_the_window() {
     webview.destroy().unwrap();
     click();
     assert_eq!(rx.try_recv().unwrap(), clicked);
+}
+
+#[test]
+fn a_webview_crash_without_the_service_state_only_reloads() {
+    let app = mock_builder().build(mock_context(noop_assets())).unwrap();
+    let webview = tauri::WebviewWindowBuilder::new(&app, "main", Default::default())
+        .build()
+        .unwrap();
+    web_content_terminated(webview.as_ref());
+    assert!(app.try_state::<Hive>().is_none());
 }
 
 #[test]
@@ -3613,7 +3635,7 @@ async fn a_check_from_the_menu_offers_a_downloaded_update_again() {
     let (hive, mut rx, _installed) = hive_installing(Ok(()));
     let (endpoint, downloads) = counted_release_server("99.0.0");
     let app = updater_app(&endpoint, hive_with_ui().0);
-    hive.downloaded(newer_update(&app).await, Ok(b"setup".to_vec()));
+    hive.downloaded(newer_update(&app).await, Ok(b"setup".to_vec()), false);
     let ready = json!({"type": "update_ready", "version": "99.0.0"});
     assert_eq!(next(&mut rx).await, ready);
     hive.check_update(app.updater(), true).await;

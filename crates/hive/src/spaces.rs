@@ -352,6 +352,14 @@ pub fn vars(env: &SpaceEnv) -> Vec<(&'static str, String)> {
 mod tests {
     use super::*;
 
+    #[test]
+    fn a_project_added_without_a_current_space_goes_nowhere() {
+        let mut spaces = Spaces::with(Vec::new());
+        spaces.current = "gone".to_owned();
+        assert_eq!(spaces.add("/p".to_owned()), Ok(()));
+        assert_eq!(spaces.projects().count(), 0);
+    }
+
     /// The account `me` on github.com, in the gh config folder `dir`.
     fn me(dir: Option<&str>) -> SpaceGhAccount {
         SpaceGhAccount {

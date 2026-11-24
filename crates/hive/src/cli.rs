@@ -211,16 +211,14 @@ fn run_worktree(command: WorktreeCommand, paths: &Paths) -> io::Result<()> {
             let created = worktree::hook_create(&payload)?;
             let path = created.path.to_string_lossy().into_owned();
             report(created)?;
-            if let Some(fields) = payload.as_object_mut() {
-                fields.insert("worktree_path".to_owned(), path.into());
-            }
-            tell_service(paths, "WorktreeCreate", payload);
+            payload.insert("worktree_path".to_owned(), path.into());
+            tell_service(paths, "WorktreeCreate", payload.into());
             Ok(())
         }
         WorktreeCommand::HookRemove => {
             let payload = worktree::read_payload(&mut io::stdin())?;
             worktree::hook_remove(&payload)?;
-            tell_service(paths, "WorktreeRemove", payload);
+            tell_service(paths, "WorktreeRemove", payload.into());
             Ok(())
         }
     }

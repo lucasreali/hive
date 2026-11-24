@@ -157,9 +157,14 @@ mod tests {
     }
 
     fn pulls(mine: Vec<PullSummary>) -> Control {
+        pulls_of("/r", true, None, mine)
+    }
+
+    /// The list of `project`, with or without its repository, or failed with `error`.
+    fn pulls_of(project: &str, repo: bool, error: Option<&str>, mine: Vec<PullSummary>) -> Control {
         Control::Pulls {
-            project: "/r".into(),
-            repo: Some(PullRepo {
+            project: project.into(),
+            repo: repo.then(|| PullRepo {
                 name: "o/r".into(),
                 url: String::new(),
                 merge_methods: Vec::new(),
@@ -168,7 +173,7 @@ mod tests {
             mine,
             review: Vec::new(),
             fetched_ms: 1,
-            error: None,
+            error: error.map(Into::into),
         }
     }
 
@@ -268,14 +273,9 @@ mod tests {
     fn a_failed_list_or_another_message_raises_nothing() {
         let tmp = tempfile::tempdir().unwrap();
         let offers = Offers::new(tmp.path().join("offered-pulls.json"));
-        let list = || pulls(vec![pull(1, PullState::Merged, Some("/a"))]);
-        let (mut failed, mut no_repo) = (list(), list());
-        if let Control::Pulls { error, .. } = &mut failed {
-            *error = Some("rate limit".into());
-        }
-        if let Control::Pulls { repo, .. } = &mut no_repo {
-            *repo = None;
-        }
+        let mine = || vec![pull(1, PullState::Merged, Some("/a"))];
+        let failed = pulls_of("/r", true, Some("rate limit"), mine());
+        let no_repo = pulls_of("/r", false, None, mine());
         let other = Control::Notice {
             message: "m".into(),
         };
@@ -315,10 +315,7 @@ mod tests {
         let mine = (1..=200)
             .map(|n| pull(n, PullState::Merged, Some(&format!("/w{n}"))))
             .collect();
-        let mut list = pulls(mine);
-        if let Control::Pulls { project: p, .. } = &mut list {
-            p.clone_from(&project);
-        }
+        let list = pulls_of(&project, true, None, mine);
         assert_eq!(offers.raised(&list, &worktrees).unwrap().len(), 200);
         let written = std::fs::read(&file).unwrap();
         assert!(written.len() <= FILE_LIMIT as usize, "{}", written.len());
@@ -331,10 +328,7 @@ mod tests {
         let mine = (201 - latest..=200)
             .map(|n| pull(n, PullState::Merged, Some(&format!("/w{n}"))))
             .collect();
-        let mut list = pulls(mine);
-        if let Control::Pulls { project: p, .. } = &mut list {
-            p.clone_from(&project);
-        }
+        let list = pulls_of(&project, true, None, mine);
         assert_eq!(offers.raised(&list, &worktrees).unwrap(), []);
     }
 
