@@ -877,6 +877,22 @@ async fn an_upload_without_a_build_or_ssh_or_time_fails() {
 }
 
 #[tokio::test]
+async fn a_ui_connecting_before_a_new_link_has_a_state_is_told_nothing_of_it_yet() {
+    let lab = Lab::new("stateless");
+    let remotes = Arc::new(Remotes::new(
+        "/nonexistent/ssh".into(),
+        lab.path("builds"),
+        Arc::default(),
+    ));
+    // The link's task has not run yet (this test never yields): it has no state to replay.
+    remotes.sync(settings(&["gpu"], 1), None);
+    let (channel, mut rx) = ui();
+    remotes.connect(&Some(channel), false);
+    assert!(rx.try_recv().is_err());
+    remotes.end();
+}
+
+#[tokio::test]
 async fn without_ssh_or_with_a_broken_stream_the_link_retries() {
     let lab = Lab::new("broken");
     let mut remotes = Remotes::new(
