@@ -1786,6 +1786,24 @@ async fn a_remote_services_kept_terminals_are_checked_before_they_are_taken() {
     let got = told(&mut service, &mut rx, vec![kept_terminal(5, 1)]).await;
     assert_eq!(got, Vec::<Value>::new());
     assert!(!hive.link().terminals.contains_key(&5));
+    // A second `welcome` is ignored and never opens the window again.
+    let welcome = Control::Welcome {
+        version: VERSION.into(),
+        distro: None,
+        warning: None,
+    };
+    service.send(0, welcome).await;
+    let got = told(&mut service, &mut rx, vec![kept_terminal(6, 1)]).await;
+    assert_eq!(got, Vec::<Value>::new());
+    assert!(!hive.link().terminals.contains_key(&6));
+    assert_eq!(hive.link().welcome.as_ref().unwrap()["distro"], "Ubuntu");
+
+    // Any frame closes the window: a data frame between `welcome` and `terminals_kept`.
+    let (hive, mut service, mut rx) = welcomed().await;
+    service.writer.send(Frame::data(9, "x")).await.unwrap();
+    let got = told(&mut service, &mut rx, vec![kept_terminal(5, 1)]).await;
+    assert_eq!(got, Vec::<Value>::new());
+    assert!(!hive.link().terminals.contains_key(&5));
 
     // At most 256 of them; a `u32::MAX` one never takes the channels new terminals need.
     let (hive, mut service, mut rx) = welcomed().await;
@@ -1836,6 +1854,9 @@ async fn kept_terminals_the_ui_shows_are_attached_after_what_they_received() {
         .await
         .unwrap();
     assert_eq!(next(&mut bytes).await, b"hello");
+    // The output closed the window; a link back (26.17) opens it with its `welcome`.
+    assert!(!hive.link().after_welcome);
+    hive.link().after_welcome = true;
     // Given twice: attached once.
     let terminals = vec![kept_terminal(id, 900), kept_terminal(id, 900)];
     service.send(0, Control::TerminalsKept { terminals }).await;

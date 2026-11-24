@@ -817,8 +817,8 @@ struct Link {
     /// which keeps the terminals.
     crashed: bool,
     last_channel: u32,
-    /// The last message read was this connection's `welcome`: only then is a `terminals_kept`
-    /// taken (26.16), so a service can send it once, as its first message.
+    /// The last frame read was this connection's first `welcome`: only then is a
+    /// `terminals_kept` taken (26.16), so a service can send it once, as its first message.
     after_welcome: bool,
     /// Reads the service until the connection ends; it owns the bridge process.
     reader: Option<JoinHandle<()>>,
@@ -2281,6 +2281,8 @@ async fn pump<R: AsyncRead + Unpin>(
             Ok(frame) => frame,
             Err(error) => return End::Broken(error.to_string()),
         };
+        // Any frame closes the window `welcome` opened for `terminals_kept` (26.16).
+        let after_welcome = std::mem::take(&mut lock(link).after_welcome);
         if frame.kind == FrameType::Data {
             lock(link).data(frame.channel, frame.payload.to_vec());
             continue;
@@ -2318,8 +2320,10 @@ async fn pump<R: AsyncRead + Unpin>(
             continue;
         }
         value["channel"] = frame.channel.into();
-        let after_welcome = std::mem::take(&mut link.after_welcome);
         match value["type"].as_str().unwrap_or_default() {
+            // A connection has one handshake: a remote service's second `welcome` is
+            // ignored, so it never opens the window for `terminals_kept` again (26.16).
+            "welcome" if link.welcome.is_some() => continue,
             "welcome" => {
                 link.after_welcome = true;
                 link.welcome = Some(value.clone());
