@@ -2273,6 +2273,9 @@ async fn pump<R: AsyncRead + Unpin>(
     mut frames: FramedRead<R, FrameCodec>,
 ) -> End {
     let mut held = None;
+    // This connection's handshake came (26.16): kept per call, so a connection that ended
+    // without `disconnected` (a refused one) never makes the next one's `welcome` look repeated.
+    let mut welcomed = false;
     while let Some(frame) = match held.take() {
         Some(next) => next,
         None => frames.next().await,
@@ -2323,8 +2326,9 @@ async fn pump<R: AsyncRead + Unpin>(
         match value["type"].as_str().unwrap_or_default() {
             // A connection has one handshake: a remote service's second `welcome` is
             // ignored, so it never opens the window for `terminals_kept` again (26.16).
-            "welcome" if link.welcome.is_some() => continue,
+            "welcome" if welcomed => continue,
             "welcome" => {
+                welcomed = true;
                 link.after_welcome = true;
                 link.welcome = Some(value.clone());
                 // The UI always gets the projects after the handshake.

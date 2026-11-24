@@ -2114,6 +2114,33 @@ async fn version_mismatch_is_final_and_not_a_disconnect() {
 }
 
 #[tokio::test]
+async fn a_connection_after_a_refused_one_gets_its_own_handshake() {
+    let (hive, mut service, mut rx) = welcomed().await;
+    let refused = Control::VersionMismatch {
+        protocol: 9,
+        version: "9.9.9".into(),
+    };
+    service.send(0, refused).await;
+    assert_eq!(next(&mut rx).await["type"], "version_mismatch");
+    drop(service);
+    // The next connection's `welcome` is its first: the UI gets it, the projects are asked
+    // for and its `terminals_kept` is taken.
+    let mut service = attach(&hive, "bridge gone");
+    service.control().await;
+    let welcome = Control::Welcome {
+        version: VERSION.into(),
+        distro: None,
+        warning: None,
+    };
+    service.send(0, welcome).await;
+    assert_eq!(next(&mut rx).await["type"], "welcome");
+    assert_eq!(service.control().await, (0, Control::ListProjects));
+    let got = told(&mut service, &mut rx, vec![kept_terminal(4, 1)]).await;
+    assert_eq!(got.len(), 1);
+    assert_eq!(got[0]["type"], "terminal_kept");
+}
+
+#[tokio::test]
 async fn a_malformed_stream_disconnects_with_the_protocol_error() {
     let (_hive, mut service, mut rx) = welcomed().await;
     service
