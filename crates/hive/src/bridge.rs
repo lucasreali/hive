@@ -61,9 +61,11 @@ async fn end_running(paths: &Paths, wait: Duration) -> io::Result<()> {
         Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(()),
         file => file?,
     };
+    // A free lock this probe took is let go at once, not with `file`: a process forked meanwhile
+    // (a terminal's shell, before its `exec`) shares the lock until it closes its copy.
     match file.try_lock() {
         Err(TryLockError::WouldBlock) => {}
-        free => return free.map_err(io::Error::from),
+        free => return free.map_err(io::Error::from).and_then(|()| file.unlock()),
     }
     let mut text = String::new();
     // A process id is at most 10 digits; more is not one.
@@ -86,6 +88,7 @@ async fn end_running(paths: &Paths, wait: Duration) -> io::Result<()> {
         .await
         .map_err(|_| io::Error::other("the running hive service did not end"))?
         .map_err(io::Error::from)
+        .and_then(|()| file.unlock())
 }
 
 /// Copies `from` into `to` until `from` ends, [`BUFFER`] bytes at a time at most.
