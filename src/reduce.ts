@@ -729,6 +729,7 @@ function closeDeleted(s: HiveState, gone: OpenFile[]): HiveState {
     run: () => useHive.setState((s) => dropAll(s, all)),
     back: open ? open.back : s.modal,
     deleted: all,
+    host: s.host,
   };
   return { ...next, modal: "confirm", question };
 }
@@ -759,9 +760,9 @@ const SHARED_FIELDS = ["terminals", "notices", "pendingSeen"] as const;
  */
 export function applied(s: HiveState, m: HostMessage): Partial<HiveState> {
   if (m.type === "host_link") return hostLinked(s, m);
-  if (hostKey(m.host) === hostKey(s.host)) return reduce(s, m);
+  if (hostKey(m.host) === hostKey(s.host)) return named(s, reduce(s, m), m.host);
   const view = hostView(s, m.host ?? null);
-  const patch = reduce(view, m);
+  const patch = named(s, reduce(view, m), m.host);
   const shared = Object.fromEntries(
     SHARED_FIELDS.flatMap((f) => (f in patch ? [[f, patch[f]]] : [])),
   );
@@ -770,6 +771,19 @@ export function applied(s: HiveState, m: HostMessage): Partial<HiveState> {
     ...shared,
     stash: { ...s.stash, [hostKey(m.host)]: data as HiveState["stash"][string] },
   };
+}
+
+/**
+ * `patch` with the toasts a remote's message raised naming its host (26.18 review): the toasts
+ * are one for every host, so "gpu-box: <why>" says which host refused.
+ */
+function named(s: HiveState, patch: Partial<HiveState>, host?: string): Partial<HiveState> {
+  if (host === undefined || !patch.notices) return patch;
+  const old = new Set(s.notices.map((n) => n.id));
+  const notices = patch.notices.map((n) =>
+    old.has(n.id) ? n : { ...n, text: `${host}: ${n.text}` },
+  );
+  return { ...patch, notices };
 }
 
 /**

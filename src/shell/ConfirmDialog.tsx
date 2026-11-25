@@ -60,9 +60,9 @@ export function ConfirmDialog() {
       <form
         onSubmit={(e) => {
           e.preventDefault();
-          // Closed first, so `run` may ask again.
+          // Closed first, so `run` may ask again. Only on the host it was asked on (26.18).
           cancel();
-          question.run();
+          if ((question.host ?? null) === useHive.getState().host) question.run();
         }}
       >
         <header>

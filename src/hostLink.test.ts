@@ -235,3 +235,13 @@ test("a summary with nothing new, or none due, says nothing", () => {
   notify({ type: "host_link", host: HOST, state: "connected" }, initialState);
   expect(shown).toHaveLength(1);
 });
+
+test("a remote's refusals show as toasts naming its host, shown or not (26.18 review)", () => {
+  linked();
+  apply({ type: "remove_project_failed", id: "/m", message: "here" });
+  remote({ type: "remove_project_failed", id: "/m", message: "in use" });
+  showHost(HOST);
+  remote({ type: "delete_session_failed", id: "s", message: "gone" });
+  const texts = useHive.getState().notices.map((n) => n.text);
+  expect(texts).toEqual(["here", "gpu-box: in use", "gpu-box: Cannot delete the session: gone"]);
+});

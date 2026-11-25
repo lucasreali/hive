@@ -2,7 +2,7 @@ import { afterEach, expect, mock, spyOn, test } from "bun:test";
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { App } from "../App";
 import { apply } from "../reduce";
-import { ask, initialState, useHive } from "../store";
+import { ask, initialState, showHost, useHive } from "../store";
 import { askDiscard } from "./ConfirmDialog";
 
 afterEach(() => {
@@ -69,4 +69,20 @@ test("Cancel, the header button and Esc do nothing", () => {
   act(() => dialog("Discard changes?").close());
   expect(dialog("Discard changes?")).toBeNull();
   expect(run).not.toHaveBeenCalled();
+});
+
+test("a question asked on one host never acts on another (26.18 review)", () => {
+  const run = asking();
+  // Showing another host (a notification's click) closes it.
+  act(() => apply({ type: "host_link", host: "gpu-box", state: "connected" }));
+  act(() => showHost("gpu-box"));
+  expect(useHive.getState()).toMatchObject({ modal: null, question: null });
+  expect(dialog("Discard changes?")).toBeNull();
+  // Asked there, it knows its host; shown here, it does nothing.
+  act(() => askDiscard("TODO.md", run));
+  expect(useHive.getState().question?.host).toBe("gpu-box");
+  act(() => useHive.setState({ host: null }));
+  fireEvent.click(button("Discard"));
+  expect(run).not.toHaveBeenCalled();
+  expect(dialog("Discard changes?")).toBeNull();
 });

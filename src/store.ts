@@ -302,6 +302,11 @@ export type Question = {
   back?: Modal;
   /** The deleted files with unsaved edits it asks about: a later deletion adds to them. */
   deleted?: OpenFile[];
+  /**
+   * The host shown when it was asked (26.18): `run` acts on that host's service, so it runs
+   * only while that host shows. Showing another host closes the question.
+   */
+  host?: string | null;
 };
 /** A worktree row's context menu, at the pointer. */
 export type WorktreeMenu = { worktree: string; x: number; y: number };
@@ -710,6 +715,29 @@ export const HOST_FIELDS = [
   "spaceError",
   "ghAccounts",
   "ghIdentity",
+  // The host's open files (26.18 review): their tabs, edit buffers, table asks and pending
+  // saves, the review comments and the trees' folders, by its paths. A file's requests go to
+  // the host shown, so only the shown host's files are ever open or saved, and another host's
+  // answer or deletion naming the same path never reaches them.
+  "openFiles",
+  "openFile",
+  "editing",
+  "edit",
+  "editorNotice",
+  "selectedLines",
+  "comments",
+  "commenting",
+  "newFolders",
+  "movedRow",
+  "gotoLine",
+  "tableAsks",
+  "tableSentFrom",
+  "saveAfterAsks",
+  "diffBases",
+  "collapsed",
+  "splits",
+  "fileDialog",
+  "fileMenu",
 ] as const satisfies readonly (keyof HiveState)[];
 
 export type HostData = Pick<HiveState, (typeof HOST_FIELDS)[number]>;
@@ -877,7 +905,8 @@ export const openFileDialog = (target: FileTarget, kind: FileDialogKind = "file"
     fileDialog: { ...target, kind, error: null },
   });
 /** Asks `question` in the confirm dialog (`ConfirmDialog`). */
-export const ask = (question: Question) => useHive.setState({ modal: "confirm", question });
+export const ask = (question: Question) =>
+  useHive.setState((s) => ({ modal: "confirm", question: { ...question, host: s.host } }));
 /** Keeps an alert in the inbox, the newest first. */
 export const addToInbox = (
   item: { at: number; text: string; space?: string; host?: string } & InboxSubject,
@@ -1134,7 +1163,10 @@ export function switchedHost(s: HiveState, host: string | null): Partial<HiveSta
   const left = leaveSpace(s);
   const all = { ...s.stash, [hostKey(s.host)]: hostData(s) as HostData };
   const { [hostKey(host)]: data = NO_HOST_DATA, ...stash } = all;
-  const shown = { ...left, ...data, host, stash };
+  // A dialog, a question or a menu asked on the host left would act on the one shown now: they
+  // close (26.18 review).
+  const closed = { modal: null, question: null, menu: null, projectMenu: null, sessionMenu: null };
+  const shown = { ...left, ...data, host, stash, ...closed };
   return { ...shown, ...selected({ ...s, ...shown }, spacePlace({ ...s, ...shown })) };
 }
 
