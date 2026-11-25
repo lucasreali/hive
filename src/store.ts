@@ -767,6 +767,21 @@ export function hostView(s: HiveState, host: string | null): HiveState {
   return { ...s, ...(s.stash[hostKey(host)] ?? NO_HOST_DATA), host };
 }
 
+/**
+ * `change` made to `host`'s data only (26.18 review): the store's while it is shown, else the one
+ * kept in `stash`, so a late failure never reaches the tabs of the host shown since.
+ */
+export function onHost(
+  s: HiveState,
+  host: string | null,
+  change: (view: HiveState) => Partial<HiveState>,
+): Partial<HiveState> {
+  if (host === s.host) return change(s);
+  const view = hostView(s, host);
+  const data = { ...hostData(view), ...hostData(change(view)) } as HostData;
+  return { stash: { ...s.stash, [hostKey(host)]: data } };
+}
+
 /** Every host the store knows (the local service first, then the remotes as they came). */
 export function knownHosts(s: HiveState): (string | null)[] {
   const remotes = new Set([...Object.keys(s.links), ...Object.keys(s.stash).filter(Boolean)]);
@@ -1047,14 +1062,17 @@ export const askBufferTable = (f: OpenFile) =>
 /**
  * Drops what is asked of `f`'s table, which nothing will answer, and a save waiting on it: it
  * would write the text without them. `error` says why, under the header, until the next save.
+ * They are `host`'s (the host shown when not given).
  */
-export const dropTableAsks = (f: OpenFile, error?: string) =>
-  useHive.setState((s) => ({
-    tableAsks: s.tableAsks.filter((a) => !isFor(a, f)),
-    tableSentFrom: s.tableAsks[0] && isFor(s.tableAsks[0], f) ? null : s.tableSentFrom,
-    saveAfterAsks: s.saveAfterAsks && isFor(s.saveAfterAsks, f) ? null : s.saveAfterAsks,
-    ...(error ? patchEdits(s, f, (b) => ({ ...b, error })) : {}),
-  }));
+export const dropTableAsks = (f: OpenFile, error?: string, host?: string | null) =>
+  useHive.setState((state) =>
+    onHost(state, host === undefined ? state.host : host, (s) => ({
+      tableAsks: s.tableAsks.filter((a) => !isFor(a, f)),
+      tableSentFrom: s.tableAsks[0] && isFor(s.tableAsks[0], f) ? null : s.tableSentFrom,
+      saveAfterAsks: s.saveAfterAsks && isFor(s.saveAfterAsks, f) ? null : s.saveAfterAsks,
+      ...(error ? patchEdits(s, f, (b) => ({ ...b, error })) : {}),
+    })),
+  );
 
 /** Nothing more will answer: the connection is gone. */
 export const clearTableAsks = () =>

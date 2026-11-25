@@ -22,6 +22,7 @@ import {
   setRightPanel,
   setTableShown,
   setVisible,
+  showHost,
   useHive,
 } from "./store";
 import { transport as realTransport, type Transport } from "./transport";
@@ -470,6 +471,43 @@ test("an edit that cannot be sent says so, drops those of its file and the save 
   expect(state.edit?.doc.toString()).toBe("x\na\n");
   expect(save).not.toHaveBeenCalled();
   stop();
+});
+
+test("a table's edits and the save on them go to their own host only, once (26.18 review)", async () => {
+  const save = spyOn(realTransport, "saveFile").mockImplementation(async () => {});
+  save.mockClear();
+  const { editTable, stop } = editedTable();
+  welcome();
+  const edit = { op: "insert_row", at: 0 } as const;
+  editOpenTable(edit);
+  saveOpenFile();
+  expect(editTable).toHaveBeenCalledTimes(1);
+  // Another host shown and this Mac's shown again: its ask is not sent again, nor to the other.
+  showHost("gpu-box");
+  showHost(null);
+  expect(editTable).toHaveBeenCalledTimes(1);
+  // Answered while the other is shown: the waiting save goes only once this Mac's file shows.
+  showHost("gpu-box");
+  tableEdited("x\na\n");
+  expect(save).not.toHaveBeenCalled();
+  showHost(null);
+  // Its file shown again asks for its buffer's table, as any file shown does; the save waits.
+  expect(editTable.mock.calls.at(-1)).toEqual(["/w", "a.csv", "x\na\n", null]);
+  expect(save).not.toHaveBeenCalled();
+  tableEdited("x\na\n");
+  expect(save.mock.calls).toEqual([["/w", "a.csv", "x\na\n", "v"]]);
+  // One that cannot be sent drops this Mac's asks, not the host's shown when it failed.
+  editTable.mockImplementationOnce(async () => {
+    throw new Error("too large");
+  });
+  editOpenTable(edit);
+  showHost("gpu-box");
+  await Bun.sleep(0);
+  expect(editTable).toHaveBeenCalledTimes(3);
+  const mine = useHive.getState().stash[""];
+  expect([mine?.tableAsks, mine?.edit?.error]).toEqual([[], "Error: too large"]);
+  stop();
+  save.mockRestore();
 });
 
 test("an edit of a file closed meanwhile is dropped", () => {

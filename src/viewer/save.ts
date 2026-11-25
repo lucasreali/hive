@@ -1,4 +1,4 @@
-import { type OpenFile, setSaveAfterAsks, useHive } from "../store";
+import { type OpenFile, onHost, setSaveAfterAsks, useHive } from "../store";
 import { asksPending, fileTabState, patchEdits } from "../tabs";
 import { transport } from "../transport";
 import { failed, startSave } from "./buffer";
@@ -8,12 +8,16 @@ export function saveBuffer(f: OpenFile): void {
   const { edit } = fileTabState(useHive.getState(), f);
   const next = edit && startSave(edit);
   if (!next) return;
+  // The shown host's file (26.18 review): a failure marks its buffer, even once another is shown.
+  const host = useHive.getState().host;
   useHive.setState((s) => patchEdits(s, f, () => next));
   transport
     .saveFile(next.worktree, next.path, next.doc.toString(), next.version)
     .catch((error: unknown) => {
       // Never sent (e.g. not connected), so no answer will come.
-      useHive.setState((s) => patchEdits(s, f, (b) => failed(b, "io", String(error))));
+      useHive.setState((state) =>
+        onHost(state, host, (s) => patchEdits(s, f, (b) => failed(b, "io", String(error)))),
+      );
     });
 }
 

@@ -7,6 +7,7 @@ import {
   diffBase,
   dropTableAsks,
   type HiveState,
+  hostKey,
   type OpenFile,
   panelWorktree,
   setSaveAfterAsks,
@@ -163,7 +164,9 @@ export function followOpenTable(transport: Transport): () => void {
  * a save waiting on them go with it.
  */
 export function followTableEdits(transport: Transport): () => void {
-  let sent: TableAsk | null = null;
+  // The ask last sent, by host (26.18 review): each host's asks are its own, and showing a host
+  // again sends none of its asks twice. Only the shown host's go out, to its service.
+  const sent = new Map<string, TableAsk | null>();
   const sync = (s: HiveState) => {
     if (s.connection.status !== "connected") {
       if (s.tableAsks.length > 0 || s.saveAfterAsks) clearTableAsks();
@@ -175,8 +178,9 @@ export function followTableEdits(transport: Transport): () => void {
       saveBuffer(waiting);
     }
     const next = s.tableAsks[0] ?? null;
-    if (next === sent) return;
-    sent = next;
+    const host = s.host;
+    if (next === (sent.get(hostKey(host)) ?? null)) return;
+    sent.set(hostKey(host), next);
     if (!next) return;
     const { edit } = fileTabState(s, next);
     // The file was closed meanwhile.
@@ -184,7 +188,7 @@ export function followTableEdits(transport: Transport): () => void {
     setTableSentFrom(edit.doc);
     transport
       .editTable(next.worktree, next.path, edit.doc.toString(), next.edit)
-      .catch((error: unknown) => dropTableAsks(next, String(error)));
+      .catch((error: unknown) => dropTableAsks(next, String(error), host));
   };
   sync(useHive.getState());
   return useHive.subscribe(sync);

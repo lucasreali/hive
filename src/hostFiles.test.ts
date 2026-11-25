@@ -79,3 +79,18 @@ test("Ctrl+S on this Mac's file never goes to a remote shown: it saves only on i
   expect(save.mock.calls).toEqual([["/r", "a.ts", "edited\n", "v1"]]);
   save.mockRestore();
 });
+
+test("a save that cannot be sent marks its own host's buffer, even once another is shown", async () => {
+  const save = spyOn(transport, "saveFile").mockRejectedValue(new Error("not connected"));
+  saveOpenFile();
+  // The remote, the same path open there, is shown before the failure comes back.
+  showHost(HOST);
+  setOpenFile(at, true);
+  remote({ type: "file", ...text, content: "remote\n" });
+  const theirs = startEdit({ ...text, content: "remote\n" });
+  if (theirs) setEdit(theirs);
+  await Bun.sleep(0);
+  expect(useHive.getState().edit?.error).toBeNull();
+  expect(local().edit).toMatchObject({ saving: null, error: "Error: not connected" });
+  save.mockRestore();
+});
