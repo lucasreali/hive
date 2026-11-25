@@ -628,3 +628,12 @@ test("removing a project asks first, Cancel does nothing, and its state goes wit
   expect(useHive.getState()).toEqual(s);
   remove.mockRestore();
 });
+
+test("a remote space's worktree is not revealed here (26.18)", () => {
+  show();
+  act(() => useHive.setState({ host: "gpu-box" }));
+  rightClick("fix-login");
+  const items = screen.getAllByRole("menuitem").map((i) => i.textContent);
+  expect(items).toContain("Copy path");
+  expect(items).not.toContain("Show in Explorer");
+});

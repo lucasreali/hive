@@ -147,3 +147,12 @@ test("Preview shows the dev server at a port of the block in a sandboxed frame, 
   expect(within(view()).getByRole("region", { name: "Settings" })).toBeTruthy();
   list.mockRestore();
 });
+
+test("a remote space's dev server is not previewed: it is not on this Mac's localhost (26.18)", () => {
+  const list = spyOn(transport, "listScripts").mockResolvedValue();
+  show();
+  listed(scripts);
+  act(() => useHive.setState({ host: "gpu-box" }));
+  expect(within(view()).queryByRole("button", { name: "Preview" })).toBeNull();
+  list.mockRestore();
+});

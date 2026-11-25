@@ -1044,3 +1044,27 @@ test("Notifications says when the OS keeps Hive from notifying, with a link to i
     openPane.mockRestore();
   }
 });
+
+test("Hosts (26.18): the remote hosts and their keep time, none where the app offers WSL", async () => {
+  open();
+  section("Hosts");
+  expect(screen.getByRole("region", { name: "Remote hosts" })).toBeTruthy();
+  const keep = input("Keep remote terminals (minutes)");
+  expect(keep.value).toBe("1440");
+  fireEvent.change(keep, { target: { value: "60" } });
+  await waitFor(() => expect(settings().remote.keep_minutes).toBe(60));
+  cleanup();
+  act(() => apply({ type: "app_mode", mode: "wsl", wsl: true }));
+  open();
+  expect(within(screen.getByRole("dialog")).queryByRole("button", { name: "Hosts" })).toBeNull();
+  search("Keep remote");
+  expect(screen.getByText("No setting matches.")).toBeTruthy();
+});
+
+test("in a remote space nothing opens a path of this Mac's: no settings file or shared folder", () => {
+  open();
+  act(() => useHive.setState({ host: "gpu-box" }));
+  section("Accounts");
+  expect(screen.queryByRole("button", { name: "Open settings file" })).toBeNull();
+  expect(screen.queryByRole("button", { name: "Open folder" })).toBeNull();
+});

@@ -1,11 +1,12 @@
-import { afterEach, expect, test } from "bun:test";
+import { afterEach, expect, spyOn, test } from "bun:test";
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { App } from "../App";
 import type { AgentState } from "../protocol";
 import { apply } from "../reduce";
 import { DEFAULT_SETTINGS, initialState, useHive } from "../store";
+import { transport } from "../transport";
 import { agentStatus } from "../transport/mock";
-import { requestQuit } from "./CloseAppDialog";
+import { remoteAgents, requestQuit } from "./CloseAppDialog";
 
 afterEach(() => {
   cleanup();
@@ -113,4 +114,59 @@ test("a quit request (⌘Q) shows the same dialog while agents run; confirming q
   expect(closed()).toBe(false);
   fireEvent.click(confirm());
   expect(closed()).toBe(true);
+});
+
+/** Agents of remote host `host`, linked (26.18). */
+function remote(host: string, ids: string[], state: AgentState = "working") {
+  apply({ type: "host_link", host, state: "connected" });
+  for (const id of ids) {
+    apply({
+      type: "agent_detected",
+      channel: 9,
+      id,
+      project: null,
+      worktree: null,
+      cwd: null,
+      host,
+    });
+    apply({ type: "agent_state", id, ...agentStatus(state), subagents: [], host });
+  }
+}
+
+test("quitting asks whether each host's agents keep running, keep first (26.18, Q2)", async () => {
+  const bye = spyOn(transport, "byeHost").mockResolvedValue();
+  render(<App />);
+  act(() => {
+    remote("gpu-box", ["a"]);
+    remote("lab", ["b", "c"]);
+    remote("idle", ["d"], "idle");
+  });
+  expect(remoteAgents(useHive.getState())).toEqual(["gpu-box\n1", "lab\n2"]);
+  // No local agent, yet it asks: they would keep running.
+  act(() => requestQuit());
+  expect(dialog().textContent).not.toContain("running. Closing Hive ends");
+  const gpu = screen.getByRole("checkbox", { name: "Keep 1 agent running on gpu-box?" });
+  const lab = screen.getByRole("checkbox", { name: "Keep 2 agents running on lab?" });
+  expect([(gpu as HTMLInputElement).checked, (lab as HTMLInputElement).checked]).toEqual([
+    true,
+    true,
+  ]);
+  expect(dialog().textContent).toContain("Settings → Hosts");
+  fireEvent.click(lab);
+  fireEvent.click(lab);
+  fireEvent.click(gpu);
+  fireEvent.click(confirm());
+  await act(async () => {});
+  expect(bye.mock.calls).toEqual([
+    ["gpu-box", true],
+    ["lab", false],
+  ]);
+  expect(closed()).toBe(true);
+  bye.mockRestore();
+});
+
+test("a host whose link is down is not asked about", () => {
+  remote("gpu-box", ["a"]);
+  apply({ type: "host_link", host: "gpu-box", state: "reconnecting", reason: "x", retry_secs: 1 });
+  expect(remoteAgents(useHive.getState())).toEqual([]);
 });

@@ -3,9 +3,10 @@ import { act, cleanup, fireEvent, render, screen, within } from "@testing-librar
 import { notice } from "../../test/notice";
 import { expectClearButton } from "../../test/searchClear";
 import { App } from "../App";
+import { onMessage } from "../connect";
 import { apply } from "../reduce";
 import { onMoved } from "../sessions";
-import { initialState, select, setPanelView, setRightPanel, useHive } from "../store";
+import { initialState, select, setPanelView, setRightPanel, showHost, useHive } from "../store";
 import { closeTerminal } from "../terminals";
 import { transport } from "../transport";
 import { MOCK_REPOS, MOCK_SESSIONS } from "../transport/mock";
@@ -355,4 +356,39 @@ test("with accounts, a row names its account and the menu continues it in anothe
     true,
     "End the session before moving it",
   ]);
+});
+
+test("a remote space's sessions: its running agent is live, and nothing opens its log here (26.18)", () => {
+  spyOn(transport, "listSessions").mockResolvedValue();
+  spyOn(transport, "listChanges").mockResolvedValue();
+  const host = "gpu-box";
+  render(<App />);
+  act(() => {
+    onMessage({ type: "host_link", host, state: "connected" });
+    onMessage({ type: "projects", projects: [shop, api], host });
+    onMessage({ type: "sessions", sessions: MOCK_SESSIONS, error: null, truncated: false, host });
+    // Its agent, the same session id as this Mac might have: keyed by its host.
+    const { cwd } = checkout;
+    onMessage({
+      type: "agent_detected",
+      channel: 5,
+      id: checkout.id,
+      project: null,
+      worktree: null,
+      cwd,
+      host,
+    });
+    showHost(host);
+    select(shop.id);
+    setRightPanel("files");
+    setPanelView("sessions");
+  });
+  const running = list().querySelector(".session") as HTMLElement;
+  expect(running.dataset.live).toBe("true");
+  fireEvent.click(screen.getByRole("button", { name: `Actions for ${checkout.title}` }));
+  const items = screen.getAllByRole("menuitem").map((i) => i.textContent);
+  expect(items).not.toContain("Open Log");
+  expect(items).not.toContain("Reveal Log");
+  expect(items).not.toContain("Open Working Directory");
+  expect(items).toContain("Copy Session ID");
 });

@@ -280,3 +280,31 @@ test("the files copied in Finder are read by the app side (18.3)", async () => {
   expect(await tauriTransport.pastedFiles()).toBe("/tmp/a.png ");
   expect(calls).toEqual([["pasted_files", {}]]);
 });
+
+test("requests about the shown host's data name it; this Mac's settings never do (26.18)", async () => {
+  const calls = record();
+  useHive.setState({ host: "gpu-box" });
+  await tauriTransport.listProjects();
+  await tauriTransport.openFile("/w", "a", "head");
+  await tauriTransport.saveFile("/w", "a", "x", null);
+  await tauriTransport.openTerminal("/w", 80, 24, () => {});
+  await tauriTransport.getSettings();
+  await tauriTransport.reconnectHost("lab");
+  await tauriTransport.restartRemote("lab");
+  await tauriTransport.byeHost("lab", false);
+  useHive.setState({ host: null });
+  await tauriTransport.listProjects();
+  const hosts = calls.map(([cmd, args]) => [cmd, args.host]);
+  expect(hosts).toEqual([
+    ["list_projects", "gpu-box"],
+    ["open_file", "gpu-box"],
+    ["save_file", "gpu-box"],
+    ["open_terminal", "gpu-box"],
+    ["get_settings", undefined],
+    ["reconnect_host", "lab"],
+    ["restart_remote", "lab"],
+    ["bye_host", "lab"],
+    ["list_projects", undefined],
+  ]);
+  expect(calls.at(-2)?.[1]).toEqual({ host: "lab", end: false });
+});

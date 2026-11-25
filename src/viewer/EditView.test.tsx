@@ -227,3 +227,9 @@ test("unsaved edits are dropped only when the user agrees, in a Hive dialog", ()
   expect(screen.queryByRole("region", { name: "a.ts" })).toBeNull();
   expect(native).not.toHaveBeenCalled();
 });
+
+test("a remote space's file has no external editor here (26.18)", () => {
+  editing();
+  act(() => useHive.setState({ host: "gpu-box" }));
+  expect(screen.queryByRole("button", { name: "Open in external editor" })).toBeNull();
+});

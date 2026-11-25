@@ -205,3 +205,10 @@ test("New Folder… asks for a name and creates it in the menu's folder", () => 
   act(() => apply({ type: "folder_created", worktree: "/w", path: "src/lib" }));
   expect(screen.queryByRole("dialog")).toBeNull();
 });
+
+test("in a remote space a file is neither revealed nor opened here (26.18)", () => {
+  render(<Shown />);
+  act(() => useHive.setState({ host: "gpu-box" }));
+  act(() => openFileMenu({ worktree: "/w", folder: "src", path: "src/a.ts", x: 1, y: 2 }));
+  expect(items()).toEqual(["New File…", "New Folder…", "Rename…", "Delete…"]);
+});

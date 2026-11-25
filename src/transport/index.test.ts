@@ -7,6 +7,10 @@ test("the Tauri transport is used inside the app unless ?mock is set", async () 
   expect(await pickTransport(true, "?mock")).not.toBe(tauriTransport);
   expect(await pickTransport(true, "?mock=mismatch")).not.toBe(tauriTransport);
   expect(await pickTransport(false, "")).not.toBe(tauriTransport);
+  // A second host (26.18), its fake service linked as a remote one.
+  const remote = await pickTransport(true, "?mock=remote");
+  expect(remote).not.toBe(tauriTransport);
+  expect(remote.byeHost).not.toBe((await pickTransport(true, "?mock")).byeHost);
 });
 
 test("a plain browser gets the mock transport", async () => {

@@ -1908,3 +1908,10 @@ test("an issue's worktree is named by the service, and a failure by the issue's 
     },
   ]);
 });
+
+test("the fake service links to no host: Reconnect, restart and goodbye do nothing (26.18)", async () => {
+  const mock = createMockTransport();
+  await mock.reconnectHost("gpu-box");
+  await mock.restartRemote("gpu-box");
+  expect(await mock.byeHost("gpu-box", true)).toBeUndefined();
+});

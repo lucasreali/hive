@@ -340,3 +340,41 @@ test("on macOS the bell names ⇧⌘J for the next pending agent (F8 is Play/Pau
   const bell = document.querySelector(".pending-bell") as HTMLButtonElement;
   expect(bell.title).toBe("Notifications (⇧⌘J: next pending)");
 });
+
+test("a host's summary after a reattach shows that host's spaces; its offer, its worktree (26.18)", () => {
+  render(<App />);
+  const host = "gpu-box";
+  const [shop] = MOCK_REPOS;
+  act(() => {
+    apply({ type: "welcome", version: "0.1.0", distro: null });
+    apply({ type: "host_link", host, state: "connected" });
+    apply({ type: "projects", projects: [shop], host });
+    addToInbox({
+      summary: true,
+      at: Date.now() - 5_000,
+      text: "2 agents waiting on gpu-box",
+      host,
+    });
+    const offer = {
+      worktree: shop.worktrees[1].id,
+      number: 3,
+      title: "Fix",
+      state: "merged",
+    } as const;
+    addToInbox({ offer, at: Date.now() - 5_000, text: "#3 merged: remove fix-login?", host });
+  });
+  fireEvent.click(document.querySelector(".pending-bell") as HTMLButtonElement);
+  // This Mac has no such worktree: the host's is there.
+  const remove = screen.getByRole("menuitem", { name: /#3 merged/ }) as HTMLButtonElement;
+  expect(remove.disabled).toBe(false);
+  const summary = screen.getByRole("menuitem", { name: /2 agents waiting on gpu-box/ });
+  expect(summary.textContent).toBe("waiting for you2 agents waiting on gpu-box5s ago");
+  fireEvent.click(summary);
+  expect(screen.queryByRole("menu")).toBeNull();
+  expect(useHive.getState().host).toBe(host);
+  act(() => useHive.setState({ host: null, stash: {} }));
+  act(() => apply({ type: "projects", projects: [shop], host }));
+  fireEvent.click(document.querySelector(".pending-bell") as HTMLButtonElement);
+  fireEvent.click(screen.getByRole("menuitem", { name: /#3 merged/ }));
+  expect(useHive.getState()).toMatchObject({ host, modal: "remove-worktree" });
+});

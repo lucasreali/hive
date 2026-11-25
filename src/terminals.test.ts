@@ -1268,3 +1268,27 @@ test("moving the divider refits the shown panes, debounced", async () => {
   expect(fit).toHaveBeenCalledTimes(2);
   fit.mockRestore();
 });
+
+test("a remote's terminal takes no input while its host is down; files from this Mac never drop in", async () => {
+  // 26.18: opened on the host shown, it is that host's.
+  const linked = { state: "connected" as const, since: 0 };
+  useHive.setState({ host: "gpu-box", links: { "gpu-box": linked } });
+  const write = spyOn(transport, "writeTerminal");
+  const { id, term } = await open();
+  expect(useHive.getState().tabs.find((t) => t.id === id)?.host).toBe("gpu-box");
+  write.mockClear();
+  term.input("a");
+  expect(write.mock.calls).toEqual([[id, "a"]]);
+  const down = { state: "reconnecting" as const, reason: "gone", retry_secs: 1, since: 0 };
+  useHive.setState({ links: { "gpu-box": down } });
+  term.input("b");
+  expect(write).toHaveBeenCalledTimes(1);
+  showTerminals([id], id);
+  const pane = term.element?.querySelector(".xterm-screen") as Element;
+  const at = spyOn(document, "elementFromPoint").mockReturnValue(pane);
+  expect(dropFiles("/Users/me/a.png ", 10, 10)).toBe(false);
+  expect(notice()).toBe("Files from this Mac cannot be dropped into a terminal on gpu-box");
+  expect(write).toHaveBeenCalledTimes(1);
+  at.mockRestore();
+  write.mockRestore();
+});
