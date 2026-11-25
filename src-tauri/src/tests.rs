@@ -3356,6 +3356,12 @@ fn a_remote_s_agents_at_risk_make_quitting_ask_too() {
     };
     assert_eq!(link.quit(Instant::now(), 0), Quit::Now);
     assert_eq!(link.quit(Instant::now(), 2), Quit::Ask);
+    // An app linking to hosts, none with an agent at risk: it quits.
+    let app = mock_builder().build(mock_context(noop_assets())).unwrap();
+    let hive = Hive::new("/nonexistent/hive-test".into(), vec![])
+        .with_remote("/nonexistent/ssh".into(), "/nonexistent".into());
+    hive.link().ui = Some(ui().0);
+    assert!(hive.should_quit(app.handle()));
 }
 
 #[test]
