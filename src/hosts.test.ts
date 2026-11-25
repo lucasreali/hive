@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, expect, test } from "bun:test";
+import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
 import samples from "../crates/hive-protocol/tests/app-messages.json";
 import { onMessage } from "./connect";
 import { agentHost, agentKey, keyed, REMOTE_TYPES, spaceLabel, taken } from "./hosts";
@@ -17,6 +17,7 @@ import {
   useHive,
 } from "./store";
 import { tabWorktree, visibleTabs } from "./tabs";
+import { transport } from "./transport";
 
 // 26.18: a remote host's messages are applied to that host's data only, and only those the UI
 // takes of a remote (`REMOTE_TYPES`, the app side's `REMOTE_TO_UI`).
@@ -161,4 +162,32 @@ test("the bell and F8 count every host's pending agents", () => {
   onMessage({ ...sample("agent_detected"), host: HOST });
   onMessage({ ...pending, host: HOST } as HostMessage);
   expect(pendingAgents(useHive.getState()).map((a) => a.id)).toEqual(["s", "gpu-box s"]);
+});
+
+test("a remote terminal reattached with a local worktree's path as its cwd stays on its host", async () => {
+  // The service kept it while the app was gone (26.16); its host has the same folder layout.
+  const attach = spyOn(transport, "attachTerminal").mockResolvedValue();
+  const resize = spyOn(transport, "resizeTerminal").mockResolvedValue();
+  apply(sample("projects"));
+  useHive.setState({ selection: "/r" });
+  onMessage({
+    type: "terminal_kept",
+    channel: 7,
+    cwd: "/r",
+    worktree: null,
+    account: null,
+    host: HOST,
+  });
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  expect(attach).toHaveBeenCalledWith(7, expect.any(Function));
+  const s = useHive.getState();
+  expect(s.tabs).toEqual([{ id: 7, cwd: "/r", host: HOST }]);
+  expect(s.terminals[7]?.host).toBe(HOST);
+  // Not in this Mac's /r, nor shown over it.
+  expect(visibleTabs(s)).toEqual([]);
+  expect(s.activeTab).toBeNull();
+  showHost(HOST);
+  expect(visibleTabs({ ...useHive.getState(), selection: "/r" }).map((t) => t.id)).toEqual([7]);
+  attach.mockRestore();
+  resize.mockRestore();
 });
