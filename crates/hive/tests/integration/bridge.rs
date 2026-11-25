@@ -126,6 +126,28 @@ async fn a_remote_bridge_starts_a_remote_service() {
 }
 
 #[tokio::test]
+async fn a_replacing_bridge_ends_the_running_service_and_starts_its_own() {
+    let env = Env::new();
+    let mut old = env.daemon();
+    let mut app = env.connect(Role::App).await;
+    app.open_terminal(1, &env.path("home")).await;
+    let mut bridge = bridge_with(&env, &["--remote", "--replace"]);
+    // The old service got SIGTERM: it ended its terminals and exited cleanly.
+    assert!(old.wait_exit().success());
+    bridge.send(Control::hello(Role::App, hive::VERSION)).await;
+    assert_eq!(bridge.next().await, Some(welcome()));
+    assert_eq!(daemon_args(&env, &bridge)[1..], ["daemon", "--remote"]);
+    assert!(bridge.close().await.success());
+    wait_until(|| !env.socket().exists());
+    // With no service running there is nothing to end.
+    let mut bridge = bridge_with(&env, &["--replace"]);
+    bridge.send(Control::hello(Role::App, hive::VERSION)).await;
+    assert_eq!(bridge.next().await, Some(welcome()));
+    assert!(bridge.close().await.success());
+    wait_until(|| !env.socket().exists());
+}
+
+#[tokio::test]
 async fn bridge_reuses_a_running_service() {
     let env = Env::new();
     let mut daemon = env.daemon();
@@ -145,6 +167,7 @@ async fn bridge_forwards_a_version_mismatch_and_exits() {
     let refused = Control::VersionMismatch {
         protocol: PROTOCOL_VERSION,
         version: hive::VERSION.into(),
+        terminals: Some(0),
     };
     assert_eq!(bridge.next().await, Some(refused));
     // The service closed the connection: the bridge ends on its own.

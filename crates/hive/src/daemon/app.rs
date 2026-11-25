@@ -43,7 +43,7 @@ where
     let (read, write) = tokio::io::split(stream);
     let mut reader = FramedRead::new(read, FrameCodec);
     let mut writer = FramedWrite::new(write, FrameCodec);
-    let Some(client) = handshake(&mut reader, &mut writer, state.warning.clone()).await else {
+    let Some(client) = handshake(&mut reader, &mut writer, &state).await else {
         return;
     };
     match client.role {
@@ -56,11 +56,12 @@ where
     }
 }
 
-/// Reads the client's `Hello`; answers `Welcome`, or `VersionMismatch` and gives up.
+/// Reads the client's `Hello`; answers `Welcome`, or `VersionMismatch` (with the number of
+/// terminals restarting the service would end, 26.17) and gives up.
 async fn handshake<R, W>(
     reader: &mut FramedRead<R, FrameCodec>,
     writer: &mut FramedWrite<W, FrameCodec>,
-    warning: Option<String>,
+    state: &State,
 ) -> Option<Client>
 where
     R: AsyncRead + Unpin,
@@ -74,6 +75,7 @@ where
             Control::VersionMismatch {
                 protocol: PROTOCOL_VERSION,
                 version: VERSION.to_owned(),
+                terminals: u32::try_from(state.terminals.lock().await.len()).ok(),
             },
             None,
         ),
@@ -94,7 +96,7 @@ where
             Control::Welcome {
                 version: VERSION.to_owned(),
                 distro: std::env::var("WSL_DISTRO_NAME").ok(),
-                warning,
+                warning: state.warning.clone(),
             },
             Some(Client {
                 role,

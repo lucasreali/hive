@@ -35,6 +35,10 @@ enum Command {
         /// Start a remote service (`hive daemon --remote`) if none is running.
         #[arg(long)]
         remote: bool,
+        /// End the running service first (SIGTERM to the lockfile's holder) and start a new one:
+        /// the app restarts a remote service of another version (26.17).
+        #[arg(long)]
+        replace: bool,
     },
     /// Forward one Claude Code hook call (JSON on stdin) to the service. Always exits 0.
     Hook {
@@ -136,8 +140,8 @@ pub fn run() -> ExitCode {
             }
             block_on(crate::daemon::run(&paths))
         }
-        Command::Bridge { remote } => std::env::current_exe()
-            .and_then(|hive| block_on(crate::bridge::run(&paths, &hive, remote))),
+        Command::Bridge { remote, replace } => std::env::current_exe()
+            .and_then(|hive| block_on(crate::bridge::run(&paths, &hive, remote, replace))),
         Command::Hook { event, record } => {
             // Whatever happens, the agent must not see a failing hook.
             let stdin = tokio::io::stdin();

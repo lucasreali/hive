@@ -45,7 +45,7 @@ fn output() -> (
 }
 
 /// The service end of an in-memory connection.
-struct Service {
+pub(crate) struct Service {
     reader: FramedRead<DuplexStream, FrameCodec>,
     writer: FramedWrite<DuplexStream, FrameCodec>,
 }
@@ -59,12 +59,12 @@ impl Service {
             .unwrap()
     }
 
-    async fn control(&mut self) -> (u32, Control) {
+    pub(crate) async fn control(&mut self) -> (u32, Control) {
         let frame = self.next().await;
         (frame.channel, frame.to_control().unwrap())
     }
 
-    async fn send(&mut self, channel: u32, message: Control) {
+    pub(crate) async fn send(&mut self, channel: u32, message: Control) {
         self.writer
             .send(Frame::control(channel, &message))
             .await
@@ -77,7 +77,7 @@ fn hive() -> Hive {
     Hive::new("/nonexistent/hive-test".into(), vec![])
 }
 
-fn attach(hive: &Hive, reason: &'static str) -> Service {
+pub(crate) fn attach(hive: &Hive, reason: &'static str) -> Service {
     // One pipe per direction, so each side can close them separately.
     let (reader, writer) = tokio::io::duplex(1 << 16);
     let (to_service, from_app) = tokio::io::duplex(1 << 16);
@@ -1000,11 +1000,15 @@ async fn pumped(frames: Vec<Frame>) -> [Vec<Vec<u8>>; 2] {
     let link = Mutex::new(Link::default());
     let mut outputs = [1, 2].map(|channel| {
         let (output, rx) = output();
-        let term = Term::new(Some(output), "/w".into());
+        let term = Term::new(channel, Some(output), "/w".into());
         lock(&link).terminals.insert(channel, term);
         rx
     });
-    let end = pump(&link, FramedRead::new(bytes.as_slice(), FrameCodec)).await;
+    let end = pump(
+        &link,
+        FramedRead::new(Box::new(bytes.as_slice()), FrameCodec),
+    )
+    .await;
     assert!(matches!(end, End::Closed));
     outputs.each_mut().map(|rx| {
         let mut sent = Vec::new();
@@ -1051,7 +1055,7 @@ async fn buffered_terminal_output_reaches_the_ui_in_one_send_per_channel() {
 async fn terminal_output_goes_at_once_without_waiting_for_more() {
     let link = Mutex::new(Link::default());
     let (output, mut rx) = output();
-    let term = Term::new(Some(output), "/w".into());
+    let term = Term::new(1, Some(output), "/w".into());
     lock(&link).terminals.insert(1, term);
     let (reader, writer) = tokio::io::duplex(1 << 16);
     let mut writer = FramedWrite::new(writer, FrameCodec);
@@ -1060,7 +1064,10 @@ async fn terminal_output_goes_at_once_without_waiting_for_more() {
         // Sent while the connection stays open, with nothing more to read.
         assert_eq!(next(&mut rx).await, b"a");
     };
-    let (end, ()) = tokio::join!(pump(&link, FramedRead::new(reader, FrameCodec)), service);
+    let (end, ()) = tokio::join!(
+        pump(&link, FramedRead::new(Box::new(reader), FrameCodec)),
+        service
+    );
     assert!(matches!(end, End::Closed));
 }
 
@@ -1566,7 +1573,7 @@ async fn a_message_over_the_frame_limit_is_refused_and_the_link_keeps_working() 
 #[tokio::test]
 async fn channel_numbers_run_out_instead_of_wrapping() {
     let (hive, _service, _rx) = welcomed().await;
-    hive.link().last_channel = u32::MAX;
+    hive.link().ids.store(u32::MAX, SeqCst);
     let (channel, _bytes) = output();
     assert_eq!(
         hive.open_terminal("/".into(), 80, 24, None, channel),
@@ -1730,9 +1737,25 @@ async fn kept_terminals_the_app_does_not_have_open_from_the_ring() {
     assert_eq!(next(&mut bytes).await, CLEAR_SCREEN);
     assert_eq!(next(&mut bytes).await, b"x");
     assert_eq!(hive.link().terminals[&7].received, u64::MAX);
-    // Once the connection ends, no terminal is left and channels start again.
+    // On a link back (26.17), a channel that is the last id given (another link's terminal
+    // has it) gets the next one.
+    hive.link().after_welcome = true;
+    (hive.link().ids).store(20, std::sync::atomic::Ordering::SeqCst);
+    let got = told(&mut service, &mut rx, vec![kept_terminal(20, 1)]).await;
+    assert_eq!(got[0]["channel"], 21);
+    assert_eq!(hive.link().terminals[&20].ui, 21);
+    // The one waiting for the UI (4) is not told again, and one that needs an id once none is
+    // left is left out.
+    hive.link().after_welcome = true;
+    (hive.link().ids).store(u32::MAX, std::sync::atomic::Ordering::SeqCst);
+    let terminals = vec![kept_terminal(4, 1), kept_terminal(9, 1)];
+    let got = told(&mut service, &mut rx, terminals).await;
+    assert_eq!(got, Vec::<Value>::new());
+    assert!(hive.link().terminals.contains_key(&4));
+    assert!(!hive.link().terminals.contains_key(&9));
+    // Once the connection ends, no terminal is left.
     disconnected(&mut hive.link(), "gone".into());
-    assert_eq!(hive.link().last_channel, 0);
+    assert!(hive.link().terminals.is_empty());
 }
 
 /// Sends `terminals_kept` with `terminals`, then a mark, and returns what the UI got before it.
@@ -1781,7 +1804,11 @@ async fn a_remote_services_kept_terminals_are_checked_before_they_are_taken() {
     terminals.push(longest);
     let got = told(&mut service, &mut rx, terminals).await;
     let channels: Vec<_> = got.iter().map(|m| m["channel"].clone()).collect();
-    assert_eq!(channels, [json!(3), json!(1 << 20), json!(4)]);
+    // Each is shown by its channel while that is past every id given (26.17); 4, after
+    // 1 << 20, gets the next id.
+    assert_eq!(channels, [json!(3), json!(1 << 20), json!((1 << 20) + 1)]);
+    let cwd = got[2]["cwd"].as_str().unwrap();
+    assert_eq!(cwd.len(), 4096);
     // Only right after `welcome`: a later one is ignored.
     let got = told(&mut service, &mut rx, vec![kept_terminal(5, 1)]).await;
     assert_eq!(got, Vec::<Value>::new());
@@ -2092,6 +2119,7 @@ async fn version_mismatch_is_final_and_not_a_disconnect() {
     let refused = Control::VersionMismatch {
         protocol: 9,
         version: "9.9.9".into(),
+        terminals: Some(2),
     };
     service.send(0, refused).await;
     assert_eq!(
@@ -2100,6 +2128,7 @@ async fn version_mismatch_is_final_and_not_a_disconnect() {
             "type": "version_mismatch",
             "protocol": 9,
             "version": "9.9.9",
+            "terminals": 2,
             "app_version": VERSION,
             "app_protocol": PROTOCOL_VERSION,
             "bundled": true,
@@ -2116,12 +2145,31 @@ async fn version_mismatch_is_final_and_not_a_disconnect() {
 #[tokio::test]
 async fn a_connection_after_a_refused_one_gets_its_own_handshake() {
     let (hive, mut service, mut rx) = welcomed().await;
+    let got = told(&mut service, &mut rx, vec![kept_terminal(4, 1)]).await;
+    assert_eq!(got[0]["channel"], 4);
+    let id = (hive.open_terminal("/w".into(), 80, 24, None, output().0)).unwrap();
+    assert_eq!(id, 5);
+    service.control().await;
     let refused = Control::VersionMismatch {
         protocol: 9,
         version: "9.9.9".into(),
+        terminals: None,
     };
     service.send(0, refused).await;
     assert_eq!(next(&mut rx).await["type"], "version_mismatch");
+    // Nothing of the refused connection is kept: its terminals end, without `disconnected`
+    // (the UI shows the refusal).
+    let exited =
+        |channel: u32| json!({"type": "terminal_exited", "channel": channel, "code": null});
+    assert_eq!(next(&mut rx).await, exited(4));
+    assert_eq!(next(&mut rx).await, exited(5));
+    {
+        let link = hive.link();
+        assert!(link.terminals.is_empty());
+        assert!(link.welcome.is_none() && link.frames.is_none());
+        assert!(!link.after_welcome && link.unconfirmed.is_empty());
+    }
+    assert!(rx.try_recv().is_err());
     drop(service);
     // The next connection's `welcome` is its first: the UI gets it, the projects are asked
     // for and its `terminals_kept` is taken.
@@ -2138,6 +2186,8 @@ async fn a_connection_after_a_refused_one_gets_its_own_handshake() {
     let got = told(&mut service, &mut rx, vec![kept_terminal(4, 1)]).await;
     assert_eq!(got.len(), 1);
     assert_eq!(got[0]["type"], "terminal_kept");
+    // The new connection holds only its own: a refused one adds nothing each time.
+    assert_eq!(hive.link().terminals.len(), 1);
 }
 
 #[tokio::test]
@@ -2273,6 +2323,8 @@ fn commands_reach_the_managed_hive() {
         .manage(sh("cat >/dev/null"))
         .invoke_handler(tauri::generate_handler![
             connect,
+            reconnect_host,
+            restart_remote,
             open_terminal,
             attach_terminal,
             write_terminal,
@@ -2500,6 +2552,12 @@ fn commands_reach_the_managed_hive() {
         assert_eq!(invoke(&webview, cmd, args.clone()), not_connected, "{cmd}");
     }
 
+    // The managed `Hive` links to no remote host.
+    let none = Err(json!("this app links to no remote host"));
+    let host = json!({"host": "gpu"});
+    assert_eq!(invoke(&webview, "reconnect_host", host.clone()), none);
+    assert_eq!(invoke(&webview, "restart_remote", host), none);
+
     let path = json!({"path": "C:\\x.bat", "reveal": false});
     let unasked = json!("Hive opens only a path the service sent: C:\\x.bat");
     assert_eq!(invoke(&webview, "open_path", path), Err(unasked));
@@ -2646,7 +2704,7 @@ async fn shutdown_kills_a_bridge_that_does_not_end() {
 #[test]
 fn the_app_exit_ends_the_connection() {
     let app = mock_builder()
-        .manage(sh("cat >/dev/null"))
+        .manage(sh("cat >/dev/null").with_remote("/nonexistent/ssh".into(), "/nonexistent".into()))
         .invoke_handler(tauri::generate_handler![connect, list_projects])
         .build(mock_context(noop_assets()))
         .unwrap();
@@ -3318,6 +3376,23 @@ fn the_window_comes_up_when_there_is_one() {
     assert!(!reopen(app.handle(), true));
 }
 
+#[test]
+fn a_wake_reaches_the_app_s_hive_if_any() {
+    // No `Hive` yet, or one that links to no host: nothing to wake.
+    let app = mock_builder().build(mock_context(noop_assets())).unwrap();
+    assert!(!woke(app.handle()));
+    let app = mock_builder()
+        .manage(hive())
+        .build(mock_context(noop_assets()))
+        .unwrap();
+    assert!(!woke(app.handle()));
+    let app = mock_builder()
+        .manage(hive().with_remote("/nonexistent/ssh".into(), "/nonexistent".into()))
+        .build(mock_context(noop_assets()))
+        .unwrap();
+    assert!(woke(app.handle()));
+}
+
 /// Sends `message` from the service on `channel` and waits for the UI to get it.
 async fn relay(
     service: &mut Service,
@@ -3346,7 +3421,7 @@ async fn quitting_asks_the_ui_while_agents_would_end_with_the_app() {
     let exited = || exits.load(Ordering::SeqCst);
     let app = mock_builder().build(mock_context(noop_assets())).unwrap();
     let app = app.handle();
-    let term = Term::new(Some(output().0), "/w".into());
+    let term = Term::new(5, Some(output().0), "/w".into());
     hive.link().terminals.insert(5, term);
     // Each question long after the last (`ASK_AGAIN` is tested on its own).
     let quits = |hive: &Hive| {

