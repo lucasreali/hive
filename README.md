@@ -136,6 +136,39 @@ A program in Hive's terminals, such as Claude Code's Computer Use, gets its macO
 
 Every other key goes to the terminal untouched.
 
+## Remote hosts
+
+On macOS, Hive can also run its service on remote Linux machines over ssh: the terminals, the agents, git, the worktrees and the files then live on the remote host, and Hive shows them beside your local ones. Only the macOS app links to remote hosts.
+
+**What the remote host needs:**
+
+- **Linux on x86_64 or aarch64.** Hive refuses every other host, macOS included ("gpu-box runs macOS; Hive connects only to Linux hosts"), and uploads nothing to it.
+- `/bin/sh`, `uname` and `sha256sum` (coreutils), and `git`.
+- **Claude Code installed and logged in on the remote** (run `claude` there once). Hive never copies credentials: agents on the host use the host's own `claude` login, git config and `gh`.
+- Nothing else: the app carries a static Linux build of its service and uploads it to `~/.hive/bin/hive` on the host the first time, and again after each Hive update. The upload is checked on the host by its size and SHA-256 before it runs, then by its version. Terminals run your `$SHELL` there as a login shell (`/bin/sh` when it cannot run).
+
+**Adding a host.**
+
+1. Give the host an alias in your `~/.ssh/config` (`Host`, `HostName`, `User`, `Port`, `IdentityFile`, `ProxyJump` and the rest are yours; Hive reads none of them and only passes the alias to `/usr/bin/ssh`).
+2. **Load the key into your ssh agent.** Hive runs `ssh` with `BatchMode=yes`, so it never asks for a password or a passphrase: a host that asks is refused with "gpu-box asked for a password or passphrase; add the key to your ssh agent". With a passphrase on the key, run `ssh-add --apple-use-keychain ~/.ssh/<key>` once; `AddKeysToAgent yes` and `UseKeychain yes` under the host in `~/.ssh/config` load it again after a restart. A key without a passphrase works as is.
+3. **Accept the host key once** by running `ssh <alias>` in a terminal and checking the fingerprint. Hive runs `ssh` with `StrictHostKeyChecking=yes` and never writes `known_hosts`: an unknown or changed host key is refused ("Run `ssh gpu-box` once in a terminal to check and accept its key"), whatever your config says.
+4. In **Settings → Hosts**, type the alias and click **Add host**. The status bar gets a chip for the host: connecting, installing, then connected. **Test** tries the link again now; the × removes the host.
+5. The space switcher lists the host's spaces as "Space · gpu-box", and **New space on gpu-box…** makes one there. A space belongs to one host; each host keeps its own spaces, projects and settings in its `~/.hive`.
+
+Hive uses your config as it is, including `ControlMaster` (it does not set it). It adds `ServerAliveInterval=10` and `ServerAliveCountMax=3`, so a dead link is noticed in about 30 s, and `ClearAllForwardings=yes`, so a `LocalForward` in your config does not get in the way.
+
+**When the link drops, the agents keep running.** A Wi-Fi switch, a closed lid or a dropped connection leaves the host's terminals and agents running. The chip says "reconnecting since …", the host's terminals show "Reconnecting to gpu-box…" and take no input, and Hive tries again after 1, 2, 5, 10 and 30 s, then every 30 s while the host holds terminals, and at once when the Mac wakes. Once back, each terminal gets the output it missed (up to its last 1 MiB) and Claude Code draws its screen again. A host key, login, platform or version problem is not retried: fix it and click **Reconnect**.
+
+**The keep time.** A host keeps its terminals and agents with no Hive attached for **24 hours** by default: **Settings → Hosts → Keep remote terminals (minutes)**, from 1 minute to 7 days (10080). After that they end, as local ones do when Hive quits, and their Claude sessions stay in the host's Sessions view to resume. **Quitting Hive** with agents at work on a host asks "Keep N agents running on gpu-box?", ticked by default; untick it to end them. When Hive opens again, the kept terminals come back as tabs under their worktrees.
+
+**After a Hive update** (its restart keeps the hosts' agents without asking) the host gets the new `hive` on the next connect. If the old service still holds terminals, the chip shows both versions and offers **Restart the remote service**, which ends those terminals; until you choose it, the host stays disconnected and its terminals keep running for the keep time.
+
+**Off in a remote space**, because the files are not on this Mac: Open with Default App, Reveal in Finder, the external editor, the session menu's Open Log, Reveal Log and Open Working Directory, Open settings file, the shared folder's Open folder, and the dev-server preview are hidden. Files dropped from Finder on a remote terminal type nothing and show a message. The viewer does not show a remote's images and PDFs. Settings, Claude accounts and Diagnostics are this Mac's.
+
+> **`ForwardAgent` warning.** Hive never forwards your ssh agent by itself, but it does not turn off a `ForwardAgent yes` in your config either. With it, anyone who controls the remote host (root there, or a compromised account) can use your keys for as long as the link is up, and Hive keeps the link up while it runs. Do not set `ForwardAgent` for a host you add to Hive; if you need it in your own sessions, use a second alias for Hive without it.
+
+Not supported for now: other operating systems as hosts, passwords and other interactive logins, port forwarding (so no dev-server preview), and two Macs on one host at the same time. One terminal flooding output on a host slows the echo of that host's other terminals, since they share one ssh connection.
+
 ## How it works
 
 ```
@@ -151,6 +184,7 @@ Windows                         WSL (or natively on Windows and macOS)
 
 - One Rust binary, `hive`, is the service (`hive daemon`), the stdio relay the app runs (`hive bridge`), the hook receiver (`hive hook <event>`) and a worktree CLI (`hive worktree create | list | remove`).
 - The app starts `hive bridge` (through `wsl.exe` with the service in WSL, `hive.exe` directly with it on Windows, where a named pipe replaces the Unix socket and terminals are Windows pseudoconsoles, `/bin/sh` on macOS). The bridge starts the daemon if needed; a version handshake refuses a mismatched pair. The daemon lives as long as the app connection: when the app closes, every terminal ends.
+- On macOS the app can also link to remote Linux hosts: it runs `ssh <alias>` with a fixed command that starts `~/.hive/bin/hive bridge --remote` there, one link per host, and the service on the host owns that host's terminals and agents and outlives a dropped link for the keep time (see [Remote hosts](#remote-hosts)).
 - Hive's terminals put a small `claude` wrapper first on `PATH`. It runs the real `claude` with `--settings <hive-hooks.json>`, which merges Hive's hooks with yours. Your global Claude Code settings are never touched, and `claude` outside Hive is unaffected.
 - All domain logic is in Rust; the React frontend only renders what the service sends.
 

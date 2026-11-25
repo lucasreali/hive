@@ -622,7 +622,7 @@ Every task that changes `crates/hive` or `src-tauri` gets `security-reviewer`. T
     - unknown and changed host keys refused;
     - a faked `Darwin` `uname` refused.
   - **Report:** the numbers go in this task's note.
-- [ ] **26.21 Docs and the hand check on a real host.** `task/26.21-remote-docs` — Needs 26.13–26.20.
+- [x] **26.21 Docs and the hand check on a real host.** `task/26.21-remote-docs` — *README's "Remote hosts" (what the host needs, adding one: alias, `ssh-add`, host key, Settings → Hosts; the link's drop and reconnect, the keep time and the quit question, an update's restart (Q8), what is off in a remote space, the `ForwardAgent` warning, what is not supported); `docs/architecture.md`'s "Remote hosts" under Pieces (one link per host, the exact ssh command, install with the SHA-256 check, keep and reattach, the trust boundary: `limits.rs`, `REMOTE_LINK`, `REMOTE_TO_UI`), the `--remote`/`--replace` flags in the command table and the remote's `~/.hive/bin/hive` in "Files written"; [`docs/remote-checklist.md`](docs/remote-checklist.md), each step with its expected result. The UI parts follow 26.18's branch as it stood (2026-11-25).* Needs 26.13–26.20.
   - **README, "Remote hosts":**
     - Linux x86_64 and aarch64 only, with `git` and a logged-in `claude` on the remote;
     - `ssh-add`, host keys, the keep time;
@@ -637,7 +637,7 @@ Every task that changes `crates/hive` or `src-tauri` gets `security-reviewer`. T
     - an app update while terminals are kept (Q8);
     - a macOS host refused.
   - **`docs/hive.md`:** the human updates it from the spike's section 13.
-  - ⏸ **Checkpoint:** the human runs the checklist.
+  - ⏸ **Checkpoint:** the human runs the checklist. *Waived by the human (2026-11-25): the checklist is run after the release.*
 
 ---
 
