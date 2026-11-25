@@ -1292,3 +1292,17 @@ test("a remote's terminal takes no input while its host is down; files from this
   at.mockRestore();
   write.mockRestore();
 });
+
+test("splitting a remote's terminal opens the new one on its host, whatever host shows (26.18)", async () => {
+  useHive.setState({ host: "gpu-box", links: { "gpu-box": { state: "connected", since: 0 } } });
+  const { id } = await open();
+  const opens = spyOn(transport, "openTerminal");
+  // Shown as this Mac's now: the split still goes to gpu-box, not a local shell in its folder.
+  useHive.setState({ host: null });
+  await splitTerminal(id);
+  expect(opens.mock.calls[0]?.[5]).toBe("gpu-box");
+  const right = useHive.getState().tabs.at(-1);
+  expect(right?.host).toBe("gpu-box");
+  opened.push(right?.id as number);
+  opens.mockRestore();
+});

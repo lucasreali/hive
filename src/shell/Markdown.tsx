@@ -2,8 +2,7 @@ import { LanguageDescription } from "@codemirror/language";
 import { languages } from "@codemirror/language-data";
 import { highlightCode, tags as t, tagHighlighter } from "@lezer/highlight";
 import { CheckIcon, CopyIcon } from "@phosphor-icons/react";
-import { isTauri } from "@tauri-apps/api/core";
-import { openUrl } from "@tauri-apps/plugin-opener";
+import { invoke, isTauri } from "@tauri-apps/api/core";
 import type { Element, ElementContent, Root } from "hast";
 import { memo, type ReactNode, useEffect, useRef, useState } from "react";
 import ReactMarkdown, { type Components, type Options } from "react-markdown";
@@ -24,14 +23,18 @@ export function safeUrl(url: string): string {
 }
 
 /**
- * A link opens outside the app, in the default browser or mail app (the opener plugin); the
- * webview never navigates. Outside Tauri (browser, mock transport) nothing opens and the status
- * bar says so.
+ * A link opens outside the app, in the default browser or mail app; the webview never navigates.
+ * The app opens only an `https://` URL (26.19), or also an `http://` or `mailto:` one when it is
+ * a link in Markdown or a terminal (`markdown`, 8.6). Outside Tauri (browser, mock transport)
+ * nothing opens and the status bar says so.
  */
-export async function openLink(url: string, tauri = isTauri()): Promise<void> {
+export async function openLink(
+  url: string,
+  { markdown = false, tauri = isTauri() }: { markdown?: boolean; tauri?: boolean } = {},
+): Promise<void> {
   if (!tauri) return showNotice("error", `Only the Hive app opens links: ${url}`);
   try {
-    await openUrl(url);
+    await invoke("open_url", { url, markdown });
   } catch (error) {
     showNotice("error", String(error));
   }
@@ -244,12 +247,12 @@ const COMPONENTS: Components = {
         title={href}
         onClick={(event) => {
           event.preventDefault();
-          void openLink(href);
+          void openLink(href, { markdown: true });
         }}
         // A middle-click (auxclick, not click) would open a popup webview on Windows.
         onAuxClick={(event) => {
           event.preventDefault();
-          if (event.button === 1) void openLink(href);
+          if (event.button === 1) void openLink(href, { markdown: true });
         }}
       >
         {children}

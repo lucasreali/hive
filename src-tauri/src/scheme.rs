@@ -77,17 +77,21 @@ pub fn file_url(url: &tauri::Url, macos: bool) -> bool {
     url.scheme() == scheme && url.host_str() == Some(host) && url.port().is_none()
 }
 
-/// Gives a `file` message's `media` (24.2) the URL the viewer shows it from.
-pub fn with_url(file: &mut Value, macos: bool) {
+/// Gives a `file` message's `media` (24.2) the URL the viewer shows it from: only the local
+/// service's (`local`), since the scheme reads its files only. Any URL the service wrote goes
+/// (26.19), so a remote's file has none.
+pub fn with_url(file: &mut Value, macos: bool, local: bool) {
     let path = file["path"].as_str().unwrap_or_default().to_owned();
-    let Some(media) = file.get_mut("media") else {
+    let Some(media) = file.get_mut("media").and_then(Value::as_object_mut) else {
         return;
     };
-    let url = match (media["token"].as_str(), media["version"].as_str()) {
-        (Some(token), Some(version)) => url(macos, token, &path, version),
+    media.remove("url");
+    let field = |name: &str| media.get(name).and_then(Value::as_str);
+    let url = match (local, field("token"), field("version")) {
+        (true, Some(token), Some(version)) => url(macos, token, &path, version),
         _ => return,
     };
-    media["url"] = url.into();
+    media.insert("url".into(), url.into());
 }
 
 /// An HTML page's CSP (24.4, the human at 24.1) on macOS: its inline scripts and styles run, and
@@ -189,12 +193,12 @@ mod tests {
     #[test]
     fn a_file_message_s_media_gets_its_url() {
         let mut file = json!({"type": "file", "path": "a b.png", "media": {"mime": "image/png", "token": "t", "version": "4-1"}});
-        with_url(&mut file, true);
+        with_url(&mut file, true, true);
         assert_eq!(
             file["media"]["url"],
             "hive-file://localhost/t/a%20b.png?v=4-1"
         );
-        with_url(&mut file, false);
+        with_url(&mut file, false, true);
         assert_eq!(
             file["media"]["url"],
             "http://hive-file.localhost/t/a%20b.png?v=4-1"
@@ -206,9 +210,19 @@ mod tests {
             json!({"type": "file", "path": "a", "media": {"token": "t"}}),
         ] {
             let mut after = before.clone();
-            with_url(&mut after, true);
+            with_url(&mut after, true, true);
             assert_eq!(after, before);
         }
+        // A remote's file gets none, and no file keeps a URL its service wrote (26.19).
+        with_url(&mut file, true, false);
+        assert_eq!(
+            file["media"],
+            json!({"mime": "image/png", "token": "t", "version": "4-1"})
+        );
+        let mut written =
+            json!({"type": "file", "path": "a", "media": {"url": "https://evil.example/"}});
+        with_url(&mut written, true, true);
+        assert_eq!(written["media"], json!({}));
     }
 
     #[test]

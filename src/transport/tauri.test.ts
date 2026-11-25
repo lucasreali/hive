@@ -288,6 +288,9 @@ test("requests about the shown host's data name it; this Mac's settings never do
   await tauriTransport.openFile("/w", "a", "head");
   await tauriTransport.saveFile("/w", "a", "x", null);
   await tauriTransport.openTerminal("/w", 80, 24, () => {});
+  // A host given wins over the one shown: this Mac's, or another.
+  await tauriTransport.openTerminal("/w", 80, 24, () => {}, undefined, null);
+  await tauriTransport.openTerminal("/w", 80, 24, () => {}, undefined, "lab");
   await tauriTransport.getSettings();
   await tauriTransport.reconnectHost("lab");
   await tauriTransport.restartRemote("lab");
@@ -300,6 +303,8 @@ test("requests about the shown host's data name it; this Mac's settings never do
     ["open_file", "gpu-box"],
     ["save_file", "gpu-box"],
     ["open_terminal", "gpu-box"],
+    ["open_terminal", undefined],
+    ["open_terminal", "lab"],
     ["get_settings", undefined],
     ["reconnect_host", "lab"],
     ["restart_remote", "lab"],

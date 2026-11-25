@@ -29,9 +29,9 @@ export const tauriTransport: Transport = {
   reconnectHost: (host) => send("reconnect_host", { host }),
   restartRemote: (host) => send("restart_remote", { host }),
   byeHost: (host, end) => send("bye_host", { host, end }),
-  openTerminal(cwd, cols, rows, onData, account) {
+  openTerminal(cwd, cols, rows, onData, account, on) {
     const channel = new Channel<ArrayBuffer>((bytes) => onData(new Uint8Array(bytes)));
-    const host = shownHost();
+    const host = on === undefined ? shownHost() : (on ?? undefined);
     return invoke<number>("open_terminal", { host, cwd, cols, rows, account, onData: channel });
   },
   attachTerminal(id, onData) {

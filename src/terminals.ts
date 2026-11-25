@@ -258,7 +258,7 @@ export const pasteToTerminal = (id: number, text: string) => terminal(id)?.paste
 const LINKS = {
   activate: (_event: MouseEvent, url: string) => {
     const safe = safeUrl(url);
-    if (safe) void openLink(safe);
+    if (safe) void openLink(safe, { markdown: true });
   },
 };
 
@@ -267,9 +267,16 @@ const LINKS = {
  * before the service is asked, so no output is lost before the tab appears. It gets the Claude
  * `account` when given (12.2), else the current one.
  */
-export const openTerminal = (cwd: string, account?: AccountDir): Promise<number> =>
-  startTerminal(cwd, (term, onData) =>
-    transport.openTerminal(cwd, term.cols, term.rows, onData, account),
+export const openTerminal = (
+  cwd: string,
+  account?: AccountDir,
+  // The host it runs on (26.18: null for this Mac); the host shown when not given.
+  host: string | null = useHive.getState().host,
+): Promise<number> =>
+  startTerminal(
+    cwd,
+    (term, onData) => transport.openTerminal(cwd, term.cols, term.rows, onData, account, host),
+    host ?? undefined,
   );
 
 /**
@@ -846,7 +853,8 @@ export async function splitTerminal(id: PaneId | null): Promise<void> {
     s.tabs.filter((t) => t === tab || (tabWorktree(s, t) === place && !splitOf(s, t.id))),
   );
   const next = same[(same.indexOf(tab) + 1) % same.length] as typeof tab;
-  const right = next === tab ? await openTerminal(tab.cwd) : next.id;
+  // On the tab's own host (26.18), never another's shell in its folder.
+  const right = next === tab ? await openTerminal(tab.cwd, undefined, tab.host ?? null) : next.id;
   setSplit({ left: tab.id, right });
 }
 

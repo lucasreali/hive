@@ -9,6 +9,10 @@ use tokio_util::codec::{FramedRead, FramedWrite};
 
 const WAIT: Duration = Duration::from_secs(10);
 
+// A real remote host (26.20): only ci.yml's `remote` job sets it up and builds this.
+#[cfg(feature = "remote-ci")]
+mod ci;
+
 #[test]
 fn the_ssh_command_is_fixed_options_then_the_alias_then_a_constant_command() {
     let alias = Alias::new("gpu-box".into()).unwrap();
@@ -155,6 +159,11 @@ fn each_failure_has_its_kind_message_and_retry() {
             Failure::Version("0.1.0".into(), None),
             "version",
             format!("gpu runs Hive 0.1.0 with its terminals; this app is Hive {VERSION}."),
+        ),
+        (
+            Failure::Limit("sent more than 1000 messages in a second".into()),
+            "limit",
+            "Hive dropped the link to gpu: it sent more than 1000 messages in a second.".to_owned(),
         ),
         (
             Failure::Network("No route to host".into()),
@@ -1225,24 +1234,31 @@ async fn the_local_settings_link_the_hosts_and_requests_go_to_each_host_s_link()
     // and its agents, whose states make quitting ask.
     let media =
         json!({"token": "t", "version": "1", "mime": "text/html", "url": "http://localhost:1420/"});
-    let file = json!({"type": "file", "worktree": "/r", "path": "a.html", "media": media});
-    remote.writer.send(raw(&file)).await.unwrap();
+    let file = |path: &str, media: Value| json!({"type": "file", "worktree": "/r", "path": path, "content": null, "base": null, "version": "v", "binary": true, "too_large": false, "error": null, "media": media});
+    remote
+        .writer
+        .send(raw(&file("a.html", media)))
+        .await
+        .unwrap();
     let got = next_of(&mut rx, "file").await;
     assert_eq!(got["host"], "gpu");
     assert_eq!(
         got["media"],
         json!({"token": "t", "version": "1", "mime": "text/html"})
     );
-    let bare = json!({"type": "file", "worktree": "/r", "path": "a.txt"});
-    remote.writer.send(raw(&bare)).await.unwrap();
-    assert_eq!(next_of(&mut rx, "file").await.get("media"), None);
+    remote
+        .writer
+        .send(raw(&file("a.txt", Value::Null)))
+        .await
+        .unwrap();
+    assert_eq!(next_of(&mut rx, "file").await["media"], Value::Null);
     remote
         .writer
         .send(raw(&json!({"type": "projects", "projects": []})))
         .await
         .unwrap();
     assert_eq!(next_of(&mut rx, "projects").await["host"], "gpu");
-    let state = |state: &str| json!({"type": "agent_state", "id": "a", "state": state});
+    let state = |state: &str| json!({"type": "agent_state", "id": "a", "state": state, "urgency": 2, "pending": false, "interrupted": false, "alert": null, "notify": false, "subagents": [], "activity": null, "since_ms": 1});
     remote.writer.send(raw(&state("working"))).await.unwrap();
     assert_eq!(next_of(&mut rx, "agent_state").await["host"], "gpu");
     assert_eq!(hive.remotes().unwrap().at_risk(), 1);
@@ -1379,3 +1395,6 @@ async fn quitting_says_goodbye_to_a_host_and_waits_for_it_to_close_the_link() {
     assert!(lock(&link).frames.is_none());
     hive.remotes().unwrap().end();
 }
+
+// A remote that misbehaves (26.19).
+mod hostile;

@@ -108,20 +108,22 @@ jobs:
   # docs (Markdown, docs/, the agents' skills), so a docs-only push runs no gate; except
   # docs/architecture.md, whose message catalog a protocol test reads. `windows` (TODO 9.4): what
   # compiles on Windows; hive-protocol is compiled into the app; ci.yml itself, so a change to
-  # the job runs it. A job skipped by its `if` still leaves the run green, so
-  # `scripts/ci.sh watch` waits for nothing more.
+  # the job runs it. `remote` (TODO 26.20): the app's link code (`lib.rs`, `remote.rs` and its
+  # tests), the service and protocol, the lockfile and the remote builds' workflow. A job skipped
+  # by its `if` still leaves the run green, so `scripts/ci.sh watch` waits for nothing more.
   changes:
     runs-on: ubuntu-latest
     outputs:
       code: ${{ steps.diff.outputs.code }}
       windows: ${{ steps.diff.outputs.windows }}
+      remote: ${{ steps.diff.outputs.remote }}
     steps:
       - uses: actions/checkout@v6
         with:
           fetch-depth: 0
       - id: diff
         run: |
-          code=true windows=true
+          code=true windows=true remote=true
           if [ "$GITHUB_REF" != refs/heads/main ] && [ "$GITHUB_EVENT_NAME" != workflow_dispatch ]; then
             files=$(git diff --name-only "$(git merge-base origin/main HEAD)" HEAD)
             # Not piped into `grep -q`: its early exit would fail the pipeline (pipefail).
@@ -130,9 +132,12 @@ jobs:
               code=false
             grep -qE '^(src-tauri/|crates/hive-protocol/|Cargo\.(toml|lock)$|package\.json$|bun\.lock$|\.github/workflows/ci\.yml$)' <<< "$files" ||
               windows=false
+            grep -qE '^(src-tauri/(src/(lib|remote)\.rs$|src/remote/|Cargo\.toml$)|crates/(hive|hive-protocol)/src/|Cargo\.lock$|\.github/workflows/(ci|linux-remote)\.yml$)' <<< "$files" ||
+              remote=false
           fi
           echo "code=$code" | tee -a "$GITHUB_OUTPUT"
           echo "windows=$windows" | tee -a "$GITHUB_OUTPUT"
+          echo "remote=$remote" | tee -a "$GITHUB_OUTPUT"
 
   # The remote Linux `hive` (TODO 26.13): the static x86_64 and aarch64 builds the macOS app
   # carries, each run in an old-glibc container (linux-remote.yml).
@@ -140,6 +145,104 @@ jobs:
     needs: changes
     if: needs.changes.outputs.code == 'true'
     uses: ./.github/workflows/linux-remote.yml
+
+  # A real remote host (TODO 26.20, the spike's open questions 2 and 5): an sshd in an AlmaLinux 8
+  # container (glibc 2.28, as RHEL 8), its replies delayed by `tc netem` (RTT_MS) with 2 % loss,
+  # and 26.13's static x86_64 `hive`, which the app's link code (src-tauri `Remotes`, headless, no
+  # WebView) installs over ssh and drives: `src-tauri/src/remote/tests/ci.rs`, built only here
+  # (`--features remote-ci`). Only for a branch changing the link code, the service or the
+  # protocol (`changes`' `remote`), and on `main`. The ssh client reads only this job's config,
+  # keys and known_hosts, and the test runs with a temporary HOME: never the runner's `~/.ssh`.
+  # The numbers go to the job's summary.
+  remote:
+    needs: [changes, linux-remote]
+    if: needs.changes.outputs.remote == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      RTT_MS: 100
+    steps:
+      - uses: actions/checkout@v6
+      - uses: ./.github/actions/setup-rust
+        with:
+          cache-key: remote-ci
+      - uses: actions/download-artifact@v7
+        with:
+          name: hive-linux-x86_64
+          path: ${{ runner.temp }}/builds
+      # Built first, with the runner's HOME (cargo and rustup live there); linted with the test.
+      - run: cargo clippy -p hive-app --all-targets --features remote-ci --locked -- -D warnings
+      - run: cargo test -p hive-app --features remote-ci --locked --no-run
+      # The host: temporary keys (the client's, the host's, and another host's for a changed key),
+      # users `hive` (bash) and `mac` (a login shell whose `uname` says Darwin), then netem on
+      # the container's side of the link. AlmaLinux 8's image index, by digest.
+      - name: The remote host
+        run: |
+          lab=$RUNNER_TEMP/remote-lab
+          mkdir -m 700 "$lab" "$lab/home"
+          for key in id host other; do ssh-keygen -q -t ed25519 -N '' -C "hive-ci-$key" -f "$lab/$key"; done
+          sudo modprobe sch_netem
+          docker run -d --name hive-remote --cap-add NET_ADMIN \
+            almalinux:8@sha256:768bedc30fe0a536adb0a65d2eddb7caad364e514fbddd0ae9e026975f590342 sleep infinity
+          docker cp "$lab/host" hive-remote:/hive_host_key
+          docker cp "$lab/id.pub" hive-remote:/authorized_keys
+          docker exec -i -e RTT_MS hive-remote bash -euo pipefail <<'SETUP'
+          dnf -y -q install openssh-server iproute-tc procps-ng
+          install -m 600 -o root -g root /hive_host_key /etc/ssh/hive_host_key
+          mkdir -p /opt/darwin
+          printf '#!/bin/sh\ncase "$1" in -m) echo arm64 ;; *) echo Darwin ;; esac\n' > /opt/darwin/uname
+          printf '#!/bin/sh\nPATH=/opt/darwin:$PATH\nexport PATH\nexec /bin/sh "$@"\n' > /usr/local/bin/darwin-shell
+          chmod 755 /opt/darwin/uname /usr/local/bin/darwin-shell
+          useradd -m -s /bin/bash hive
+          useradd -m -s /usr/local/bin/darwin-shell mac
+          for user in hive mac; do
+            usermod -p '*' "$user"
+            install -d -m 700 -o "$user" -g "$user" "/home/$user/.ssh"
+            install -m 600 -o "$user" -g "$user" /authorized_keys "/home/$user/.ssh/authorized_keys"
+          done
+          printf '%s\n' 'HostKey /etc/ssh/hive_host_key' 'PasswordAuthentication no' 'PubkeyAuthentication yes' \
+            'UsePAM no' 'PermitRootLogin no' 'AllowUsers hive mac' > /etc/ssh/sshd_hive
+          /usr/sbin/sshd -f /etc/ssh/sshd_hive -E /var/log/sshd-hive.log
+          tc qdisc add dev eth0 root netem delay "${RTT_MS}ms" loss 2%
+          tc qdisc show dev eth0
+          SETUP
+          ip=$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' hive-remote)
+          echo "$ip $(cut -d' ' -f1,2 "$lab/host.pub")" > "$lab/known"
+          echo "$ip $(cut -d' ' -f1,2 "$lab/other.pub")" > "$lab/changed"
+          : > "$lab/unknown"
+          # The first value of each option wins: the aliases' own before the defaults.
+          cat > "$lab/config" <<CONFIG
+          Host hive-unknown
+            UserKnownHostsFile $lab/unknown
+          Host hive-changed
+            UserKnownHostsFile $lab/changed
+          Host hive-darwin
+            User mac
+          Host *
+            HostName $ip
+            User hive
+            IdentityFile $lab/id
+            IdentitiesOnly yes
+            IdentityAgent none
+            UserKnownHostsFile $lab/known
+            GlobalKnownHostsFile /dev/null
+          CONFIG
+          printf '#!/bin/sh\nexec /usr/bin/ssh -F %s "$@"\n' "$lab/config" > "$lab/ssh"
+          chmod 755 "$lab/ssh"
+          time "$lab/ssh" -o BatchMode=yes -o StrictHostKeyChecking=yes -- hive-ci uname -srm
+      - name: The app's links against it
+        run: |
+          lab=$RUNNER_TEMP/remote-lab
+          export RUSTUP_HOME=${RUSTUP_HOME:-$HOME/.rustup} CARGO_HOME=${CARGO_HOME:-$HOME/.cargo}
+          HOME=$lab/home HIVE_CI_SSH=$lab/ssh HIVE_CI_BUILDS=$RUNNER_TEMP/builds HIVE_CI_RTT_MS=$RTT_MS \
+            HIVE_CI_REPORT=$lab/report.md cargo test -p hive-app --features remote-ci --locked \
+            remote::tests::ci -- --nocapture
+      - if: always()
+        run: cat "$RUNNER_TEMP/remote-lab/report.md" >> "$GITHUB_STEP_SUMMARY" || true
+      - if: failure()
+        run: |
+          docker exec hive-remote cat /var/log/sshd-hive.log || true
+          docker exec hive-remote sh -c 'ls -laR /tmp/hive-* /home/hive/.hive; cat /tmp/hive-*/*.log' || true
 
   # The Linux `hive` the Windows installer carries, as release.yml's `linux` job builds it.
   linux-hive:

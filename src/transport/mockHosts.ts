@@ -187,8 +187,9 @@ export async function createHostsTransport(cast: string | null = null): Promise<
         if (message.type === "settings") follow(message.settings.remote.hosts);
       });
     },
-    async openTerminal(cwd, cols, rows, onData, account) {
-      if (!shown()) return local.openTerminal(cwd, cols, rows, onData, account);
+    async openTerminal(cwd, cols, rows, onData, account, host) {
+      const remoteHost = host === undefined ? shown() : host === MOCK_HOST;
+      if (!remoteHost) return local.openTerminal(cwd, cols, rows, onData, account);
       const id = await remote.openTerminal(cwd, cols, rows, onData, account);
       remoteIds.add(id);
       return id;

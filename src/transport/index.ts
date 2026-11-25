@@ -43,6 +43,7 @@ export interface Transport {
   /**
    * Opens a terminal in `cwd` and resolves with its id (the frame channel). It gets the Claude
    * `account` (12.2), which must be one of the settings' accounts; without one, the current one.
+   * It runs on `host` (26.18: null for this Mac), else on the host shown.
    */
   openTerminal(
     cwd: string,
@@ -50,6 +51,7 @@ export interface Transport {
     rows: number,
     onData: (bytes: Uint8Array) => void,
     account?: AccountDir,
+    host?: string | null,
   ): Promise<number>;
   /**
    * The page takes the output of terminal `id`, one it does not have (`terminal_kept`), in

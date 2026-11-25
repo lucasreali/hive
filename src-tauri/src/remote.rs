@@ -13,7 +13,7 @@
 //!   then its `--version`, before the rename. Any other OS or CPU is refused (Q5).
 //! - **Failures** are told from `ssh`'s stderr: a host key not known or changed (Q6), a login
 //!   that needs a password or passphrase, the platform, a remote service of another version
-//!   (Q8); none of them is retried. Anything else retries after 1, 2, 5, 10 and 30 s, then every
+//!   (Q8), a remote past its link's caps (26.19, `limits`); none of them is retried. Anything else retries after 1, 2, 5, 10 and 30 s, then every
 //!   30 s while the host keeps terminals; waking from sleep retries at once (Q7).
 
 use std::collections::hash_map::RandomState;
@@ -160,6 +160,8 @@ pub enum Failure {
     Install(String),
     /// A service of another version runs there (Q8), with its terminals, if it says.
     Version(String, Option<u64>),
+    /// The remote went past one of its link's caps, or broke the protocol (26.19): what it did.
+    Limit(String),
     /// Anything else: the network, or a link that dropped, with what `ssh` said.
     Network(String),
 }
@@ -173,12 +175,13 @@ impl Failure {
             Self::Needs(_) | Self::Install(_) => "install",
             Self::Platform(_) => "platform",
             Self::Version(..) => "version",
+            Self::Limit(_) => "limit",
             Self::Network(_) => "network",
         }
     }
 
-    /// Whether trying again may help: not for a host key, a login, a platform, an install or a
-    /// version.
+    /// Whether trying again may help: not for a host key, a login, a platform, an install, a
+    /// version or a remote past its caps.
     pub fn retries(&self) -> bool {
         matches!(self, Self::Network(_))
     }
@@ -209,6 +212,7 @@ impl Failure {
                     "{alias} runs Hive {version} with {terminals} terminals; this app is Hive {VERSION}."
                 )
             }
+            Self::Limit(why) => format!("Hive dropped the link to {alias}: it {why}."),
             Self::Network(why) => format!("Cannot reach {alias}: {why}"),
         }
     }
@@ -500,6 +504,7 @@ impl Remotes {
             }
             End::Closed => classify(&exit.await),
             End::Broken(error) => Failure::Network(error),
+            End::Limit(why) => Failure::Limit(why),
         };
         let mut link = lock(&remote.link);
         let welcomed = link.welcome.is_some();

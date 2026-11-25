@@ -243,6 +243,7 @@ fn main() {
             commands::create_folder,
             commands::open_in_editor,
             commands::open_path,
+            commands::open_url,
             commands::get_settings,
             commands::set_settings,
             commands::create_account,
