@@ -565,11 +565,11 @@ pub fn identified_notifier(
     (Box::new(notify), Box::new(clicked))
 }
 
-/// The text without control characters, which a Windows toast's XML refuses.
 /// The most characters of an OS notification's title and body (26.19).
 const NOTIFICATION_TITLE: usize = 256;
 const NOTIFICATION_BODY: usize = 1024;
 
+/// The text without control characters, which a Windows toast's XML refuses.
 fn printable(text: &str) -> String {
     text.chars().filter(|c| !c.is_control()).collect()
 }
@@ -2660,6 +2660,13 @@ async fn pump(link: &Mutex<Link>, mut frames: FramedRead<Reader<'_>, FrameCodec>
                     ..
                 }) = link.terminals.get_mut(&channel)
                 else {
+                    // Dropped (a channel the link does not know, or a kept terminal no UI took),
+                    // but a remote's is counted as its messages are (26.19), so a flood of it
+                    // ends the link.
+                    let flood = rate.count(Instant::now(), bytes.len()).err();
+                    if let Some(why) = flood.filter(|_| remote) {
+                        return End::Limit(why);
+                    }
                     continue;
                 };
                 *received = received.saturating_add(bytes.len() as u64);

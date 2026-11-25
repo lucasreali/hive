@@ -355,3 +355,29 @@ async fn all_of_a_remote_s_terminals_together_flow_no_faster_than_the_ui() {
     assert_eq!(seen.last().unwrap()["reason"], reason);
     hive.remotes().unwrap().end();
 }
+
+#[tokio::test]
+async fn terminal_output_no_terminal_takes_is_counted_as_messages_are() {
+    let lab = Lab::new("unknown-channel");
+    let (hive, _local, remote, mut rx) = to_gpu(&lab).await;
+    // Output for a channel the link does not know is dropped, but a flood of it ends the link,
+    // however slowly a loaded machine reads it.
+    let chunk = vec![b'y'; hive_protocol::MAX_PAYLOAD];
+    let flood = encoded((0..4).map(|_| Frame::terminal(99, chunk.clone())));
+    let Service { mut writer, .. } = remote;
+    tokio::spawn(async move {
+        for _ in 0..1000 {
+            if writer.get_mut().write_all(&flood).await.is_err() {
+                break;
+            }
+        }
+    });
+    let seen = until(&mut rx, "disconnected").await;
+    let stopped = seen.last().unwrap();
+    let reason = "Hive dropped the link to gpu: it sent more than 16 MiB of messages in a second.";
+    assert_eq!(
+        (&stopped["kind"], &stopped["reason"]),
+        (&json!("limit"), &json!(reason))
+    );
+    hive.remotes().unwrap().end();
+}
