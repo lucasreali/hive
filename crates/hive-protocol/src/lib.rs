@@ -1343,17 +1343,21 @@ impl Default for RemoteSettings {
 }
 
 /// A host alias `ssh` may be given (26.17): not empty, at most [`HOST_ALIAS_LIMIT`] bytes, no
-/// leading `-` (it would be read as an option), no whitespace or control characters.
+/// leading `-` (it would be read as an option), and only ASCII letters, digits and `.`, `_`,
+/// `@`, `:`, `%`, `[`, `]`, `-`: `ssh` puts the alias into a `ProxyCommand`, `Match exec` or
+/// `LocalCommand` of `~/.ssh/config` (`%h`, `%n`) unquoted, so a shell character could run
+/// there (the CVE-2023-51385 class).
 pub fn check_host(alias: &str) -> Result<(), String> {
+    let allowed = |c: char| c.is_ascii_alphanumeric() || "._@:%[]-".contains(c);
     if alias.is_empty() {
         Err("A host alias must not be empty".to_owned())
     } else if alias.len() > HOST_ALIAS_LIMIT {
         Err(format!("A host alias is at most {HOST_ALIAS_LIMIT} bytes"))
     } else if alias.starts_with('-') {
         Err(format!("The host alias {alias:?} must not start with -"))
-    } else if alias.chars().any(|c| c.is_whitespace() || c.is_control()) {
+    } else if !alias.chars().all(allowed) {
         Err(format!(
-            "The host alias {alias:?} must not hold spaces or control characters"
+            "The host alias {alias:?} may hold only letters, digits and . _ @ : % [ ] -"
         ))
     } else {
         Ok(())
@@ -2513,6 +2517,8 @@ mod tests {
             "gpu-box",
             "user@lab.example",
             "h",
+            "my_box.lan",
+            "[fe80::1%en0]:22",
             &"a".repeat(HOST_ALIAS_LIMIT),
         ] {
             assert_eq!(check_host(ok), Ok(()), "{ok}");
@@ -2531,17 +2537,21 @@ mod tests {
         for (alias, error) in bad {
             assert_eq!(check_host(alias), Err(error));
         }
-        for alias in [
-            "gpu box",
-            "gpu\tbox",
-            "gpu\u{1b}box",
-            "gpu\u{a0}box",
-            "gpu\nbox",
-        ] {
-            let error = check_host(alias).unwrap_err();
+        // Spaces, control characters, anything a shell reads and anything not ASCII.
+        let mut refused: Vec<String> = ["gpu box", "gpu\tbox", "gpu\u{1b}box", "gpu\nbox"]
+            .map(str::to_owned)
+            .into();
+        refused.extend(
+            "$`;|&<>()'\"\\*?!#~{}=,/+^"
+                .chars()
+                .map(|c| format!("gpu{c}box")),
+        );
+        refused.extend(["gpu\u{a0}box".to_owned(), "gpü".to_owned()]);
+        for alias in refused {
+            let error = check_host(&alias).unwrap_err();
             assert!(
-                error.ends_with("must not hold spaces or control characters"),
-                "{error}"
+                error.ends_with("may hold only letters, digits and . _ @ : % [ ] -"),
+                "{alias:?}: {error}"
             );
         }
     }
