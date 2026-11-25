@@ -3,7 +3,7 @@ import { useEffect, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 import type { Project, Script, ScriptSource, Worktree } from "../protocol";
 import { runningScripts, runScript, stopScript } from "../scripts";
-import { activateTab, openModal, useHive } from "../store";
+import { activateTab, onRemote, openModal, useHive } from "../store";
 import { showOpenFailure } from "../terminals";
 import { transport } from "../transport";
 import { Select } from "../ui/Select";
@@ -50,6 +50,8 @@ export function ScriptsView({ project, worktree }: { project: Project; worktree:
     scripts: (listed?.scripts ?? []).filter((s) => s.source === g.source),
   })).filter((g) => g.scripts.length > 0);
   const port = listed?.port ?? null;
+  // A remote's dev server is on its host, not this Mac's localhost (26.18): no preview.
+  const remote = useHive(onRemote);
   // The previewed port's place in the block (24.4), and a count of reloads asked.
   const [preview, setPreview] = useState<number | null>(null);
   const [loads, setLoads] = useState(0);
@@ -62,18 +64,20 @@ export function ScriptsView({ project, worktree }: { project: Project; worktree:
           </span>
           <code className="scripts-code">$PORT {port}</code>
           <code className="scripts-code">$HIVE_PORT {port}</code>
-          <button
-            type="button"
-            className="ghost text scripts-preview-toggle"
-            aria-pressed={preview !== null}
-            title={preview === null ? "Preview the dev server" : "Show the scripts"}
-            onClick={() => setPreview(preview === null ? 0 : null)}
-          >
-            Preview
-          </button>
+          {!remote && (
+            <button
+              type="button"
+              className="ghost text scripts-preview-toggle"
+              aria-pressed={preview !== null}
+              title={preview === null ? "Preview the dev server" : "Show the scripts"}
+              onClick={() => setPreview(preview === null ? 0 : null)}
+            >
+              Preview
+            </button>
+          )}
         </div>
       )}
-      {port !== null && preview !== null ? (
+      {port !== null && preview !== null && !remote ? (
         <DevServer
           port={port}
           at={preview}

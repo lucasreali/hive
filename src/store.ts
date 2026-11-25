@@ -1138,6 +1138,12 @@ export function switchedHost(s: HiveState, host: string | null): Partial<HiveSta
   return { ...shown, ...selected({ ...s, ...shown }, spacePlace({ ...s, ...shown })) };
 }
 
+/**
+ * The shown space is a remote host's (26.18): its paths are not on this Mac, so nothing opens
+ * or reveals one, and no dev server of it is previewed.
+ */
+export const onRemote = (s: Pick<HiveState, "host">): boolean => s.host !== null;
+
 /** Shows `host`'s spaces (26.18). */
 export const showHost = (host: string | null) => useHive.setState((s) => switchedHost(s, host));
 

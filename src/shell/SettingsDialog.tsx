@@ -2,6 +2,7 @@ import {
   BellIcon,
   FolderSimpleIcon,
   GitBranchIcon,
+  HardDrivesIcon,
   type Icon,
   InfoIcon,
   KeyboardIcon,
@@ -14,7 +15,7 @@ import { type CSSProperties, Fragment, type ReactNode, useEffect, useRef, useSta
 import { version as appVersion } from "../../package.json";
 import type { Account, AppMode, ClaudeLogin, ProjectScripts, Settings } from "../protocol";
 import { commandKeys, platformCommands } from "../shortcuts";
-import { ask, openModal, panelWorktree, scriptsOf, useHive } from "../store";
+import { ask, onRemote, openModal, panelWorktree, scriptsOf, useHive } from "../store";
 import { MAC_TERMINAL_KEYS, openClaude, showOpenFailure } from "../terminals";
 import { transport } from "../transport";
 import { NumberInput } from "../ui/NumberInput";
@@ -22,6 +23,7 @@ import { Select } from "../ui/Select";
 import { openSettingsFile, openSharedFolder } from "../viewer/external";
 import { homeText, isMac } from "../window";
 import { FolderField, useFolderListing } from "./FolderField";
+import { HostsSettings } from "./Hosts";
 import { CloseIcon, ICON } from "./icons";
 import { SearchField } from "./SearchField";
 import { accountName, useGhAccounts } from "./SpaceDialog";
@@ -39,6 +41,7 @@ export const SECTIONS = [
   "Notifications",
   "Agents",
   "Accounts",
+  "Hosts",
   "Worktrees",
   "Projects",
   "Shortcuts",
@@ -52,6 +55,7 @@ const SECTION_ICON: Record<Section, Icon> = {
   Notifications: BellIcon,
   Agents: RobotIcon,
   Accounts: UserCircleIcon,
+  Hosts: HardDrivesIcon,
   Worktrees: GitBranchIcon,
   Projects: FolderSimpleIcon,
   Shortcuts: KeyboardIcon,
@@ -225,6 +229,8 @@ type Field = {
   windows?: boolean;
   /** Shown only on macOS (the Dock, 17.16; Option as Meta, 17.14; the power assertion, 17.17). */
   mac?: boolean;
+  /** Shown only where the app links to remote hosts (26.18): not where it offers WSL. */
+  hosts?: boolean;
   control: (id: string, label: string) => ReactNode;
 };
 
@@ -446,6 +452,24 @@ const FIELDS: Field[] = [
         get={(s) => s.notifications.command_secs}
         set={(s, n) => {
           s.notifications.command_secs = n;
+        }}
+      />
+    ),
+  },
+  {
+    section: "Hosts",
+    label: "Keep remote terminals (minutes)",
+    help: "1 to 10080 (7 days): how long a host keeps its terminals and agents running once its link drops or Hive quits keeping them.",
+    hosts: true,
+    control: (id, label) => (
+      <NumberSetting
+        id={id}
+        label={label}
+        min={1}
+        max={10080}
+        get={(s) => s.remote.keep_minutes}
+        set={(s, n) => {
+          s.remote.keep_minutes = n;
         }}
       />
     ),
@@ -1344,6 +1368,7 @@ function GhAccountsPart() {
  */
 function SharedPlugin() {
   const shared = useHive((s) => s.shared);
+  const remote = useHive(onRemote);
   useEffect(() => void transport.getShared(), []);
   const named = (names: string[]) => names.map((n) => `/${shared?.plugin}:${n}`);
   const held = shared
@@ -1371,9 +1396,11 @@ function SharedPlugin() {
       </p>
       <div className="shared-row">
         {shared ? <FolderCell path={shared.folder} /> : <span className="folder-cell">…</span>}
-        <button type="button" className="secondary" onClick={openSharedFolder}>
-          Open folder
-        </button>
+        {!remote && (
+          <button type="button" className="secondary" onClick={openSharedFolder}>
+            Open folder
+          </button>
+        )}
       </div>
       {shared?.error && <p className="field-error">{shared.error}</p>}
       {shared && (
@@ -1465,8 +1492,10 @@ function Content({ section, query }: { section: Section; query: string }) {
   const modes = useHive((s) => s.appMode?.wsl === true);
   const windows = useHive((s) => s.appMode?.mode === "native");
   const mac = isMac();
+  const linking = useHive((s) => s.appMode === null);
   const fields = FIELDS.filter(
-    (f) => (modes || !f.modes) && (windows || !f.windows) && (mac || !f.mac),
+    (f) =>
+      (modes || !f.modes) && (windows || !f.windows) && (mac || !f.mac) && (linking || !f.hosts),
   );
   if (query) {
     const found = fields.filter((f) => f.label.toLowerCase().includes(query.toLowerCase()));
@@ -1477,6 +1506,14 @@ function Content({ section, query }: { section: Section; query: string }) {
   if (section === "About") return <About />;
   if (section === "Projects") return <ProjectScriptsSection />;
   const shown = <Fields fields={fields.filter((f) => f.section === section)} />;
+  if (section === "Hosts") {
+    return (
+      <>
+        <HostsSettings />
+        {shown}
+      </>
+    );
+  }
   if (section === "Accounts") {
     return (
       <>
@@ -1518,6 +1555,10 @@ export function SettingsDialog() {
   );
   const [query, setQuery] = useState("");
   const error = useHive((s) => s.settingsError);
+  const remote = useHive(onRemote);
+  // Only the macOS app links to remote hosts (26.17): none where it offers WSL or Windows.
+  const hosts = useHive((s) => s.appMode === null);
+  const sections = SECTIONS.filter((name) => hosts || name !== "Hosts");
   return (
     <dialog
       className="dialog settings"
@@ -1544,7 +1585,7 @@ export function SettingsDialog() {
             value={query}
             onChange={setQuery}
           />
-          {SECTIONS.map((name) => {
+          {sections.map((name) => {
             const Shape = SECTION_ICON[name];
             return (
               <button
@@ -1573,9 +1614,12 @@ export function SettingsDialog() {
         </div>
       </div>
       <footer>
-        <button type="button" className="secondary settings-file" onClick={openSettingsFile}>
-          Open settings file
-        </button>
+        {/* Off in a remote space, as every open of a path (26.18). */}
+        {!remote && (
+          <button type="button" className="secondary settings-file" onClick={openSettingsFile}>
+            Open settings file
+          </button>
+        )}
         <button type="button" className="secondary" onClick={close}>
           Close
         </button>

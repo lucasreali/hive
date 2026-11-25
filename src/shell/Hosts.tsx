@@ -1,5 +1,8 @@
+import { useState } from "react";
 import { type LinkState, linkDown, useHive } from "../store";
 import { transport } from "../transport";
+import { CloseIcon } from "./icons";
+import { saveSettings } from "./SettingsDialog";
 import { useElapsed } from "./Sidebar";
 
 // A remote host's link in the interface (26.18, spike §5): its chip in the status bar, the
@@ -106,7 +109,92 @@ export function HostOverlay() {
   if (host === null) return null;
   return (
     <div className="host-overlay" role="status">
-      <span>Reconnecting to {host}…</span>
+      <span className="host-overlay-text">Reconnecting to {host}…</span>
     </div>
+  );
+}
+
+/**
+ * Settings → Hosts (26.18): the remote hosts the app links to, each by its alias in
+ * `~/.ssh/config`, typed in (Hive does not read that file); each with its link's state, Test
+ * (tries the link now) and Remove. The service checks an alias when the settings are saved.
+ */
+export function HostsSettings() {
+  const hosts = useHive((s) => s.settings.remote.hosts);
+  const links = useHive((s) => s.links);
+  const [alias, setAlias] = useState("");
+  const add = () => {
+    const name = alias.trim();
+    if (!name) return;
+    saveSettings((s) => {
+      s.remote.hosts.push(name);
+    });
+    setAlias("");
+  };
+  return (
+    <section className="field settings-group" aria-labelledby="hosts-title">
+      <h3 id="hosts-title">Remote hosts</h3>
+      <p className="field-help">
+        Linux hosts reached with your own <code>ssh</code>, by their alias in{" "}
+        <code>~/.ssh/config</code>. Hive runs its service there; each host keeps its own spaces.
+      </p>
+      <div className="hosts">
+        {hosts.map((host) => {
+          const link = links[host];
+          return (
+            <div className="host-row" key={host}>
+              <span className="connection" data-status={link?.state ?? "connecting"}>
+                <span className="connection-dot" />
+                <span>{host}</span>
+              </span>
+              <span className="connection-state host-row-state" title={link && linkText(link)}>
+                {link ? linkText(link) : "not linked yet"}
+              </span>
+              <button
+                type="button"
+                className="secondary"
+                title={`Try the link to ${host} now`}
+                onClick={() => void transport.reconnectHost(host)}
+              >
+                Test
+              </button>
+              <button
+                type="button"
+                className="ghost"
+                title={`Remove ${host}`}
+                aria-label={`Remove ${host}`}
+                onClick={() =>
+                  saveSettings((s) => {
+                    s.remote.hosts = s.remote.hosts.filter((h) => h !== host);
+                  })
+                }
+              >
+                <CloseIcon />
+              </button>
+            </div>
+          );
+        })}
+      </div>
+      <form
+        className="host-add"
+        onSubmit={(e) => {
+          e.preventDefault();
+          add();
+        }}
+      >
+        <input
+          aria-label="Host alias"
+          placeholder="Alias in ~/.ssh/config"
+          value={alias}
+          spellCheck={false}
+          autoCapitalize="off"
+          autoCorrect="off"
+          onChange={(e) => setAlias(e.currentTarget.value)}
+        />
+        <button type="submit" className="secondary" disabled={!alias.trim()}>
+          Add host
+        </button>
+      </form>
+    </section>
   );
 }

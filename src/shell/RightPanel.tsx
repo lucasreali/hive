@@ -45,6 +45,7 @@ import {
   isTable,
   isWorkbook,
   type OpenFile,
+  onRemote,
   openFileMenu,
   type PanelView,
   panelWorktree,
@@ -1135,6 +1136,7 @@ export function FileView(props: {
   onMenu?: (event: MouseEvent) => void;
 }) {
   const { worktree, file: own, pane } = props;
+  const remote = useHive(onRemote);
   const openFile = usePane(own, (s) => s.openFile);
   const file = useHive((s) => s.changes[worktree]?.files.find((f) => f.path === openFile?.path));
   const text = usePane(own, (s) =>
@@ -1265,15 +1267,18 @@ export function FileView(props: {
           </button>
         )}
         <CommentButton live={live} />
-        <button
-          type="button"
-          className="ghost"
-          aria-label="Open in external editor"
-          title={`Open in external editor (the ${isMac() ? "" : "Windows "}default app for the file)`}
-          onClick={() => openInEditor(worktree, openFile.path)}
-        >
-          <ExternalIcon />
-        </button>
+        {/* A remote space's file is not on this Mac (26.18). */}
+        {!remote && (
+          <button
+            type="button"
+            className="ghost"
+            aria-label="Open in external editor"
+            title={`Open in external editor (the ${isMac() ? "" : "Windows "}default app for the file)`}
+            onClick={() => openInEditor(worktree, openFile.path)}
+          >
+            <ExternalIcon />
+          </button>
+        )}
         <button
           type="button"
           className="ghost"

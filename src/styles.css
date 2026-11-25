@@ -2639,6 +2639,35 @@ button.chevron:hover {
   display: contents;
 }
 
+/* Settings → Hosts (26.18): each host's name, link state, Test and Remove. */
+.hosts {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto 24px;
+  gap: 6px 10px;
+  align-items: center;
+}
+
+.host-row {
+  display: contents;
+}
+
+.host-row-state {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.host-add {
+  display: flex;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.host-add input {
+  flex: 1;
+  min-width: 0;
+}
+
 .accounts input {
   min-width: 0;
 }
@@ -3920,7 +3949,7 @@ fieldset.new-account {
   color: var(--text);
 }
 
-.host-overlay span {
+.host-overlay-text {
   padding: 8px 14px;
   background: var(--panel);
   border: 1px solid var(--border);

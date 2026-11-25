@@ -21,6 +21,7 @@ import type { Worktree } from "../protocol";
 import { runScript, worktreeScripts } from "../scripts";
 import {
   findWorktree,
+  onRemote,
   openMenu,
   openModal,
   openProjectMenu,
@@ -124,6 +125,8 @@ export function WorktreeMenu() {
   const project = useHive((s) => owner(s.projects, w?.id ?? null)?.id);
   const listed = useHive((s) => (w ? s.scripts[w.path] : undefined));
   const settings = useHive((s) => s.settings);
+  // A remote space's folder is not on this Mac (26.18).
+  const remote = useHive(onRemote);
   const path = menu && w?.path;
   // The repository's scripts too (23.4); the settings' until the service answers.
   useEffect(() => {
@@ -172,10 +175,13 @@ export function WorktreeMenu() {
         <CopyIcon {...ICON} />
         Copy path
       </button>
-      <button type="button" role="menuitem" onClick={act(() => openInEditor(w.path, "", true))}>
-        <FolderOpenIcon {...ICON} />
-        {isMac() ? "Reveal in Finder" : "Show in Explorer"}
-      </button>
+      {/* A remote space's folder is not on this Mac (26.18). */}
+      {!remote && (
+        <button type="button" role="menuitem" onClick={act(() => openInEditor(w.path, "", true))}>
+          <FolderOpenIcon {...ICON} />
+          {isMac() ? "Reveal in Finder" : "Show in Explorer"}
+        </button>
+      )}
       <hr />
       <button
         type="button"

@@ -26,7 +26,7 @@ import {
   sessionName,
   sessionTokens,
 } from "../sessions";
-import { openSessionMenu, useHive } from "../store";
+import { onRemote, openSessionMenu, useHive } from "../store";
 import { transport } from "../transport";
 import { ICON, RefreshIcon, StateIcon } from "./icons";
 import { SearchField } from "./SearchField";
@@ -261,6 +261,7 @@ export function SessionMenu() {
   const menu = useHive((s) => s.sessionMenu);
   const x = useHive((s) => s.sessions?.find((y) => y.id === s.sessionMenu?.session));
   const live = useHive((s) => !!x && !!s.agents[agentKey(s.host, x.id)]);
+  const remote = useHive(onRemote);
   if (!menu || !x) return null;
   // Running outside Hive: not resumed or deleted here, with no text.
   const outside = x.running && !live;
@@ -297,10 +298,12 @@ export function SessionMenu() {
           ? { disabled: true, title: "Command Prompt cannot quote this session's folders" }
           : {},
       )}
-      <hr />
-      {item(FileTextIcon, "Open Log", () => locate(x, "log", "open"))}
-      {item(FolderOpenIcon, "Reveal Log", () => locate(x, "log", "reveal"))}
-      {item(FolderSimpleIcon, "Open Working Directory", () => locate(x, "folder", "open"))}
+      {/* A remote's log and folder are not on this Mac (26.18). */}
+      {!remote && <hr />}
+      {!remote && item(FileTextIcon, "Open Log", () => locate(x, "log", "open"))}
+      {!remote && item(FolderOpenIcon, "Reveal Log", () => locate(x, "log", "reveal"))}
+      {!remote &&
+        item(FolderSimpleIcon, "Open Working Directory", () => locate(x, "folder", "open"))}
       <hr />
       {item(CopyIcon, "Copy Session ID", () => void copy(x.id, "session id"))}
       {item(CopyIcon, "Copy Log Path", () => void copy(x.log, "log path"))}

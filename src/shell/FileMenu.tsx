@@ -12,6 +12,7 @@ import {
   ask,
   type FileDialogKind,
   type FileTarget,
+  onRemote,
   openFileDialog,
   openFileMenu,
   useHive,
@@ -29,6 +30,8 @@ const close = () => useHive.setState({ modal: null, fileDialog: null });
 /** The file tree's menu (right click on a file, a folder or the tree's background). */
 export function FileMenu() {
   const menu = useHive((s) => s.fileMenu);
+  // A remote space's files are not on this Mac (26.18).
+  const remote = useHive(onRemote);
   if (!menu) return null;
   const { x, y, ...target } = menu;
   const item = (Shape: Icon, label: string, kind: FileDialogKind) => (
@@ -47,7 +50,8 @@ export function FileMenu() {
   const { worktree, path } = target;
   // The service checks what may be revealed or opened (D19.1); a folder is its own `folder`.
   const outside = (Shape: Icon, label: string, reveal: boolean) =>
-    path !== null && (
+    path !== null &&
+    !remote && (
       <button
         type="button"
         role="menuitem"
