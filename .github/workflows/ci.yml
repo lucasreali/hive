@@ -184,12 +184,11 @@ jobs:
           sudo modprobe sch_netem
           docker run -d --name hive-remote --cap-add NET_ADMIN \
             almalinux:8@sha256:768bedc30fe0a536adb0a65d2eddb7caad364e514fbddd0ae9e026975f590342 sleep infinity
-          docker cp "$lab/host" hive-remote:/etc/ssh/hive_host_key
+          docker cp "$lab/host" hive-remote:/hive_host_key
           docker cp "$lab/id.pub" hive-remote:/authorized_keys
           docker exec -i -e RTT_MS hive-remote bash -euo pipefail <<'SETUP'
           dnf -y -q install openssh-server iproute-tc procps-ng
-          chown root:root /etc/ssh/hive_host_key
-          chmod 600 /etc/ssh/hive_host_key
+          install -m 600 -o root -g root /hive_host_key /etc/ssh/hive_host_key
           mkdir -p /opt/darwin
           printf '#!/bin/sh\ncase "$1" in -m) echo arm64 ;; *) echo Darwin ;; esac\n' > /opt/darwin/uname
           printf '#!/bin/sh\nPATH=/opt/darwin:$PATH\nexport PATH\nexec /bin/sh "$@"\n' > /usr/local/bin/darwin-shell
