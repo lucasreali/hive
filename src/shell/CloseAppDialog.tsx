@@ -94,8 +94,9 @@ export function requestUpdate(): void {
 }
 
 /**
- * Closing ends every terminal and the agents in them (#18), and so does the restart of an
- * update (`updating`). The prototype has no screen for it.
+ * Closing ends this Mac's terminals and the agents in them (#18), and so does the restart of an
+ * update (`updating`), which leaves a remote host's running there. The prototype has no screen
+ * for it.
  */
 export function CloseAppDialog({ updating = false }: { updating?: boolean }) {
   const count = useHive((s) => agentsAtRisk(s).length);
@@ -104,6 +105,8 @@ export function CloseAppDialog({ updating = false }: { updating?: boolean }) {
     const at = x.indexOf("\n");
     return { host: x.slice(0, at), count: Number(x.slice(at + 1)) };
   });
+  // A restart says no goodbye (26.18 review): a remote host's terminals keep running there.
+  const remoteKept = useHive((s) => updating && s.tabs.some((t) => !!t.host));
   const [ending, setEnding] = useState<string[]>([]);
   const title = updating ? "Update Hive?" : "Close Hive?";
   return (
@@ -136,8 +139,14 @@ export function CloseAppDialog({ updating = false }: { updating?: boolean }) {
           {(count > 0 || updating) && (
             <p>
               {count === 1 ? "1 agent is" : `${count} agents are`} running.{" "}
-              {updating ? "Updating restarts Hive, which ends" : "Closing Hive ends"} every terminal
-              and the agents in them.
+              {updating ? "Updating restarts Hive, which ends" : "Closing Hive ends"}{" "}
+              {remoteKept ? "this Mac's terminals" : "every terminal"} and the agents in them.
+            </p>
+          )}
+          {remoteKept && (
+            <p className="field-help">
+              Remote hosts keep their terminals and agents running for the time set in Settings →
+              Hosts.
             </p>
           )}
           {!updating &&

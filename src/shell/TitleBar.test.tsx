@@ -69,7 +69,20 @@ test("with agents running the update asks first, like closing", () => {
   const install = offered(["a"]);
   fireEvent.click(button() as HTMLElement);
   const dialog = screen.getByRole("dialog", { name: "Update Hive?" });
-  expect(dialog.textContent).toContain("1 agent is running. Updating restarts Hive, which ends");
+  expect(dialog.textContent).toContain(
+    "1 agent is running. Updating restarts Hive, which ends every terminal and the agents in them.",
+  );
+  expect(dialog.textContent).not.toContain("Remote hosts");
+  // A remote's terminal: the restart says no goodbye, so it keeps running there (26.18 review).
+  act(() =>
+    useHive.setState((s) => ({ tabs: [...s.tabs, { id: 9, cwd: "/r", host: "gpu-box" }] })),
+  );
+  expect(dialog.textContent).toContain(
+    "Updating restarts Hive, which ends this Mac's terminals and the agents in them.",
+  );
+  expect(dialog.textContent).toContain(
+    "Remote hosts keep their terminals and agents running for the time set in Settings → Hosts.",
+  );
   expect(install).not.toHaveBeenCalled();
   fireEvent.click(screen.getByRole("button", { name: "Update and restart" }));
   expect(install).toHaveBeenCalledTimes(1);
