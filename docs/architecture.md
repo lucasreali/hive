@@ -1,6 +1,6 @@
 # Hive architecture
 
-The service side is the `hive` binary and the `hive-protocol` crate (Stage 0); the app side is the Tauri app (`src-tauri`) and its React UI (`src`). On Windows the service runs inside WSL or on Windows itself, the user's choice ([App mode](#app-mode-1254)); on macOS it runs natively (5.2).
+The service side is the `hive` binary and the `hive-protocol` crate (Stage 0); the app side is the Tauri app (`src-tauri`) and its React UI (`src`). On Windows the service runs inside WSL or on Windows itself, the user's choice ([App mode](#app-mode-1254)); on macOS it runs natively (5.2). The macOS app can also link to services on remote Linux hosts over ssh (Stage 26, [Remote hosts](#remote-hosts)), one link per host, beside its local one.
 Decisions live in `docs/hive.md` (Portuguese). This file describes how the code implements them.
 
 ## Pieces
@@ -19,13 +19,33 @@ On Windows without WSL, or when the user chooses it (native mode, 12.5), the sam
 
 | Command | Role |
 |---|---|
-| `hive daemon` | The service. It owns the PTYs, receives hook events and lives exactly as long as the app connection. |
-| `hive bridge` | stdio ↔ socket relay run by the app through `wsl.exe` (directly on macOS, and on Windows in native mode, over a named pipe there). It starts the daemon when needed. |
+| `hive daemon` | The service. It owns the PTYs, receives hook events and lives exactly as long as the app connection. `--remote` (a remote host's, started by `hive bridge --remote`): terminals run the user's login shell (26.14), and an app connection that gave `keep_secs` and drops leaves it running for that long (26.15). |
+| `hive bridge` | stdio ↔ socket relay run by the app through `wsl.exe` (directly on macOS, and on Windows in native mode, over a named pipe there). It starts the daemon when needed. On a remote host the app runs it over ssh as `hive bridge --remote` (`--replace` first ends a running service of another version, Q8). |
 | `hive hook <event> [--record FILE]` | Called by Claude Code hooks. Forwards one event and always exits 0. |
 | `hive statusline` | Claude Code's `statusLine` in Hive's terminals: reports the 5-hour usage to the service, then runs the user's own statusline and prints what it prints (see [Session usage](#session-usage-121)). |
 | `hive sheets <format> <budget>` | Hidden; run by the service only (23.7, `hive::workbook`): reads an `xlsx` / `xls` / `ods` workbook on stdin, writes `{"Ok": [sheets]}` or `{"Err": "why"}` on stdout, within a memory and time limit. |
 | `hive badge <text…>` / `hive badge --clear` | Run inside a Hive terminal: sets or clears that terminal's label on its tab and agent row. Exits 2 without a valid `HIVE_TERMINAL_ID`, 1 when the service cannot be reached. |
 | `hive worktree create/list/remove/hook-create/hook-remove` | Worktrees following Claude's convention. |
+
+### Remote hosts
+
+```
+macOS                                   Linux host (x86_64 or aarch64)
+┌────────────┐ local link: /bin/sh  ┌─────────────┐   ┌──────────────────────────┐
+│ Tauri app  │◄──────stdio─────────►│ hive bridge │◄─►│ hive daemon (this Mac's) │
+│ React UI   │                      └─────────────┘   └──────────────────────────┘
+│            │  one link per host: /usr/bin/ssh -T … -- <alias> <constant command>
+│ Remotes ◄──┼──────stdio (frames)───────────────► ┌──────────────────────┐ socket ┌─────────────────────────┐
+│ limits     │                                     │ hive bridge --remote │◄──────►│ hive daemon --remote    │
+└────────────┘                                     │ (~/.hive/bin/hive)   │        │  terminals ($SHELL -l)  │
+                                                   └──────────────────────┘        │  rings, hooks, git      │
+                                                                                   └─────────────────────────┘
+```
+
+- **One link per host** (`src-tauri/src/remote.rs`, `Remotes`): the local service's link, plus one per alias of the local service's `remote.hosts` setting. A remote link is `/usr/bin/ssh -T -o BatchMode=yes -o StrictHostKeyChecking=yes -o ClearAllForwardings=yes -o ServerAliveInterval=10 -o ServerAliveCountMax=3 -o ConnectTimeout=15 -- <alias> "exec /bin/sh -c '<script>' hive <version>"`, each a separate argument: the alias (`check_host`) is the only part that varies, and the script is compile-time text. Everything else (`HostName`, `User`, `ProxyJump`, keys, the agent, `ControlMaster`) is the user's `~/.ssh/config`.
+- **Install:** the script runs `~/.hive/bin/hive bridge --remote` when its `--version` is the app's, else prints `hive-needs <uname -s> <uname -m>`. A Linux x86_64 or aarch64 host then gets the app's bundled static `hive-linux-<cpu>` (26.13) on a second constant command's stdin, its first line `<byte count> <sha256>`: checked on the host by size and `sha256sum` before it ever runs, then by `--version`, and only then renamed over `hive`. Every other OS or CPU is refused, and nothing is uploaded.
+- **Keep and reattach:** the remote `hello` carries `keep_secs` (`remote.keep_minutes` × 60; default 1440 minutes, 1–10080) and a per-launch `app_id`. A remote service whose link drops without `bye {end: true}` keeps its terminals that long, each writing into a 1 MiB ring (`hive::ring`) with its PTY never paused. A new link of the same `app_id` takes over a stale one; the service lists `terminals_kept`, and the app's `attach_terminal {from}` gets the missing bytes, or `terminal_reset` and the whole ring ([App disconnect](#app-disconnect-or-sigterm), [Reattach](#reattach-after-a-dropped-link-2616)).
+- **Trust boundary:** a remote is someone else's machine, a less trusted peer than the local service. Its frames meet the codec's limits as every link's do, then the app's own (`src-tauri/src/limits.rs`, 26.19): message rates, list sizes, unacknowledged terminal output and the write queue are capped, and its text is clipped; past a cap the link is dropped (`disconnected {kind: limit}`) and not retried. Of its control messages, the link acts itself on `REMOTE_LINK` (`welcome`, `version_mismatch`, `terminals_kept`, `terminal_reset`), never passed on, and passes the UI only the types in `REMOTE_TO_UI` (`src-tauri/src/lib.rs`), each read again as its `Control` type; every other one is dropped before the pump acts on it. Nothing a remote names is ever opened or revealed on this Mac, its files get no `hive-file:` URL, and URLs open only as `https://` (or, from Markdown and terminals, `http://` and `mailto:`). The full rules: [Remote hosts over ssh](#remote-hosts-over-ssh-2617), items 1 and 7.
 
 ## Module map
 
@@ -785,6 +805,7 @@ Diagnostics names the `claude` the wrapper would run (`wrapper::real_claude` on 
 |---|---|---|
 | `<runtime>/hive.sock` | 0600 | Service socket. |
 | `<runtime>/hive.lock` | 0600 | Single-instance lock; holds the holder's process id (26.17, for `hive bridge --replace`). |
+| `<data>/hive/bin/hive` on a remote host | 0755, folder 0700 | Written by the macOS app's upload (26.17, [Remote hosts over ssh](#remote-hosts-over-ssh-2617) item 3): the bundled `hive-linux-<cpu>`, first as `hive.new` (umask 077), renamed over `hive` once its size, SHA-256 and `--version` are checked; a failed check removes `hive.new`. |
 | `<logs>/daemon.log` | 0600 | stderr of a daemon started by the bridge; the previous start's as `daemon.log.1`. `<logs>` is `~/Library/Logs/Hive` on macOS (D18.6) when `XDG_RUNTIME_DIR` is unset, else the runtime dir. |
 | `~/Library/Logs/Hive/app.log` | 0600 | macOS: the app's stderr and panics (`app.dev.log` for a development build); the previous launch's as `app.log.1`. |
 | `<data>/hive/bin/claude` | 0755 | Wrapper: finds the real `claude` on `PATH` (skipping the bin dir and itself). If `HIVE_WRAPPED` is unset it exports it and adds `--settings`, and `--plugin-dir <data>/hive/shared` while that is a folder (21.9); otherwise it runs the real claude unchanged. On Windows `claude.exe` and `hive.exe`, copies of `hive` (12.5.5). |
