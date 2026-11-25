@@ -30,6 +30,7 @@ import {
   setOpenFile,
   setRendered,
   setSplit,
+  showHost,
   swapSides,
   unsplit,
   useHive,
@@ -343,6 +344,31 @@ test("pairs (20.5): many, a tab in one at most, each shown from either tab, its 
   setSplit({ left: 1, right: 5 }, 1);
   removeTab(2);
   expect([s().splits, s().activeTab]).toEqual([[{ left: 1, right: 5 }], 1]);
+});
+
+test("a pair is its host's: another host shown and back, this Mac's pair shows as it was (26.18)", () => {
+  const HOST = "gpu-box";
+  for (const id of [1, 2]) addTab(id, W);
+  addTab(3, "/remote", HOST);
+  addTab(4, "/remote", HOST);
+  setSplit({ left: 1, right: 2 });
+  // The remote's own tabs show, none of this Mac's pair; its own pair is its own.
+  activateTab({ id: 3, cwd: "/remote", host: HOST });
+  expect([shownSplit(s()), shownTerminals(s())]).toEqual([null, [3]]);
+  setSplit({ left: 3, right: 4 });
+  expect(shownTerminals(s())).toEqual([3, 4]);
+  // Shown again, this Mac's pair is as it was, and the remote's is kept for it.
+  activateTab({ id: 2, cwd: W });
+  expect([shownSplit(s()), shownTerminals(s())]).toEqual([{ left: 1, right: 2 }, [1, 2]]);
+  expect(s().stash[HOST]?.splits).toEqual([{ left: 3, right: 4 }]);
+  activateTab({ id: 4, cwd: "/remote", host: HOST });
+  expect(shownTerminals(s())).toEqual([3, 4]);
+  // So from the host switcher too, its worktree selected (no spaces here to remember it).
+  showHost(null);
+  select(fixLogin.id);
+  expect(shownTerminals(s())).toEqual([1, 2]);
+  showHost(HOST);
+  expect(shownTerminals(s())).toEqual([3, 4]);
 });
 
 test("dragging a paired tab moves its pair; a tab dropped inside a pair lands after it (20.5)", () => {
