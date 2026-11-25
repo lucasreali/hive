@@ -78,7 +78,7 @@ exec "$hive" bridge"#;
 const STDERR_LIMIT: u64 = 16_384;
 /// How long to wait for the bridge to exit and flush stderr once its stdout closed.
 const EXIT_WAIT: Duration = Duration::from_secs(2);
-/// How often `bye_host` looks whether the remote service closed the link.
+/// How often `bye_hosts` looks whether the remote service closed the link.
 const BYE_POLL: Duration = Duration::from_millis(20);
 
 const NOT_CONNECTED: &str = "not connected to the hive service";
@@ -1151,10 +1151,14 @@ impl Link {
         }
     }
 
-    /// The UI's id for a kept terminal on `channel` this app does not have: the channel itself
-    /// when it is past every id given (no link's terminal has it, as before the app restarted),
-    /// then new terminals' ids pass it; else a new id.
+    /// The UI's id for a kept terminal on `channel` this app does not have. The local
+    /// service's: the channel itself when it is past every id given (no link's terminal has
+    /// it, as before the app restarted), then new terminals' ids pass it; else a new id. A
+    /// remote's: always a new id, never its channel number, which could use up the ids (26.18).
     fn kept_id(&self, channel: u32) -> Option<u32> {
+        if self.host.is_some() {
+            return self.next_id();
+        }
         let last = self.ids.fetch_max(channel, SeqCst);
         if channel > last {
             Some(channel)
@@ -1640,19 +1644,32 @@ impl Hive {
         self.remotes()?.reconnect(host)
     }
 
-    /// The app quits (26.18, Q2): `host`'s service ends its terminals and agents when `end`,
-    /// else keeps them for the keep time. Waits up to [`EXIT_WAIT`] for the service to close
-    /// the link, so it has read the goodbye before the exit kills `ssh`.
-    pub async fn bye_host(&self, host: &str, end: bool) -> Result<(), String> {
-        let link = self.on(Some(host))?.link;
-        lock(&link).send(0, &Control::Bye { end })?;
+    /// The app quits (26.18, Q2): each host of `byes` (alias, `end`) ends its terminals and
+    /// agents when `end`, else keeps them for the keep time. Every goodbye goes first; then it
+    /// waits once, up to [`EXIT_WAIT`], for those services to close their links, so they have
+    /// read it before the exit kills `ssh`. The first host it could not say goodbye to is the
+    /// error, once the others were told.
+    pub async fn bye_hosts(&self, byes: &[(String, bool)]) -> Result<(), String> {
+        let mut links = Vec::new();
+        let mut failed = None;
+        for (host, end) in byes {
+            let link = self.on(Some(host)).map(|host| host.link);
+            let sent = link.and_then(|link| {
+                lock(&link).send(0, &Control::Bye { end: *end })?;
+                Ok(link)
+            });
+            match sent {
+                Ok(link) => links.push(link),
+                Err(error) => failed = failed.or(Some(error)),
+            }
+        }
         let closed = async {
-            while lock(&link).frames.is_some() {
+            while links.iter().any(|link| lock(link).frames.is_some()) {
                 tokio::time::sleep(BYE_POLL).await;
             }
         };
         let _ = tokio::time::timeout(EXIT_WAIT, closed).await;
-        Ok(())
+        failed.map_or(Ok(()), Err)
     }
 
     /// Restarts `host`'s service of another version (Q8): `hive bridge --replace` ends it, and
@@ -3094,11 +3111,11 @@ pub mod commands {
         hive.reconnect_host(&host)
     }
 
-    /// The app quits (26.18): `host`'s service keeps its terminals, or ends them when `end`.
-    /// It waits (at most 2 s) on the main thread: the window closes right after.
+    /// The app quits (26.18): each (host, end) keeps its terminals, or ends them. It waits (at
+    /// most 2 s, once for all) on the main thread: the window closes right after.
     #[tauri::command]
-    pub fn bye_host(hive: State<'_, Hive>, host: String, end: bool) -> Result<(), String> {
-        tauri::async_runtime::block_on(hive.bye_host(&host, end))
+    pub fn bye_hosts(hive: State<'_, Hive>, byes: Vec<(String, bool)>) -> Result<(), String> {
+        tauri::async_runtime::block_on(hive.bye_hosts(&byes))
     }
 
     /// Restarts `host`'s service of another version (Q8).

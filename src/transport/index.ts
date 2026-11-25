@@ -36,10 +36,11 @@ export interface Transport {
    */
   restartRemote(host: string): Promise<void>;
   /**
-   * The app is quitting (26.18, Q2): remote `host`'s service ends its terminals and agents when
-   * `end`, else keeps them for the keep time, as for a dropped link.
+   * The app is quitting (26.18, Q2): each remote host of `byes` ends its terminals and agents
+   * when its `end`, else keeps them for the keep time, as for a dropped link. Resolves once
+   * they closed their links, or after 2 s.
    */
-  byeHost(host: string, end: boolean): Promise<void>;
+  byeHosts(byes: [host: string, end: boolean][]): Promise<void>;
   /**
    * Opens a terminal in `cwd` and resolves with its id (the frame channel). It gets the Claude
    * `account` (12.2), which must be one of the settings' accounts; without one, the current one.

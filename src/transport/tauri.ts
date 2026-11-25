@@ -28,7 +28,7 @@ export const tauriTransport: Transport = {
   setMode: (mode) => send("set_mode", { mode }),
   reconnectHost: (host) => send("reconnect_host", { host }),
   restartRemote: (host) => send("restart_remote", { host }),
-  byeHost: (host, end) => send("bye_host", { host, end }),
+  byeHosts: (byes) => send("bye_hosts", { byes }),
   openTerminal(cwd, cols, rows, onData, account, on) {
     const channel = new Channel<ArrayBuffer>((bytes) => onData(new Uint8Array(bytes)));
     const host = on === undefined ? shownHost() : (on ?? undefined);

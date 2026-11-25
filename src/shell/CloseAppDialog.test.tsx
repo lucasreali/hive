@@ -134,7 +134,7 @@ function remote(host: string, ids: string[], state: AgentState = "working") {
 }
 
 test("quitting asks whether each host's agents keep running, keep first (26.18, Q2)", async () => {
-  const bye = spyOn(transport, "byeHost").mockResolvedValue();
+  const bye = spyOn(transport, "byeHosts").mockResolvedValue();
   render(<App />);
   act(() => {
     remote("gpu-box", ["a"]);
@@ -158,8 +158,12 @@ test("quitting asks whether each host's agents keep running, keep first (26.18, 
   fireEvent.click(confirm());
   await act(async () => {});
   expect(bye.mock.calls).toEqual([
-    ["gpu-box", true],
-    ["lab", false],
+    [
+      [
+        ["gpu-box", true],
+        ["lab", false],
+      ],
+    ],
   ]);
   expect(closed()).toBe(true);
   bye.mockRestore();

@@ -92,11 +92,14 @@ test("the hosts follow this Mac's settings; quitting may end a host's terminals"
   const { transport, got } = await linked();
   useHive.setState({ host: MOCK_HOST });
   const id = await transport.openTerminal(MOCK_REMOTE_REPO, 80, 24, () => {});
-  await transport.byeHost(MOCK_HOST, false);
-  await transport.byeHost("lab", true);
+  await transport.byeHosts([[MOCK_HOST, false]]);
+  await transport.byeHosts([["lab", true]]);
   await settle();
   expect(got.some((m) => m.type === "terminal_exited")).toBe(false);
-  await transport.byeHost(MOCK_HOST, true);
+  await transport.byeHosts([
+    ["lab", false],
+    [MOCK_HOST, true],
+  ]);
   await settle();
   expect(got.at(-1)).toMatchObject({ type: "terminal_exited", channel: id, host: MOCK_HOST });
   const other = await transport.openTerminal(MOCK_REMOTE_REPO, 80, 24, () => {});

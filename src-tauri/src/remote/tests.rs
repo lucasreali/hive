@@ -844,13 +844,15 @@ async fn a_dropped_link_keeps_its_terminals_and_retries_every_30_s_while_it_does
         reattached,
         json!({"type": "terminal_reattached", "channel": id, "host": "gpu"})
     );
-    // The other keeps its channel as its id, past every link's, and waits for the UI to take
-    // it.
+    // The other gets a new id, never the remote's channel number (26.18), and waits for the
+    // UI to take it.
     let new = next_of(&mut rx, "terminal_kept").await;
+    let ui = id + 1;
     assert_eq!(
         new,
-        json!({"type": "terminal_kept", "channel": 70, "cwd": "/r/src", "worktree": "/r", "account": "Work", "host": "gpu"})
+        json!({"type": "terminal_kept", "channel": ui, "cwd": "/r/src", "worktree": "/r", "account": "Work", "host": "gpu"})
     );
+    assert_eq!(lock(&link).terminals[&70].ui, ui);
     // The one the service did not keep ended.
     let exited = next_of(&mut rx, "terminal_exited").await;
     assert_eq!(
@@ -870,7 +872,7 @@ async fn a_dropped_link_keeps_its_terminals_and_retries_every_30_s_while_it_does
     let exited = next_of(&mut rx, "terminal_exited").await;
     assert_eq!(exited["channel"], id);
     let exited = next_of(&mut rx, "terminal_exited").await;
-    assert_eq!(exited["channel"], 70);
+    assert_eq!(exited["channel"], ui);
     assert!(lock(&link).terminals.is_empty());
     // A link that was welcomed starts the ladder over when it drops.
     drop(service);
@@ -1366,12 +1368,11 @@ async fn a_new_terminal_skips_the_channels_its_link_already_uses() {
     remotes.end();
 }
 
-#[tokio::test]
-async fn quitting_says_goodbye_to_a_host_and_waits_for_it_to_close_the_link() {
-    let lab = Lab::new("bye");
+/// A `Hive` linked to the host `gpu`, connected, and its remote service.
+async fn linked_to_gpu(lab: &Lab) -> (Hive, crate::tests::Service, Service) {
     let listener = lab.listen();
     lab.plan(&[lab.pipe()]);
-    let (hive, mut local, mut rx) = linked(&lab);
+    let (hive, mut local, mut rx) = linked(lab);
     local.control().await;
     let mut settings = hive_protocol::Settings::default();
     settings.remote = self::settings(&["gpu"], 5);
@@ -1379,20 +1380,45 @@ async fn quitting_says_goodbye_to_a_host_and_waits_for_it_to_close_the_link() {
     let mut remote = Service::accept(&listener).await;
     remote.welcome(300).await;
     until(&mut rx, "connected").await;
-    let none = hive.bye_host("other", true).await;
+    (hive, local, remote)
+}
+
+#[tokio::test]
+async fn quitting_says_goodbye_to_each_host_and_waits_for_it_to_close_the_link() {
+    let lab = Lab::new("bye");
+    let (hive, _local, mut remote) = linked_to_gpu(&lab).await;
+    let none = hive.bye_hosts(&[("other".into(), true)]).await;
     assert_eq!(none, Err("no link to the host other".into()));
     // The service reads the goodbye, then closes the link: only then does it return, so the
-    // app's exit never kills `ssh` before the goodbye was read (26.18).
+    // app's exit never kills `ssh` before the goodbye was read (26.18). A host it cannot tell
+    // is the error, once the others were told.
     let service = async {
         let said = remote.control().await;
         tokio::time::sleep(Duration::from_millis(100)).await;
         drop(remote);
         said
     };
-    let (bye, said) = tokio::join!(hive.bye_host("gpu", false), service);
-    assert_eq!((bye, said), (Ok(()), (0, Control::Bye { end: false })));
+    let byes = [("other".into(), true), ("gpu".into(), false)];
+    let (bye, said) = tokio::join!(hive.bye_hosts(&byes), service);
+    let unknown = Err("no link to the host other".into());
+    assert_eq!((bye, said), (unknown, (0, Control::Bye { end: false })));
     let link = hive.on(Some("gpu")).unwrap().link;
     assert!(lock(&link).frames.is_none());
+    hive.remotes().unwrap().end();
+}
+
+#[tokio::test]
+async fn a_host_that_keeps_the_link_after_a_goodbye_is_waited_for_once() {
+    let lab = Lab::new("bye-open");
+    let (hive, _local, mut remote) = linked_to_gpu(&lab).await;
+    let started = std::time::Instant::now();
+    let bye = hive.bye_hosts(&[("gpu".into(), true)]).await;
+    // It read the goodbye and kept the link: the app goes after EXIT_WAIT anyway.
+    assert_eq!(bye, Ok(()));
+    assert_eq!(remote.control().await, (0, Control::Bye { end: true }));
+    let waited = started.elapsed();
+    assert!(waited >= crate::EXIT_WAIT, "{waited:?}");
+    assert!(waited < crate::EXIT_WAIT * 2, "{waited:?}");
     hive.remotes().unwrap().end();
 }
 

@@ -58,7 +58,8 @@ export function confirmClose(): boolean {
 async function quit(ending: string[]): Promise<void> {
   const hosts = remoteAgents(useHive.getState()).map((x) => x.slice(0, x.indexOf("\n")));
   if (hosts.length > 0) {
-    await Promise.allSettled(hosts.map((host) => transport.byeHost(host, ending.includes(host))));
+    // Every goodbye at once: the app side waits once for all of them.
+    await transport.byeHosts(hosts.map((host) => [host, ending.includes(host)])).catch(() => {});
   }
   closeWindow();
 }

@@ -2320,7 +2320,7 @@ fn commands_reach_the_managed_hive() {
             connect,
             reconnect_host,
             restart_remote,
-            bye_host,
+            bye_hosts,
             open_terminal,
             attach_terminal,
             write_terminal,
@@ -2553,9 +2553,9 @@ fn commands_reach_the_managed_hive() {
     let host = json!({"host": "gpu"});
     assert_eq!(invoke(&webview, "reconnect_host", host.clone()), none);
     assert_eq!(invoke(&webview, "restart_remote", host), none);
-    let bye = json!({"host": "gpu", "end": true});
+    let bye = json!({"byes": [["gpu", true]]});
     let unlinked = Err(json!("no link to the host gpu"));
-    assert_eq!(invoke(&webview, "bye_host", bye), unlinked);
+    assert_eq!(invoke(&webview, "bye_hosts", bye), unlinked);
 
     let path = json!({"path": "C:\\x.bat", "reveal": false});
     let unasked = json!("Hive opens only a path the service sent: C:\\x.bat");

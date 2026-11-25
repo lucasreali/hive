@@ -1244,7 +1244,7 @@ export function createMockTransport(
     // The fake service links to no host; `?mock=remote` adds one (`mockHosts.ts`).
     async reconnectHost() {},
     async restartRemote() {},
-    async byeHost() {},
+    async byeHosts() {},
     async setMode(next) {
       mode = next;
       later({ type: "app_mode", mode, wsl: true });

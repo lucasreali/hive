@@ -143,16 +143,14 @@ async fn a_remote_names_no_path_or_url_the_app_opens_and_its_text_is_clipped() {
     let id = gpu.open_terminal("/w".into(), 80, 24, None, output().0);
     assert_eq!(id, Ok(1));
     assert_eq!(remote.control().await.0, 1);
-    // Unknown types, paths to open and `file:` / `javascript:` URLs, on channel 0 and on its
-    // terminal's: none reaches the UI, none is approved for `open_path`.
+    // Unknown types and paths to open, on channel 0 and on its terminal's: none reaches the UI,
+    // none is approved for `open_path`.
     let messages = [
         json!({"type": "open_url", "url": "file:///etc/passwd"}),
         json!({"type": "editor_target", "worktree": "", "path": "", "windows_path": "/Applications/Calculator.app", "reveal": false, "error": null}),
         json!({"type": "editor_target", "worktree": "", "path": "shared", "windows_path": "/etc", "reveal": true, "error": null}),
         json!({"type": "session_located", "id": "s", "target": "folder", "windows_path": "/etc/hosts", "error": null}),
     ];
-    // (A `pull` or `runs` the UI takes of a host since 26.18; one it cannot read as its type
-    // ends the link, and a URL in one opens only through `open_url`, https only.)
     for message in &messages {
         remote.writer.send(on(0, message)).await.unwrap();
         remote.writer.send(on(1, message)).await.unwrap();
@@ -176,6 +174,24 @@ async fn a_remote_names_no_path_or_url_the_app_opens_and_its_text_is_clipped() {
         assert_eq!(hive.open_path(path.into(), true), unasked);
     }
     assert!(lock(&gpu.link).approved.is_empty());
+    // A pull request's and a run's `javascript:` / `file:` URLs reach the UI with the host's
+    // lists (26.18), and nothing opens them: links open only through `open_url`, https only.
+    let pull = json!({"number": 1, "title": "t", "url": "javascript:alert(1)", "state": "open", "branch": "b", "base": "main", "author": "a", "review": null, "checks": null, "updated_at": "", "worktree": null});
+    let pulls = json!({"type": "pulls", "project": "/r", "repo": null, "mine": [pull], "review": [], "fetched_ms": 0, "error": null});
+    let run = json!({"id": 1, "number": 1, "workflow": "w", "title": "t", "branch": "b", "event": "push", "state": "passing", "status": "completed", "url": "file:///etc/passwd", "created_at": "", "started_at": "", "updated_at": "", "worktree": null});
+    let runs = json!({"type": "runs", "project": "/r", "branch": null, "runs": [run], "fetched_ms": 0, "error": null});
+    for (message, url) in [(pulls, "javascript:alert(1)"), (runs, "file:///etc/passwd")] {
+        remote.writer.send(on(0, &message)).await.unwrap();
+        let got = tokio::time::timeout(WAIT, rx.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            (&got["type"], &got["host"]),
+            (&message["type"], &json!("gpu"))
+        );
+        assert!(got.to_string().contains(url));
+    }
     for url in ["file:///etc/passwd", "javascript:alert(1)"] {
         for markdown in [false, true] {
             let refused = Err(format!("Hive opens only https links: {url}"));

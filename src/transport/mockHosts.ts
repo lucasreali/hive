@@ -198,8 +198,8 @@ export async function createHostsTransport(cast: string | null = null): Promise<
       if (host === MOCK_HOST && !up && hosts.includes(host)) await connectRemote(true);
     },
     async restartRemote() {},
-    async byeHost(host, end) {
-      if (host !== MOCK_HOST || !end) return;
+    async byeHosts(byes) {
+      if (!byes.some(([host, end]) => host === MOCK_HOST && end)) return;
       for (const channel of remoteIds) await remote.closeTerminal(channel);
     },
   } as Transport;

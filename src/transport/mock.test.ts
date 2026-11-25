@@ -1913,5 +1913,5 @@ test("the fake service links to no host: Reconnect, restart and goodbye do nothi
   const mock = createMockTransport();
   await mock.reconnectHost("gpu-box");
   await mock.restartRemote("gpu-box");
-  expect(await mock.byeHost("gpu-box", true)).toBeUndefined();
+  expect(await mock.byeHosts([["gpu-box", true]])).toBeUndefined();
 });

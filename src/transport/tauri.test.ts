@@ -294,7 +294,7 @@ test("requests about the shown host's data name it; this Mac's settings never do
   await tauriTransport.getSettings();
   await tauriTransport.reconnectHost("lab");
   await tauriTransport.restartRemote("lab");
-  await tauriTransport.byeHost("lab", false);
+  await tauriTransport.byeHosts([["lab", false]]);
   useHive.setState({ host: null });
   await tauriTransport.listProjects();
   const hosts = calls.map(([cmd, args]) => [cmd, args.host]);
@@ -308,8 +308,8 @@ test("requests about the shown host's data name it; this Mac's settings never do
     ["get_settings", undefined],
     ["reconnect_host", "lab"],
     ["restart_remote", "lab"],
-    ["bye_host", "lab"],
+    ["bye_hosts", undefined],
     ["list_projects", undefined],
   ]);
-  expect(calls.at(-2)?.[1]).toEqual({ host: "lab", end: false });
+  expect(calls.at(-2)?.[1]).toEqual({ byes: [["lab", false]] });
 });
