@@ -419,6 +419,12 @@ impl Remotes {
                 link.to_ui(status);
             }
             link.replay_terminals();
+            // The UI applies a remote's data to its host (26.18): a linked service's is asked
+            // for again, as the local one's is.
+            if link.welcome.is_some() {
+                let _ = link.send(0, &hive_protocol::Control::ListProjects);
+                let _ = link.send(0, &hive_protocol::Control::Resync);
+            }
         }
     }
 
@@ -438,6 +444,13 @@ impl Remotes {
             .ok_or_else(|| format!("no link to the host {host}"))?;
         remote.replace.store(true, SeqCst);
         self.reconnect(host)
+    }
+
+    /// How many agents of every remote link would make quitting ask (26.18): a dropped link
+    /// has none.
+    pub fn at_risk(&self) -> usize {
+        let hosts = self.hosts();
+        hosts.iter().map(|remote| remote.link().at_risk.len()).sum()
     }
 
     /// The computer woke (Q7): each link waiting to reconnect tries at once.

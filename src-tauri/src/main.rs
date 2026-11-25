@@ -205,6 +205,7 @@ fn main() {
             commands::install_update,
             commands::reconnect_host,
             commands::restart_remote,
+            commands::bye_host,
             commands::open_terminal,
             commands::attach_terminal,
             commands::write_terminal,

@@ -76,6 +76,8 @@ exec "$hive" bridge"#;
 const STDERR_LIMIT: u64 = 16_384;
 /// How long to wait for the bridge to exit and flush stderr once its stdout closed.
 const EXIT_WAIT: Duration = Duration::from_secs(2);
+/// How often `bye_host` looks whether the remote service closed the link.
+const BYE_POLL: Duration = Duration::from_millis(20);
 
 const NOT_CONNECTED: &str = "not connected to the hive service";
 /// How many paths the service sent (`editor_target`, `session_located`) wait for `open_path`.
@@ -937,11 +939,17 @@ impl Link {
         }
     }
 
-    /// The exit decision for what this link knows at `now`.
-    fn quit(&self, now: Instant) -> Quit {
+    /// The exit decision for what this link knows at `now`, with `remote` agents at risk on
+    /// the remote links.
+    fn quit(&self, now: Instant, remote: usize) -> Quit {
         let confirm = self.confirm_close.unwrap_or(true);
         let asked = self.asked.map(|asked| now.saturating_duration_since(asked));
-        quit_decision(self.ui.is_some(), confirm, self.at_risk.len(), asked)
+        quit_decision(
+            self.ui.is_some(),
+            confirm,
+            self.at_risk.len() + remote,
+            asked,
+        )
     }
 
     /// Sends `message` to the UI; false when there is none or the send failed.
@@ -1503,7 +1511,10 @@ impl Hive {
     /// cannot get the message (gone, stale) is forgotten and the app quits; so does a second
     /// request within [`ASK_AGAIN`] of the last one, so a hung UI never keeps the app.
     pub fn should_quit<R: Runtime>(&self, app: &AppHandle<R>) -> bool {
-        if self.link().quit(Instant::now()) == Quit::Now {
+        // A remote's agents keep running after the app (Q2), but quitting asks whether they
+        // should (26.18).
+        let remote = self.remotes().map_or(0, |remotes| remotes.at_risk());
+        if self.link().quit(Instant::now(), remote) == Quit::Now {
             return true;
         }
         bring_up(app);
@@ -1558,6 +1569,21 @@ impl Hive {
     /// Tries the link to `host` again now (its Reconnect, 26.17), whatever stopped it.
     pub fn reconnect_host(&self, host: &str) -> Result<(), String> {
         self.remotes()?.reconnect(host)
+    }
+
+    /// The app quits (26.18, Q2): `host`'s service ends its terminals and agents when `end`,
+    /// else keeps them for the keep time. Waits up to [`EXIT_WAIT`] for the service to close
+    /// the link, so it has read the goodbye before the exit kills `ssh`.
+    pub async fn bye_host(&self, host: &str, end: bool) -> Result<(), String> {
+        let link = self.on(Some(host))?.link;
+        lock(&link).send(0, &Control::Bye { end })?;
+        let closed = async {
+            while lock(&link).frames.is_some() {
+                tokio::time::sleep(BYE_POLL).await;
+            }
+        };
+        let _ = tokio::time::timeout(EXIT_WAIT, closed).await;
+        Ok(())
     }
 
     /// Restarts `host`'s service of another version (Q8): `hive bridge --replace` ends it, and
@@ -2583,11 +2609,10 @@ async fn pump(link: &Mutex<Link>, mut frames: FramedRead<Reader<'_>, FrameCodec>
         let remote = link.host.is_some();
         value = link.tagged(value);
         let kind = value["type"].as_str().unwrap_or_default();
-        // Until the UI tells hosts apart (26.18), a remote's message goes no further unless its
-        // link acts on it or it is one of the remote's own terminals' the UI may take: no arm
-        // below ever sees another one (a remote's `file`, `editor_target`, `settings`, …).
-        let shown = frame.channel != 0 && REMOTE_TO_UI.contains(&kind);
-        if remote && !shown && !REMOTE_LINK.contains(&kind) {
+        // A remote's message goes no further unless its link acts on it or the UI applies it
+        // to that host's data (26.18): no arm below ever sees another one (a remote's
+        // `editor_target`, `settings`, …).
+        if remote && !REMOTE_TO_UI.contains(&kind) && !REMOTE_LINK.contains(&kind) {
             continue;
         }
         match kind {
@@ -2640,7 +2665,14 @@ async fn pump(link: &Mutex<Link>, mut frames: FramedRead<Reader<'_>, FrameCodec>
                 link.range(value);
                 continue;
             }
-            // The scheme reads the local service's files only.
+            // The scheme reads the local service's files only: a remote's file has no URL, not
+            // even one it wrote itself.
+            "file" if remote => {
+                let media = value.get_mut("media").and_then(Value::as_object_mut);
+                if let Some(media) = media {
+                    media.remove("url");
+                }
+            }
             "file" => scheme::with_url(&mut value, cfg!(target_os = "macos")),
             "terminal_opened" => {
                 if let Some(term) = link.terminals.get_mut(&frame.channel) {
@@ -2671,13 +2703,14 @@ const REMOTE_LINK: &[&str] = &[
     "terminal_reset",
 ];
 
-/// The messages a remote service's link passes to the UI (26.17), each on one of its own
-/// terminals' channels, which the UI knows by an id no other link's terminal has. Every other
-/// one (anything on channel 0, an agent's, a notification) the UI would apply as the local
-/// service's, so it is dropped before the pump acts on it, until the UI tells hosts apart
-/// (26.18). Never add `file` without stripping its `media.url` and never giving it a
-/// `hive-file:` URL (`scheme::with_url` reads the local service's files), nor
-/// `editor_target`/`session_located`, which approve a local path for `open_path`.
+/// The messages a remote service's link passes to the UI (26.18), which applies each to that
+/// host's data only (`REMOTE_TYPES` in `src/hosts.ts`, kept equal to this list by
+/// `src/hosts.test.ts`): its terminals', agents', spaces, projects, worktrees, sessions, files
+/// and GitHub answers. Every other one is dropped before the pump acts on it: the settings,
+/// an uninstall, the sessions to restore, any type only the app sends, and `editor_target` /
+/// `session_located`, which approve a local path for `open_path`. Its `file` never gets a
+/// `hive-file:` URL (`scheme::with_url` reads the local service's files), and loses one it
+/// wrote.
 const REMOTE_TO_UI: &[&str] = &[
     "terminal_opened",
     "terminal_exited",
@@ -2686,6 +2719,64 @@ const REMOTE_TO_UI: &[&str] = &[
     "command_finished",
     "terminal_progress",
     "unhooked_agent",
+    "terminal_notification",
+    "agent_detected",
+    "agent_removed",
+    "agent_title",
+    "agent_state",
+    "agent_usage",
+    "subagent_worktrees",
+    "session_usage",
+    "spaces",
+    "space_failed",
+    "projects",
+    "project_added",
+    "add_project_failed",
+    "project_created",
+    "project_removed",
+    "remove_project_failed",
+    "dirs",
+    "dir_created",
+    "create_dir_failed",
+    "branches",
+    "worktree_name_validated",
+    "worktree_created",
+    "create_worktree_failed",
+    "worktree_removed",
+    "remove_worktree_failed",
+    "worktree_renamed",
+    "rename_worktree_failed",
+    "worktree_status",
+    "sessions",
+    "session_deleted",
+    "delete_session_failed",
+    "files",
+    "changes",
+    "scripts",
+    "search_results",
+    "file",
+    "table",
+    "table_edited",
+    "file_saved",
+    "save_failed",
+    "file_created",
+    "file_renamed",
+    "folder_created",
+    "file_deleted",
+    "file_op_failed",
+    "pulls",
+    "pull",
+    "pull_done",
+    "pull_failed",
+    "pull_ended",
+    "runs",
+    "run",
+    "job_log",
+    "run_done",
+    "run_failed",
+    "gh_accounts",
+    "gh_identity",
+    "gh_identity_failed",
 ];
 
 /// Whether `frame` is the service's `terminals_kept` (26.16), on channel 0.
@@ -2862,6 +2953,12 @@ pub mod commands {
     #[tauri::command]
     pub fn reconnect_host(hive: State<'_, Hive>, host: String) -> Result<(), String> {
         hive.reconnect_host(&host)
+    }
+
+    /// The app quits (26.18): `host`'s service keeps its terminals, or ends them when `end`.
+    #[tauri::command]
+    pub async fn bye_host(hive: State<'_, Hive>, host: String, end: bool) -> Result<(), String> {
+        hive.bye_host(&host, end).await
     }
 
     /// Restarts `host`'s service of another version (Q8).

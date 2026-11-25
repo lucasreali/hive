@@ -2325,6 +2325,7 @@ fn commands_reach_the_managed_hive() {
             connect,
             reconnect_host,
             restart_remote,
+            bye_host,
             open_terminal,
             attach_terminal,
             write_terminal,
@@ -2557,6 +2558,9 @@ fn commands_reach_the_managed_hive() {
     let host = json!({"host": "gpu"});
     assert_eq!(invoke(&webview, "reconnect_host", host.clone()), none);
     assert_eq!(invoke(&webview, "restart_remote", host), none);
+    let bye = json!({"host": "gpu", "end": true});
+    let unlinked = Err(json!("no link to the host gpu"));
+    assert_eq!(invoke(&webview, "bye_host", bye), unlinked);
 
     let path = json!({"path": "C:\\x.bat", "reveal": false});
     let unasked = json!("Hive opens only a path the service sent: C:\\x.bat");
@@ -3341,6 +3345,17 @@ fn quitting_asks_only_with_a_ui_the_setting_on_and_agents_at_risk() {
     assert_eq!(quit_decision(true, true, 1, ago(0)), Quit::Now);
     assert_eq!(quit_decision(true, true, 1, ago(4_999)), Quit::Now);
     assert_eq!(quit_decision(true, true, 1, ago(5_000)), Quit::Ask);
+}
+
+#[test]
+fn a_remote_s_agents_at_risk_make_quitting_ask_too() {
+    // 26.18 (Q2): they would keep running, but the UI asks whether they should.
+    let link = Link {
+        ui: Some(ui().0),
+        ..Link::default()
+    };
+    assert_eq!(link.quit(Instant::now(), 0), Quit::Now);
+    assert_eq!(link.quit(Instant::now(), 2), Quit::Ask);
 }
 
 #[test]

