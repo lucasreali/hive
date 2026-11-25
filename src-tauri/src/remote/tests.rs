@@ -9,6 +9,10 @@ use tokio_util::codec::{FramedRead, FramedWrite};
 
 const WAIT: Duration = Duration::from_secs(10);
 
+// A real remote host (26.20): only ci.yml's `remote` job sets it up and builds this.
+#[cfg(feature = "remote-ci")]
+mod ci;
+
 #[test]
 fn the_ssh_command_is_fixed_options_then_the_alias_then_a_constant_command() {
     let alias = Alias::new("gpu-box".into()).unwrap();
