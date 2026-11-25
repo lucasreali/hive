@@ -80,6 +80,23 @@ test("Ctrl+S on this Mac's file never goes to a remote shown: it saves only on i
   save.mockRestore();
 });
 
+test("a remote's save failing after the host was removed brings none of its data back", async () => {
+  const save = spyOn(transport, "saveFile").mockRejectedValue(new Error("not connected"));
+  showHost(HOST);
+  setOpenFile(at, true);
+  remote({ type: "file", ...text, content: "remote\n" });
+  const theirs = startEdit({ ...text, content: "remote\n" });
+  if (theirs) setEdit({ ...theirs, doc: toText("theirs\n") });
+  saveOpenFile();
+  expect(save).toHaveBeenCalledTimes(1);
+  onMessage({ type: "host_link", host: HOST, state: "removed" });
+  await Bun.sleep(0);
+  const s = useHive.getState();
+  expect([s.host, HOST in s.stash, HOST in s.links]).toEqual([null, false, false]);
+  expect(s.edit?.doc.toString()).toBe("edited\n");
+  save.mockRestore();
+});
+
 test("a save that cannot be sent marks its own host's buffer, even once another is shown", async () => {
   const save = spyOn(transport, "saveFile").mockRejectedValue(new Error("not connected"));
   saveOpenFile();

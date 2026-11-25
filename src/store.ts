@@ -777,6 +777,8 @@ export function onHost(
   change: (view: HiveState) => Partial<HiveState>,
 ): Partial<HiveState> {
   if (host === s.host) return change(s);
+  // A host removed meanwhile is gone with its data: a late failure brings none of it back.
+  if (host !== null && !(hostKey(host) in s.stash) && !(host in s.links)) return {};
   const view = hostView(s, host);
   const data = { ...hostData(view), ...hostData(change(view)) } as HostData;
   return { stash: { ...s.stash, [hostKey(host)]: data } };
