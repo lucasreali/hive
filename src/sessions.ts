@@ -1,4 +1,5 @@
 import { isTauri } from "@tauri-apps/api/core";
+import { agentKey } from "./hosts";
 import type { OpenSession, ServiceMessage, Session, SessionTarget } from "./protocol";
 import { activateTab, ask, currentSpace, showNotice, spaceAccount, useHive } from "./store";
 import { openClaude } from "./terminals";
@@ -91,7 +92,7 @@ export async function resume(
 ): Promise<void> {
   if (!isSessionId(session.id)) return showNotice("error", "Cannot resume: not a session id");
   const s = useHive.getState();
-  const agent = s.agents[session.id];
+  const agent = s.agents[agentKey(s.host, session.id)];
   const tab = agent && s.tabs.find((t) => t.id === agent.terminal);
   if (tab && !fork) return activateTab(tab);
   // Running outside Hive: a second `claude` on the same session would write the same log.

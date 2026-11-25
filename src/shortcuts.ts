@@ -1,3 +1,4 @@
+import { agentHost } from "./hosts";
 import type { Agent } from "./protocol";
 import { closeFile } from "./shell/RightPanel";
 import { findInTerminal } from "./shell/TerminalSearch";
@@ -14,6 +15,7 @@ import {
   setOpenFile,
   setRendered,
   setRightPanel,
+  showHost,
   spaceOf,
   spaceProjects,
   terminalShown,
@@ -62,6 +64,8 @@ export function nextPending(): void {
  * another space, that space becomes the current one (6.14).
  */
 export function goToAgent(agent: Agent): void {
+  // Another host's agent (26.18): its host's spaces show first.
+  showHost(agentHost(agent.id));
   const s = useHive.getState();
   const space = spaceOf(s, agent.project);
   const away = space && space.id !== s.currentSpace;

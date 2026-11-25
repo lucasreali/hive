@@ -12,12 +12,15 @@ import type { Agent } from "../protocol";
 import { goToAgent } from "../shortcuts";
 import {
   activateTab,
+  everyHost,
   findWorktree,
+  hostView,
   type InboxItem,
   markInboxRead,
   openModal,
   pendingAgents,
   type RemoveOffer,
+  showHost,
   unseenPending,
   useHive,
 } from "../store";
@@ -164,10 +167,11 @@ function PendingBell() {
 function Inbox({ bell, onClose }: { bell: HTMLButtonElement; onClose: () => void }) {
   const pending = useHive(useShallow(pendingAgents));
   const inbox = useHive((s) => s.inbox);
-  const agents = useHive((s) => s.agents);
+  // Every host's (26.18): their keys never clash (`agentKey`).
+  const agents = useHive(useShallow((s) => everyHost(s).agents));
   const tabs = useHive((s) => s.tabs);
-  const states = useHive((s) => s.agentStates);
-  const titles = useHive((s) => s.agentTitles);
+  const states = useHive(useShallow((s) => everyHost(s).agentStates));
+  const titles = useHive(useShallow((s) => everyHost(s).agentTitles));
   // Each item names its agent's space when there are several (6.14).
   const spaces = useHive(useShallow((s) => pending.map((a) => spaceName(s, a.id))));
   // Placed once: a new position would move the focus back to the first item on every tick.
@@ -196,6 +200,25 @@ function Inbox({ bell, onClose }: { bell: HTMLButtonElement; onClose: () => void
       {pending.length > 0 && inbox.length > 0 && <hr />}
       {inbox.map((item) => {
         if ("offer" in item) return <OfferItem key={item.id} item={item} onClose={onClose} />;
+        if ("summary" in item) {
+          return (
+            <button
+              key={item.id}
+              type="button"
+              role="menuitem"
+              onClick={() => {
+                onClose();
+                showHost(item.host ?? null);
+              }}
+            >
+              <StateIcon state="waiting_you" />
+              <span className="label">{item.text}</span>
+              <span className="inbox-meta">
+                <Ago at={item.at} />
+              </span>
+            </button>
+          );
+        }
         if ("terminal" in item) {
           const tab = tabs.find((t) => t.id === item.terminal);
           return (
@@ -278,7 +301,9 @@ function OfferItem({
   onClose: () => void;
 }) {
   const { worktree, title, state } = item.offer;
-  const there = useHive((s) => findWorktree(s.projects, worktree) !== undefined);
+  // Its host's worktree (26.18), shown there.
+  const host = item.host ?? null;
+  const there = useHive((s) => findWorktree(hostView(s, host).projects, worktree) !== undefined);
   const Icon = state === "merged" ? GitMergeIcon : GitPullRequestIcon;
   return (
     <button
@@ -288,6 +313,7 @@ function OfferItem({
       title={there ? `${title}\nRemove the worktree…` : "This worktree is gone"}
       onClick={() => {
         onClose();
+        showHost(host);
         openModal("remove-worktree", null, worktree);
       }}
     >

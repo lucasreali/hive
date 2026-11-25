@@ -1,7 +1,8 @@
 import { bounceFor } from "./dock";
+import { keyed, taken } from "./hosts";
 import { runMenuItem } from "./menu";
 import { goToClicked, notify } from "./notify";
-import type { ServiceMessage } from "./protocol";
+import type { HostMessage } from "./protocol";
 import { apply } from "./reduce";
 import { onMoved, openLocated, restore } from "./sessions";
 import { requestQuit } from "./shell/CloseAppDialog";
@@ -10,8 +11,14 @@ import { dropFiles, reattachTerminal, redrawTerminal, showOpenFailure } from "./
 import { transport } from "./transport";
 import { openTarget } from "./viewer/external";
 
-/** Every service message: `notify` first (it compares with the state still stored), then the store. */
-function onMessage(message: ServiceMessage): void {
+/**
+ * Every service message: `notify` first (it compares with the state still stored), then the
+ * store. A remote host's (26.18) only when the UI takes it of a remote (`taken`), its agents
+ * keyed by host; none of the local service's handlers below acts on one.
+ */
+export function onMessage(received: HostMessage): void {
+  if (!taken(received)) return;
+  const message = keyed(received);
   notify(message);
   bounceFor(message);
   apply(message);
@@ -30,7 +37,7 @@ function onMessage(message: ServiceMessage): void {
   if (message.type === "menu") runMenuItem(message.item);
   if (message.type === "files_dropped") dropFiles(message.text, message.x, message.y);
   if (message.type === "terminal_kept") {
-    showOpenFailure(reattachTerminal(message.channel, message.cwd));
+    showOpenFailure(reattachTerminal(message.channel, message.cwd, message.host));
   }
   if (message.type === "terminal_reattached") redrawTerminal(message.channel);
 }

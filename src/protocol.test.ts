@@ -38,6 +38,7 @@ const FIELDS: { [T in ServiceMessage["type"]]: Fields<Extract<ServiceMessage, { 
   tray_clicked: { agent: true },
   files_dropped: { text: true, x: true, y: true },
   terminal_kept: { channel: true, cwd: true, worktree: true, account: true },
+  host_link: { host: true, state: true },
   terminal_reattached: { channel: true },
   terminals_kept: { terminals: true },
   terminal_reset: { channel: true, offset: true },
@@ -181,6 +182,7 @@ const APP_SIDE = [
   "files_dropped",
   "terminal_kept",
   "terminal_reattached",
+  "host_link",
   "disconnected",
   "app_mode",
 ];

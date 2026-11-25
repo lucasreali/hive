@@ -5,6 +5,12 @@ import type { JobLog, RunDetail, Runs } from "./runs";
 // reads it. `protocol.test.ts` checks them against the samples the Rust side writes
 // (`crates/hive-protocol/app-messages.json`).
 
+/**
+ * A message as the app side forwards it (26.17): a remote host's carries its alias as `host`,
+ * the local service's none.
+ */
+export type HostMessage = ServiceMessage & { host?: string };
+
 /** Service → app messages the store understands. Mirrors `hive_protocol::Control`. */
 export type ServiceMessage =
   // `warning`: why the service still uses the folders of Hive before 22.1, its files not moved
@@ -61,6 +67,8 @@ export type ServiceMessage =
   // From the app side (Rust): a terminal the UI shows was attached again after a reconnect
   // (26.16); the UI redraws it.
   | { type: "terminal_reattached"; channel: number }
+  // From the app side (Rust, 26.17): a remote host's link changed; replayed to a reloaded UI.
+  | ({ type: "host_link"; host: string } & HostLink)
   // `protocol`/`version` are the service's; `app_*` and `bundled` are added by the app side (Rust).
   // `bundled`: the app runs the `hive` its installer brought (not a development build).
   // `terminals` (26.17): how many terminals the service runs, which restarting it would end;
@@ -223,6 +231,30 @@ export type ServiceMessage =
 
 /** Where the service runs on Windows (12.5.4). */
 export type AppMode = "wsl" | "native";
+
+/** Why a remote host's link stopped (26.17): only `network` is retried by itself. */
+export type HostFailure = "host_key" | "auth" | "platform" | "install" | "version" | "network";
+
+/**
+ * A remote host's link (26.17, `host_link`), as the app side tells it: `connecting`;
+ * `installing` this app's Linux build for `cpu`; `connected`; `reconnecting` (the next try in
+ * `retry_secs`); `disconnected` with its `kind` (`version`: the remote's and the app's versions
+ * and how many terminals a restart would end, Q8); `removed` from the settings.
+ */
+export type HostLink =
+  | { state: "connecting" }
+  | { state: "installing"; cpu: string }
+  | { state: "connected" }
+  | { state: "reconnecting"; reason: string; retry_secs: number }
+  | {
+      state: "disconnected";
+      reason: string;
+      kind: HostFailure;
+      version?: string;
+      app_version?: string;
+      terminals?: number;
+    }
+  | { state: "removed" };
 
 /** Mirrors `hive_protocol::KeptTerminal` (26.16): a terminal a remote service kept running. */
 export type KeptTerminal = {

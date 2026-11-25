@@ -1,7 +1,7 @@
 import { attention } from "./attention";
 import { spaceName } from "./notify";
 import type { AgentState } from "./protocol";
-import { type HiveState, useHive } from "./store";
+import { everyHost, type HiveState, hostView, useHive } from "./store";
 import { transport } from "./transport";
 import { usageLines } from "./usage";
 import { isMac } from "./window";
@@ -25,16 +25,19 @@ export type Tray = {
 /** The tray for the store: `attention`'s pending agents and most urgent state, and the usage. */
 export function trayOf(s: HiveState): Tray {
   const { pending, urgent } = attention(s);
+  // Every host's agents (26.18); this Mac's usage, whichever host shows.
+  const all = everyHost(s);
+  const own = hostView(s, null);
   return {
     shown: s.settings.notifications.menu_bar,
     urgent: urgent && [urgent.state, urgent.pending],
     agents: pending.map((a) => [
       a.id,
-      s.agentTitles[a.id] ?? "Claude",
-      s.agentStates[a.id]?.state ?? "idle",
+      all.agentTitles[a.id] ?? "Claude",
+      all.agentStates[a.id]?.state ?? "idle",
       spaceName(s, a.id) ?? null,
     ]),
-    usage: s.sessionUsage ? usageLines(s.sessionUsage, s.weekUsage, s.usageLimits) : [],
+    usage: own.sessionUsage ? usageLines(own.sessionUsage, own.weekUsage, own.usageLimits) : [],
   };
 }
 

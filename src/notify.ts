@@ -1,6 +1,16 @@
-import type { AgentState, ServiceMessage } from "./protocol";
+import { agentHost, spaceLabel } from "./hosts";
+import type { AgentState, HostMessage, ServiceMessage } from "./protocol";
 import { goToAgent } from "./shortcuts";
-import { activateTab, addToInbox, findWorktree, type HiveState, spaceOf, useHive } from "./store";
+import {
+  activateTab,
+  addToInbox,
+  everyHost,
+  findWorktree,
+  type HiveState,
+  hostView,
+  spaceOf,
+  useHive,
+} from "./store";
 import { transport } from "./transport";
 import { usageAlertText } from "./usage";
 import { isMac } from "./window";
@@ -57,16 +67,22 @@ function webTone(volume: number): void {
  * named only when there are several (6.14: agents of every space alert).
  */
 export function agentPlace(s: HiveState, id: string): string {
-  const agent = s.agents[id];
-  const project = agent?.project ? s.projects?.[agent.project] : undefined;
+  const view = hostView(s, agentHost(id));
+  const agent = view.agents[id];
+  const project = agent?.project ? view.projects?.[agent.project] : undefined;
   const worktree = project?.worktrees.find((w) => w.id === agent?.worktree);
   return [spaceName(s, id), project?.name, worktree?.name].filter(Boolean).join(" · ");
 }
 
-/** The name of the agent's space, only when there are several (6.14). */
+/**
+ * The name of the agent's space, only when there are several (6.14); a remote's always names
+ * its host (26.18): "Work · gpu-box".
+ */
 export function spaceName(s: HiveState, id: string): string | undefined {
-  if ((s.spaces?.length ?? 0) < 2) return undefined;
-  return spaceOf(s, s.agents[id]?.project ?? null)?.name;
+  const host = agentHost(id);
+  const view = hostView(s, host);
+  if ((view.spaces?.length ?? 0) < 2 && host === null) return undefined;
+  return spaceLabel(spaceOf(view, view.agents[id]?.project ?? null), host) || undefined;
 }
 
 type AgentStateMessage = Extract<ServiceMessage, { type: "agent_state" }>;
@@ -81,7 +97,8 @@ export type AlertText = { agent: string; title: string; body: string };
 export function alertText(s: HiveState, message: AgentStateMessage): AlertText {
   const { id, state, alert } = message;
   const what = alert === "finished" ? "finished" : ALERT_TEXT[state];
-  return { agent: id, title: `${s.agentTitles[id] ?? "Claude"} ${what}`, body: agentPlace(s, id) };
+  const title = `${everyHost(s).agentTitles[id] ?? "Claude"} ${what}`;
+  return { agent: id, title, body: agentPlace(s, id) };
 }
 
 /** The tone, at most one per `TONE_GAP_MS`. */
@@ -99,11 +116,15 @@ function toneAt(s: HiveState, now: number): void {
  * terminal's alerts (17.25) only when they alert.
  */
 export function notify(
-  message: ServiceMessage,
+  message: HostMessage,
   s: HiveState = useHive.getState(),
   now = performance.now(),
   wall = Date.now(),
 ): void {
+  if (message.type === "host_link") {
+    linkChanged(s, message, wall);
+    return;
+  }
   if (message.type === "usage_alert") {
     usageAlert(message, wall);
     return;
@@ -115,16 +136,20 @@ export function notify(
   if (message.type === "command_finished" || message.type === "terminal_notification") {
     const text = terminalAlertText(s, message);
     const failed = message.type === "command_finished" && !!message.exit;
-    addToInbox({ terminal: message.channel, failed, at: wall, text: text.inbox });
+    const host = message.host === undefined ? {} : { host: message.host };
+    addToInbox({ terminal: message.channel, failed, at: wall, text: text.inbox, ...host });
     toneAt(s, now);
     const notifies = message.type === "command_finished" || message.notify;
     if (notifies) void transport.showNotification(text.title, text.body, text.agent);
     return;
   }
   if (message.type !== "agent_state" || !message.alert) return;
+  // Right after a reattach, the host's summary stands for its alerts (`summarize`).
+  if (message.host !== undefined && settling.has(message.host)) return;
   const { id, state } = message;
   const text = alertText(s, message);
-  addToInbox({ agent: id, state, at: wall, text: text.title, space: spaceName(s, id) });
+  const host = message.host === undefined ? {} : { host: message.host };
+  addToInbox({ agent: id, state, at: wall, text: text.title, space: spaceName(s, id), ...host });
   toneAt(s, now);
   if (message.notify) void transport.showNotification(text.title, text.body, id);
 }
@@ -136,16 +161,19 @@ type PullEnded = Extract<ServiceMessage, { type: "pull_ended" }>;
  * worktree ("#12 merged: remove fix-login?"), naming its project (and space, when there are
  * several). No tone and no OS notification: nothing waits on the user.
  */
-function offerRemoval(s: HiveState, m: PullEnded, wall: number): void {
-  const project = s.projects?.[m.project];
+function offerRemoval(s: HiveState, m: PullEnded & { host?: string }, wall: number): void {
+  const host = m.host ?? null;
+  const view = hostView(s, host);
+  const project = view.projects?.[m.project];
   const worktree = project?.worktrees.find((w) => w.id === m.worktree);
-  const several = (s.spaces?.length ?? 0) > 1;
-  const space = several ? spaceOf(s, m.project)?.name : undefined;
+  const several = (view.spaces?.length ?? 0) > 1 || host !== null;
+  const space = several ? spaceLabel(spaceOf(view, m.project), host) : undefined;
   addToInbox({
     offer: { worktree: m.worktree, number: m.number, title: m.title, state: m.state },
     at: wall,
     text: `#${m.number} ${m.state}: remove ${worktree?.name ?? "its worktree"}?`,
     space: [space, project?.name].filter(Boolean).join(" · ") || undefined,
+    ...(m.host === undefined ? {} : { host: m.host }),
   });
 }
 
@@ -163,11 +191,17 @@ function usageAlert(message: Extract<ServiceMessage, { type: "usage_alert" }>, w
 /** What a terminal's OS notification carries as its `agent`, so its click finds the terminal. */
 const TERMINAL_CLICK = "terminal:";
 
-/** A terminal's name in its alerts: its worktree's, else its folder's. */
+/**
+ * A terminal's name in its alerts: its worktree's, else its folder's; a remote's names its host
+ * (26.18): "train-run on gpu-box".
+ */
 export function terminalName(s: HiveState, channel: number): string {
-  const worktree = findWorktree(s.projects, s.terminals[channel]?.worktree ?? null);
+  const terminal = s.terminals[channel];
+  const host = terminal?.host ?? null;
+  const worktree = findWorktree(hostView(s, host).projects, terminal?.worktree ?? null);
   const cwd = s.tabs.find((t) => t.id === channel)?.cwd ?? "";
-  return worktree?.name ?? (cwd.slice(cwd.lastIndexOf("/") + 1) || "Terminal");
+  const name = worktree?.name ?? (cwd.slice(cwd.lastIndexOf("/") + 1) || "Terminal");
+  return host === null ? name : `${name} on ${host}`;
 }
 
 /** "12s", "3m 4s", "1h 2m": how long a command ran. */
@@ -209,8 +243,64 @@ export function terminalAlertText(s: HiveState, m: TerminalAlert): AlertText & {
  */
 export function goToClicked(id: string): void {
   const s = useHive.getState();
-  const agent = s.agents[id];
+  const agent = everyHost(s).agents[id];
   const tab = s.tabs.find((t) => `${TERMINAL_CLICK}${t.id}` === id);
   if (agent) goToAgent(agent);
   else if (tab) activateTab(tab);
+}
+
+/** How long after a reattach a host's alerts wait for its one summary (26.18). */
+export const SUMMARY_MS = 1500;
+
+/**
+ * The hosts just reattached (26.18), each with what was pending on it when its link was last
+ * up: their alerts wait for `summarize`.
+ */
+const settling = new Map<string, Map<string, AgentState>>();
+/** The hosts whose link was ever up: a later `connected` is a reattach. */
+const linked = new Set<string>();
+
+/** What `host`'s pending agents wait for, by key, as the store last heard. */
+function pendingOn(s: HiveState, host: string): Map<string, AgentState> {
+  const view = hostView(s, host);
+  return new Map(
+    Object.entries(view.agentStates).flatMap(([id, status]) =>
+      status.pending && view.agents[id] ? [[id, status.state]] : [],
+    ),
+  );
+}
+
+/**
+ * A remote host's link changed (26.17): once welcomed again, its alerts missed while it was
+ * down come as one summary after `SUMMARY_MS` ("2 agents waiting on gpu-box"), not a burst.
+ */
+function linkChanged(s: HiveState, m: Extract<HostMessage, { type: "host_link" }>, wall: number) {
+  if (m.state === "removed") {
+    linked.delete(m.host);
+    settling.delete(m.host);
+    return;
+  }
+  if (m.state !== "connected" || s.links[m.host]?.state === "connected") return;
+  if (!linked.has(m.host)) {
+    linked.add(m.host);
+    return;
+  }
+  settling.set(m.host, pendingOn(s, m.host));
+  setTimeout(() => summarize(m.host, wall + SUMMARY_MS), SUMMARY_MS);
+}
+
+/**
+ * The summary of `host`'s agents that came to wait while its link was down (26.18): one inbox
+ * item, one tone and one notification, none when nothing new waits.
+ */
+export function summarize(host: string, wall = Date.now(), s = useHive.getState()): void {
+  const before = settling.get(host);
+  if (!before) return;
+  settling.delete(host);
+  const fresh = [...pendingOn(s, host)].filter(([id, state]) => before.get(id) !== state);
+  if (fresh.length === 0) return;
+  const title = `${fresh.length === 1 ? "1 agent" : `${fresh.length} agents`} waiting on ${host}`;
+  addToInbox({ summary: true, at: wall, text: title, host });
+  toneAt(s, performance.now());
+  void transport.showNotification(title, "", "");
 }

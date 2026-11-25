@@ -1,7 +1,17 @@
-import type { ChangedFile, Changes, FileText, ServiceMessage, WorktreeFiles } from "./protocol";
+import type {
+  ChangedFile,
+  Changes,
+  FileText,
+  HostMessage,
+  ServiceMessage,
+  WorktreeFiles,
+} from "./protocol";
 import {
   type FileTab,
   type HiveState,
+  hostData,
+  hostKey,
+  hostView,
   inCurrentSpace,
   leaveSpace,
   type OpenFile,
@@ -10,6 +20,7 @@ import {
   runsKey,
   selected,
   spacePlace,
+  switchedHost,
   type Terminal,
   useHive,
   type WorktreeDialog,
@@ -110,7 +121,7 @@ function removedProject(s: HiveState, id: string): Partial<HiveState> {
   };
 }
 
-function reduce(s: HiveState, m: ServiceMessage): Partial<HiveState> {
+function reduce(s: HiveState, m: HostMessage): Partial<HiveState> {
   switch (m.type) {
     case "welcome":
       return {
@@ -176,7 +187,9 @@ function reduce(s: HiveState, m: ServiceMessage): Partial<HiveState> {
     case "terminal_kept":
     case "terminal_opened": {
       const { worktree, account } = m;
-      const opened = { exited: false, code: null, unhooked: false, worktree, account };
+      // A remote's (26.18): its worktree is a path of its host's (`tabWorktree`).
+      const host = m.host === undefined ? {} : { host: m.host };
+      const opened = { exited: false, code: null, unhooked: false, worktree, account, ...host };
       // Its tab selected its cwd; the place is the worktree holding it (a subfolder, a link).
       const tab = s.tabs.find((t) => t.id === m.channel);
       const moved = tab && s.selection === tab.cwd ? { selection: m.worktree ?? tab.cwd } : {};
@@ -240,10 +253,11 @@ function reduce(s: HiveState, m: ServiceMessage): Partial<HiveState> {
       const was = owner(s.projects, s.selection);
       const gone = was && !ids.has(s.selection as string);
       const selection = gone ? (projects[was.id] ? was.id : null) : s.selection;
-      // So does a terminal's: its tab shows under the project (its main worktree's id).
+      // So does a terminal's: its tab shows under the project (its main worktree's id). Only
+      // this host's terminals (26.18): another's paths are not its.
       const terminals = Object.fromEntries(
         Object.values(s.terminals).map((t) => {
-          const left = t.worktree !== null && !ids.has(t.worktree);
+          const left = (t.host ?? null) === s.host && t.worktree !== null && !ids.has(t.worktree);
           const project = left ? owner(s.projects, t.worktree)?.id : undefined;
           return [t.id, project && projects[project] ? { ...t, worktree: project } : t];
         }),
@@ -580,6 +594,8 @@ function reduce(s: HiveState, m: ServiceMessage): Partial<HiveState> {
     // The reattach's (26.16): kept by the Tauri side, or a redraw (`connect`).
     case "terminals_kept":
     case "terminal_reset":
+    // Taken before any host's data (`hostLinked`).
+    case "host_link":
     case "terminal_reattached":
     // Kept in the inbox by `notify`.
     case "pull_ended":
@@ -729,7 +745,54 @@ function fileDialogDone(s: HiveState, worktree: string): Partial<HiveState> {
   return s.fileDialog?.worktree === worktree ? { fileDialog: null, modal: null } : {};
 }
 
+/**
+ * The app's own fields a message of a host not shown may change (26.18): its terminals, the
+ * toasts, and the bell's seen agents (keyed apart by host, `agentKey`). The rest of what it
+ * changes is that host's data, kept in `stash`.
+ */
+const SHARED_FIELDS = ["terminals", "notices", "pendingSeen"] as const;
+
+/**
+ * `m` applied to the store: to its host's data (26.18), the shown one's or the one kept in
+ * `stash`, so a host's paths and ids never meet another's. A remote's agents come keyed
+ * (`keyed` in `hosts.ts`).
+ */
+export function applied(s: HiveState, m: HostMessage): Partial<HiveState> {
+  if (m.type === "host_link") return hostLinked(s, m);
+  if (hostKey(m.host) === hostKey(s.host)) return reduce(s, m);
+  const view = hostView(s, m.host ?? null);
+  const patch = reduce(view, m);
+  const shared = Object.fromEntries(
+    SHARED_FIELDS.flatMap((f) => (f in patch ? [[f, patch[f]]] : [])),
+  );
+  const data = { ...hostData(view), ...hostData(patch) };
+  return {
+    ...shared,
+    stash: { ...s.stash, [hostKey(m.host)]: data as HiveState["stash"][string] },
+  };
+}
+
+/**
+ * A remote host's link changed (26.17): its state, since now when it is a new one. A host
+ * removed from the settings goes with its data; while shown, this Mac's spaces show instead.
+ */
+function hostLinked(
+  s: HiveState,
+  m: Extract<HostMessage, { type: "host_link" }>,
+): Partial<HiveState> {
+  const { type: _, host, ...link } = m;
+  if (link.state === "removed") {
+    const { [host]: __, ...links } = s.links;
+    const shown = switchedHost(s, s.host === host ? null : s.host);
+    const { [host]: ___, ...stash } = shown.stash ?? s.stash;
+    return { ...shown, links, stash };
+  }
+  const was = s.links[host];
+  const since = was?.state === link.state ? was.since : Date.now();
+  return { links: { ...s.links, [host]: { ...link, since } } };
+}
+
 /** The only way service data enters the store. */
-export function apply(message: ServiceMessage): void {
-  useHive.setState((s) => reduce(s, message));
+export function apply(message: HostMessage): void {
+  useHive.setState((s) => applied(s, message));
 }

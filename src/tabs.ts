@@ -216,8 +216,15 @@ export const paneKey = (s: HiveState, pane: PaneId): string =>
  * once that worktree is gone, its project's); outside every project, or until the service
  * answers, its cwd.
  */
-export const tabWorktree = (s: HiveState, tab: Tab): string =>
-  s.terminals[tab.id]?.worktree ?? tab.cwd;
+export function tabWorktree(s: HiveState, tab: Tab): string {
+  const place = s.terminals[tab.id]?.worktree ?? tab.cwd;
+  // Another host's path, even one a local worktree also has, is no place of the shown host's
+  // (26.18): NUL is in no path.
+  return onShownHost(s, tab) ? place : `\0${tab.host ?? ""}\0${place}`;
+}
+
+/** Whether the tab's terminal runs on the host shown (26.18). */
+export const onShownHost = (s: HiveState, tab: Tab): boolean => (tab.host ?? null) === s.host;
 
 /**
  * Whose tabs the tab bar shows: the selected worktree (a selected project stands for its main
@@ -237,7 +244,8 @@ export function tabsPlace(s: HiveState): string | null {
 /** The terminal tabs of the place the tab bar shows, in the bar's order. */
 export function visibleTabs(s: HiveState): Tab[] {
   const place = tabsPlace(s);
-  return inBarOrder(s, place === null ? s.tabs : s.tabs.filter((t) => tabWorktree(s, t) === place));
+  const tabs = s.tabs.filter((t) => onShownHost(s, t));
+  return inBarOrder(s, place === null ? tabs : tabs.filter((t) => tabWorktree(s, t) === place));
 }
 
 /** A tab of the bar: a terminal or an open file. */

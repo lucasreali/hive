@@ -1,5 +1,12 @@
 import type { Agent, AgentStatus } from "./protocol";
-import { type HiveState, mostUrgent, pendingAgents, treeAgents, unseenPending } from "./store";
+import {
+  everyHost,
+  type HiveState,
+  mostUrgent,
+  pendingAgents,
+  treeAgents,
+  unseenPending,
+} from "./store";
 
 /**
  * What needs the user, read from the service's `pending` and `urgency` (#37): the one source for
@@ -18,6 +25,7 @@ export function attention(s: HiveState): Attention {
   return {
     pending: pendingAgents(s),
     unseen: unseenPending(s),
-    urgent: mostUrgent(s, treeAgents(s)),
+    // Every host's (26.18), as `pending` and `unseen`.
+    urgent: mostUrgent(everyHost(s), treeAgents(everyHost(s))),
   };
 }

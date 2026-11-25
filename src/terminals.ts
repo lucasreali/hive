@@ -13,11 +13,13 @@ import {
   appliedTheme,
   focusPane,
   type HiveState,
+  linkDown,
   type PaneId,
   paneAttention,
   removeTab,
   setSplit,
   showFailure,
+  showNotice,
   unsplit,
   useHive,
 } from "./store";
@@ -276,12 +278,16 @@ export const openTerminal = (cwd: string, account?: AccountDir): Promise<number>
  * ring the service replays. A new Terminal and tab take its output from now on, then it is
  * redrawn ({@link redraw}) and resized again once its pane is fitted.
  */
-export const reattachTerminal = (id: number, cwd: string): Promise<number> =>
-  startTerminal(cwd, async (term, onData) => {
-    await transport.attachTerminal(id, onData);
-    redraw(id, term);
-    return id;
-  });
+export const reattachTerminal = (id: number, cwd: string, host?: string): Promise<number> =>
+  startTerminal(
+    cwd,
+    async (term, onData) => {
+      await transport.attachTerminal(id, onData);
+      redraw(id, term);
+      return id;
+    },
+    host,
+  );
 
 /**
  * Terminal `id`, which this page shows, attached again after a reconnect (26.16,
@@ -305,6 +311,8 @@ function redraw(id: number, term: Terminal): void {
 async function startTerminal(
   cwd: string,
   connect: (term: Terminal, onData: (bytes: Uint8Array) => void) => Promise<number>,
+  // The host it runs on (26.18): a new terminal's is the host shown, as the request goes there.
+  host = useHive.getState().host ?? undefined,
 ): Promise<number> {
   const term = new Terminal({
     lineHeight: 1.2,
@@ -340,7 +348,9 @@ async function startTerminal(
   const search = new SearchAddon();
   term.loadAddon(search);
   term.onData((data) => {
-    if (!useHive.getState().terminals[id]?.exited) void transport.writeTerminal(id, data);
+    const s = useHive.getState();
+    // A remote's terminal takes no input while its link is down (26.18): its overlay says so.
+    if (!s.terminals[id]?.exited && !linkDown(s, host)) void transport.writeTerminal(id, data);
   });
   term.onResize(({ cols, rows }) => void transport.resizeTerminal(id, cols, rows));
   term.attachCustomKeyEventHandler((event) => keys(term, marks, event));
@@ -355,7 +365,7 @@ async function startTerminal(
   el.addEventListener("paste", (event) => onPaste(term, event), { capture: true });
   copyOnSelect(term, el);
   entries.set(id, { term, fit, search, el, webgl: null, marks });
-  addTab(id, cwd);
+  addTab(id, cwd, host);
   return id;
 }
 
@@ -631,6 +641,12 @@ export function dropFiles(text: string, x: number, y: number): boolean {
   const at = terminalAt(document.elementFromPoint(x, y));
   const term = at && terminal(at.id);
   if (!term) return false;
+  // A remote's terminal (26.18): the paths are this Mac's, which its host does not have.
+  const host = useHive.getState().tabs.find((t) => t.id === at.id)?.host;
+  if (host) {
+    showNotice("error", `Files from this Mac cannot be dropped into a terminal on ${host}`);
+    return false;
+  }
   term.paste(text);
   term.focus();
   return true;

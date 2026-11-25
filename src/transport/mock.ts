@@ -262,7 +262,7 @@ const worktree = (root: string, name: string, main = false): Worktree => {
   const branch = main ? name : `worktree-${name}`;
   return { id: path, name, path, branch, main, claude: !main, status };
 };
-const project = (path: string, name: string, worktrees: string[]): Project => ({
+export const mockProject = (path: string, name: string, worktrees: string[]): Project => ({
   id: path,
   name,
   path,
@@ -272,11 +272,11 @@ const project = (path: string, name: string, worktrees: string[]): Project => ({
 
 /** The fake service's git repositories; the first two are followed from the start. */
 export const MOCK_REPOS = [
-  project("/home/user/projects/shop", "shop", ["fix-login", "feat-checkout"]),
-  project("/home/user/projects/api", "api", ["refactor-auth"]),
-  project("/home/user/dotfiles", "dotfiles", []),
+  mockProject("/home/user/projects/shop", "shop", ["fix-login", "feat-checkout"]),
+  mockProject("/home/user/projects/api", "api", ["refactor-auth"]),
+  mockProject("/home/user/dotfiles", "dotfiles", []),
   // On the Windows side (C:), which WSL sees under /mnt/c.
-  project("/mnt/c/Users/user/source/site", "site", []),
+  mockProject("/mnt/c/Users/user/source/site", "site", []),
 ];
 
 /**
@@ -305,7 +305,7 @@ export const MOCK_GROUP: Project[] = [
     parent: null,
   },
   ...["backend", "frontend"].map((name) => ({
-    ...project(`${MOCK_GROUP_PATH}/${name}`, name, []),
+    ...mockProject(`${MOCK_GROUP_PATH}/${name}`, name, []),
     parent: MOCK_GROUP_PATH,
   })),
 ];
@@ -879,12 +879,25 @@ function nameError(project: Project, name: string): string | null {
  * the previous one; `cast` is the URL of an asciinema recording to replay instead of the
  * generated one.
  */
+/** How a fake service differs from the default one (26.18: a remote host's, `mockHosts.ts`). */
+export type MockOptions = {
+  /** The repositories followed from the start. */
+  repos?: Project[];
+  /** The settings it starts with. */
+  settings?: Settings;
+  /** The last terminal id given, shared by every fake service of the app (26.17). */
+  ids?: { last: number };
+  /** Called with each line typed in one of its terminals. */
+  onLine?: (line: string) => void;
+};
+
 export function createMockTransport(
   scenario: string | null = null,
   cast: string | null = null,
+  options: MockOptions = {},
 ): Transport {
   let send: (message: ServiceMessage) => void = () => {};
-  const projects = scenario === "empty" ? [] : MOCK_REPOS.slice(0, 2);
+  const projects = scenario === "empty" ? [] : (options.repos ?? MOCK_REPOS.slice(0, 2));
   if (scenario === "states") {
     const shop = projects[0] as Project;
     projects[0] = { ...shop, worktrees: [...shop.worktrees, worktree(shop.path, "tests-login")] };
@@ -968,7 +981,7 @@ export function createMockTransport(
     sendSpaces();
     sendUsage();
   };
-  let last = 0;
+  const ids = options.ids ?? { last: 0 };
   type MockTerminal = {
     onData: (bytes: Uint8Array) => void;
     line: string;
@@ -1087,7 +1100,7 @@ export function createMockTransport(
   /** The files copied in Finder, as the app side reads them (18.3): `copy-files <text>`. */
   let copied = "";
   // Kept in memory; the real service checks the ranges and saves them.
-  let settings: Settings = DEFAULT_SETTINGS;
+  let settings: Settings = options.settings ?? DEFAULT_SETTINGS;
   // The typed line stands in for the tool call it is doing.
   const states = new Map<string, AgentState>();
   const setState = (id: string, state: AgentState, activity: string | null = null) => {
@@ -1228,6 +1241,10 @@ export function createMockTransport(
       if (scenario === "choose") later({ type: "app_mode", mode, wsl: true });
       if (scenario !== "choose" || mode) handshake();
     },
+    // The fake service links to no host; `?mock=remote` adds one (`mockHosts.ts`).
+    async reconnectHost() {},
+    async restartRemote() {},
+    async byeHost() {},
     async setMode(next) {
       mode = next;
       later({ type: "app_mode", mode, wsl: true });
@@ -1536,7 +1553,7 @@ export function createMockTransport(
     async initGit(id) {
       const at = projects.findIndex((p) => p.id === id && p.folder);
       if (at < 0) return void later({ type: "error", message: `${id} is not a folder project` });
-      projects[at] = project(id, (projects[at] as Project).name, []);
+      projects[at] = mockProject(id, (projects[at] as Project).name, []);
       for (const x of spaces) x.groups = x.groups?.filter((p) => p !== id);
       later({ type: "projects", projects: structuredClone(projects) });
     },
@@ -1565,7 +1582,7 @@ export function createMockTransport(
       const folder = structuredClone(MOCK_FOLDER);
       const worktree = { ...(folder.worktrees[0] as Worktree), id: path, name, path };
       const created = git
-        ? project(path, name, [])
+        ? mockProject(path, name, [])
         : { ...folder, id: path, name, path, worktrees: [worktree] };
       projects.push(created);
       const here = space(current) as Space;
@@ -1788,7 +1805,7 @@ export function createMockTransport(
       later({ type: "editor_target", worktree, path, reveal, error, windows_path });
     },
     async openTerminal(cwd, _cols, _rows, onData, account) {
-      const id = ++last;
+      const id = ++ids.last;
       // The account asked for, else its project's space's (22.5); one no account has is the
       // default one.
       const worktree = place(cwd);
@@ -1822,6 +1839,7 @@ export function createMockTransport(
         }
         const line = terminal.line;
         terminal.line = "";
+        options.onLine?.(line);
         if (line === "exit") return exit(id, 0);
         // A stand-in for `UserPromptSubmit`: any line typed to a running agent sets it working.
         if (terminal.agent && line) setState(terminal.agent, "working", line);

@@ -28,6 +28,18 @@ export interface Transport {
    * connection's messages.
    */
   setMode(mode: AppMode): Promise<void>;
+  /** Tries remote `host`'s link again now (26.17), whatever stopped it; answered by `host_link`. */
+  reconnectHost(host: string): Promise<void>;
+  /**
+   * Restarts remote `host`'s service of another version (Q8), ending its terminals; answered by
+   * `host_link`.
+   */
+  restartRemote(host: string): Promise<void>;
+  /**
+   * The app is quitting (26.18, Q2): remote `host`'s service ends its terminals and agents when
+   * `end`, else keeps them for the keep time, as for a dropped link.
+   */
+  byeHost(host: string, end: boolean): Promise<void>;
   /**
    * Opens a terminal in `cwd` and resolves with its id (the frame channel). It gets the Claude
    * `account` (12.2), which must be one of the settings' accounts; without one, the current one.
@@ -328,7 +340,8 @@ export interface Transport {
 /**
  * The Tauri transport inside the app; the in-browser fake service otherwise or with `?mock`.
  * `?mock=mismatch` / `?mock=disconnected` make the fake service fail the connection;
- * `?mock=empty` starts it with no projects; `?mock=choose` first asks where the service runs (12.5.4); `?mock=update` offers an update that fails; `?mock=states` adds agents in every state;
+ * `?mock=empty` starts it with no projects; `?mock=remote` links it to a second fake service, the
+ * remote host `gpu-box` (26.18, `mockHosts.ts`); `?mock=choose` first asks where the service runs (12.5.4); `?mock=update` offers an update that fails; `?mock=states` adds agents in every state;
  * `?mock=load[&cast=<url>]` replays a recording into
  * every terminal (the load test, 1.11). The fake service is a chunk of its own, loaded only
  * then (9.24): the app's startup bundle does not carry it.
@@ -340,6 +353,10 @@ export async function pickTransport(
   const params = new URLSearchParams(search);
   const mock = params.get("mock");
   if (tauri && mock === null) return tauriTransport;
+  if (mock === "remote") {
+    const { createHostsTransport } = await import("./mockHosts");
+    return createHostsTransport(params.get("cast"));
+  }
   const { createMockTransport } = await import("./mock");
   return createMockTransport(mock, params.get("cast"));
 }

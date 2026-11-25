@@ -30,6 +30,7 @@ import type {
   FileText,
   GhAccounts,
   GhIdentity,
+  HostLink,
   NameCheck,
   NotificationPermission,
   ProgressState,
@@ -111,6 +112,11 @@ export type Terminal = {
   worktree: string | null;
   /** The name of the Claude account it runs as (21.7), null until the service answered. */
   account: string | null;
+  /**
+   * The remote host it runs on (26.18), absent for the local service's: its `worktree` is a
+   * path of that host's, never matched against another host's (`tabWorktree`).
+   */
+  host?: string;
 };
 
 /** The file shown under the files tree, in the viewer or its diff. */
@@ -188,6 +194,8 @@ export type InboxItem = {
   text: string;
   /** The agent's (or worktree's) space, once the store knows spaces (6.14): the item names it. */
   space?: string;
+  /** The remote host it came from (26.18); absent for the local service's. */
+  host?: string;
 } & InboxSubject;
 /** What an inbox item is about. */
 export type InboxSubject =
@@ -201,7 +209,12 @@ export type InboxSubject =
    * A terminal's item (17.25: a long command, a program's notification): clicking it shows that
    * terminal while it is open. `failed`: a command that ended with a non-zero status.
    */
-  | { terminal: number; failed: boolean };
+  | { terminal: number; failed: boolean }
+  /**
+   * A remote host's agents that came to wait while its link was down (26.18), its `host`'s:
+   * clicking the item shows that host's spaces.
+   */
+  | { summary: true };
 /** A worktree whose pull request merged or closed, as the service said (`pull_ended`). */
 export type RemoveOffer = { worktree: string; number: number; title: string; state: PullState };
 /** At most this many alerts are kept, the newest first. */
@@ -237,7 +250,12 @@ export const DEFAULT_SETTINGS: Settings = {
 };
 
 /** A tab of the terminal area: a terminal, and the worktree path it was opened in (its title's source). */
-export type Tab = { id: number; cwd: string };
+export type Tab = {
+  id: number;
+  cwd: string;
+  /** The remote host it runs on (26.18); absent for the local service's. */
+  host?: string;
+};
 /**
  * A tab as a pane of a pair: a terminal by its id, any other tab by its key in the bar (a file's
  * `fileKey`, 25.1).
@@ -398,6 +416,16 @@ export type HiveState = {
    * refreshes pause while it is hidden (D18.11).
    */
   visible: boolean;
+  // Hosts (26.18)
+  /**
+   * The host whose service data `HOST_FIELDS` hold (a remote's alias; null: this Mac's
+   * service): the current space's. The other hosts' are kept in `stash` until shown.
+   */
+  host: string | null;
+  /** The service data (`HOST_FIELDS`) of each host not shown, by `hostKey`. */
+  stash: Record<string, HostData>;
+  /** Each remote host's link as the app side last told it, and since when (ms since the epoch). */
+  links: Record<string, LinkState>;
   // Service data
   connection: Connection;
   /**
@@ -565,6 +593,9 @@ export const initialState: HiveState = {
   focused: false,
   systemTheme: "one-dark",
   visible: true,
+  host: null,
+  stash: {},
+  links: {},
   connection: { status: "connecting" },
   appMode: null,
   sessionUsage: null,
@@ -633,6 +664,105 @@ export const initialState: HiveState = {
   runBusy: null,
   runError: null,
 };
+
+/**
+ * What each host's service tells of itself (26.18, Q1): its spaces and projects, their agents,
+ * sessions, files and answers. The store holds the shown host's (`host`) in these fields and
+ * every other host's in `stash`, so a host's paths and ids never meet another's. The settings,
+ * the connection, the terminals, the tabs and the inbox are the app's, one for every host.
+ */
+export const HOST_FIELDS = [
+  "projects",
+  "spaces",
+  "currentSpace",
+  "agents",
+  "agentStates",
+  "agentTitles",
+  "agentUsage",
+  "subagentWorktrees",
+  "sessions",
+  "sessionsError",
+  "sessionsTruncated",
+  "sessionUsage",
+  "weekUsage",
+  "usageLimits",
+  "worktreeFiles",
+  "changes",
+  "changesSeen",
+  "scripts",
+  "file",
+  "table",
+  "searchResults",
+  "dirs",
+  "pulls",
+  "openPull",
+  "pullBusy",
+  "pullError",
+  "runs",
+  "openRun",
+  "jobLog",
+  "runBusy",
+  "runError",
+  "worktreeDialog",
+  "addProjectError",
+  "projectCreated",
+  "newDir",
+  "spaceError",
+  "ghAccounts",
+  "ghIdentity",
+] as const satisfies readonly (keyof HiveState)[];
+
+export type HostData = Pick<HiveState, (typeof HOST_FIELDS)[number]>;
+
+/** A remote host's link (`host_link`) and when it took that state (ms since the epoch). */
+export type LinkState = HostLink & { since: number };
+
+/** `s`'s fields of `HOST_FIELDS`: the shown host's service data. */
+export function hostData(s: Partial<HiveState>): Partial<HostData> {
+  const data: Partial<Record<keyof HostData, unknown>> = {};
+  for (const field of HOST_FIELDS) if (field in s) data[field] = s[field];
+  return data as Partial<HostData>;
+}
+
+/** A host's data before its service told anything. */
+export const NO_HOST_DATA = hostData(initialState) as HostData;
+
+/** The key of `host` in `stash` and the like: "" for the local service. */
+export const hostKey = (host: string | null | undefined): string => host ?? "";
+
+/**
+ * `s` as `host` sees it: its service data, the shown host's or kept in `stash`, with the app's
+ * own state (`host` set to it).
+ */
+export function hostView(s: HiveState, host: string | null): HiveState {
+  if (host === s.host) return s;
+  return { ...s, ...(s.stash[hostKey(host)] ?? NO_HOST_DATA), host };
+}
+
+/** Every host the store knows (the local service first, then the remotes as they came). */
+export function knownHosts(s: HiveState): (string | null)[] {
+  const remotes = new Set([...Object.keys(s.links), ...Object.keys(s.stash).filter(Boolean)]);
+  if (s.host !== null) remotes.add(s.host);
+  return [null, ...remotes];
+}
+
+/**
+ * The agents of every host in one state (26.18): the bell, F8, the Dock, the menu bar icon and
+ * quitting count them all. Their keys never clash (`agentKey`); the shown host's tree orders
+ * them, the others' follow.
+ */
+export function everyHost(s: HiveState): HiveState {
+  const views = knownHosts(s).map((host) => hostView(s, host));
+  const all = <K extends "agents" | "agentStates" | "agentTitles" | "agentUsage">(key: K) =>
+    Object.assign({}, ...views.map((v) => v[key])) as HiveState[K];
+  return {
+    ...s,
+    agents: all("agents"),
+    agentStates: all("agentStates"),
+    agentTitles: all("agentTitles"),
+    agentUsage: all("agentUsage"),
+  };
+}
 
 /** `agents` in the user's order (8.2): ordered ones first, the rest as they came (a stable sort). */
 export function inAgentOrder(agents: Agent[], order: string[]): Agent[] {
@@ -749,7 +879,9 @@ export const openFileDialog = (target: FileTarget, kind: FileDialogKind = "file"
 /** Asks `question` in the confirm dialog (`ConfirmDialog`). */
 export const ask = (question: Question) => useHive.setState({ modal: "confirm", question });
 /** Keeps an alert in the inbox, the newest first. */
-export const addToInbox = (item: { at: number; text: string; space?: string } & InboxSubject) =>
+export const addToInbox = (
+  item: { at: number; text: string; space?: string; host?: string } & InboxSubject,
+) =>
   useHive.setState((s) => ({
     inbox: [{ ...item, id: (s.inbox[0]?.id ?? 0) + 1 }, ...s.inbox].slice(0, INBOX_LIMIT),
   }));
@@ -758,7 +890,7 @@ export const markInboxRead = () =>
   useHive.setState((s) => ({
     inboxSeen: s.inbox[0]?.id ?? 0,
     pendingSeen: Object.fromEntries(
-      pendingAgents(s).map((a) => [a.id, s.agentStates[a.id]?.state as AgentState]),
+      pendingAgents(s).map((a) => [a.id, everyHost(s).agentStates[a.id]?.state as AgentState]),
     ),
   }));
 /** At most this many toasts show; a new one drops the oldest (10.3). */
@@ -976,23 +1108,45 @@ export const toggleCollapsed = (id: string) =>
   useHive.setState((s) => ({ collapsed: { ...s.collapsed, [id]: !s.collapsed[id] } }));
 
 /** A terminal just opened in `cwd`: its tab is shown and its worktree selected. */
-export const addTab = (id: number, cwd: string) =>
+export const addTab = (id: number, cwd: string, host?: string) =>
   useHive.setState((s) => {
-    const tab = { id, cwd };
-    return {
-      tabs: [...s.tabs, tab],
-      tabOrder: withKey(s.tabOrder, `tab:${id}`),
-      activeTab: id,
-      fileShown: false,
-      selection: tabWorktree(s, tab),
-    };
+    const tab: Tab = host === undefined ? { id, cwd } : { id, cwd, host };
+    const added = { tabs: [...s.tabs, tab], tabOrder: withKey(s.tabOrder, `tab:${id}`) };
+    // Another host's (a remote's kept terminal, 26.18) waits under its worktree there.
+    if ((host ?? null) !== s.host) return added;
+    return { ...added, activeTab: id, fileShown: false, selection: tabWorktree(s, tab) };
   });
+/** Shows `tab`, and its host's spaces when it runs on another host (26.18). */
 export const activateTab = (tab: Tab) =>
-  useHive.setState((s) => ({
-    activeTab: tab.id,
-    fileShown: false,
-    selection: tabWorktree(s, tab),
-  }));
+  useHive.setState((s) => {
+    const shown = switchedHost(s, tab.host ?? null);
+    const selection = tabWorktree({ ...s, ...shown }, tab);
+    return { ...shown, activeTab: tab.id, fileShown: false, selection };
+  });
+
+/**
+ * Shows `host`'s spaces (26.18): the shown host's service data goes to `stash` and `host`'s
+ * comes out of it; its current space shows the place last selected there (11.5). Nothing
+ * changes for the host shown.
+ */
+export function switchedHost(s: HiveState, host: string | null): Partial<HiveState> {
+  if (host === s.host) return {};
+  const left = leaveSpace(s);
+  const all = { ...s.stash, [hostKey(s.host)]: hostData(s) as HostData };
+  const { [hostKey(host)]: data = NO_HOST_DATA, ...stash } = all;
+  const shown = { ...left, ...data, host, stash };
+  return { ...shown, ...selected({ ...s, ...shown }, spacePlace({ ...s, ...shown })) };
+}
+
+/** Shows `host`'s spaces (26.18). */
+export const showHost = (host: string | null) => useHive.setState((s) => switchedHost(s, host));
+
+/**
+ * Whether `host`'s link is down (26.18): a remote's terminal then takes no input and shows
+ * "Reconnecting to <host>…". Never for the local service's (`undefined`).
+ */
+export const linkDown = (s: Pick<HiveState, "links">, host: string | null | undefined) =>
+  !!host && s.links[host]?.state !== "connected";
 
 /**
  * Removes the tab; when it was shown, the other pane of its split is, else its right neighbour
@@ -1235,8 +1389,15 @@ export function leaveSpace(s: HiveState): Partial<HiveState> {
   if (s.currentSpace === null) return {};
   const place =
     s.selection === null ? null : { place: s.selection, project: placeProject(s, s.selection) };
-  return { spacePlaces: { ...s.spacePlaces, [s.currentSpace]: place } };
+  return { spacePlaces: { ...s.spacePlaces, [spaceKey(s)]: place } };
 }
+
+/**
+ * The current space's key in `spacePlaces`: its id, qualified by its host for a remote's (two
+ * hosts may each have a "default", 26.18).
+ */
+const spaceKey = (s: HiveState): string =>
+  s.host === null ? (s.currentSpace ?? "") : `${s.host}\n${s.currentSpace ?? ""}`;
 
 /**
  * The place to select in the current space: the one remembered, else (gone) its project, else
@@ -1244,7 +1405,7 @@ export function leaveSpace(s: HiveState): Partial<HiveState> {
  */
 export function spacePlace(s: HiveState): string | null {
   const shown = spaceProjects(s).map((p) => p.id);
-  const kept = s.spacePlaces[s.currentSpace ?? ""];
+  const kept = s.spacePlaces[spaceKey(s)];
   if (kept?.project && shown.includes(kept.project)) {
     return placeProject(s, kept.place) === kept.project ? kept.place : kept.project;
   }
@@ -1275,11 +1436,16 @@ export function treeAgents(s: HiveState): Agent[] {
 }
 
 /** Agents that need the user, in tree order: the "N pending" counter and F8's cycle. */
-export const pendingAgents = (s: HiveState): Agent[] =>
-  treeAgents(s).filter((a) => s.agentStates[a.id]?.pending);
+export function pendingAgents(s: HiveState): Agent[] {
+  // Every host's (26.18): the bell, F8 and the menu bar icon go to any of them.
+  const all = everyHost(s);
+  return treeAgents(all).filter((a) => all.agentStates[a.id]?.pending);
+}
 /** Pending agents not seen since the bell was last opened: the bell's badge (8.5). */
-export const unseenPending = (s: HiveState): number =>
-  pendingAgents(s).filter((a) => s.pendingSeen[a.id] !== s.agentStates[a.id]?.state).length;
+export function unseenPending(s: HiveState): number {
+  const states = everyHost(s).agentStates;
+  return pendingAgents(s).filter((a) => s.pendingSeen[a.id] !== states[a.id]?.state).length;
+}
 
 /**
  * The status of highest `urgency` among `agents` (rule 1, for a collapsed node), a pending one

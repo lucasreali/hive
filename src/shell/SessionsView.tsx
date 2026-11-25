@@ -14,6 +14,7 @@ import {
 } from "@phosphor-icons/react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { type MouseEvent, useEffect, useRef, useState } from "react";
+import { agentKey } from "../hosts";
 import type { Session, Settings } from "../protocol";
 import {
   ago,
@@ -67,6 +68,8 @@ export function SessionsView({ worktree }: { worktree: string }) {
   const error = useHive((s) => s.sessionsError);
   const truncated = useHive((s) => s.sessionsTruncated);
   const agents = useHive((s) => s.agents);
+  // A remote's agents are keyed by host (26.18).
+  const host = useHive((s) => s.host);
   const [query, setQuery] = useState("");
   const space = useHive((s) => s.currentSpace);
   // Asked when the tab opens and for another space (the service lists the current space's
@@ -121,7 +124,7 @@ export function SessionsView({ worktree }: { worktree: string }) {
               <SessionRow
                 key={x.id}
                 session={x}
-                live={!!agents[x.id]}
+                live={!!agents[agentKey(host, x.id)]}
                 index={item.index}
                 measure={virtual.measureElement}
                 top={item.start}
@@ -146,7 +149,9 @@ interface RowProps {
 
 function SessionRow({ session: x, live, index, measure, top }: RowProps) {
   // A session in a Hive terminal has its live state; any other, the one its log tells.
-  const state = useHive((s) => (live ? (s.agentStates[x.id]?.state ?? "idle") : x.state));
+  const state = useHive((s) =>
+    live ? (s.agentStates[agentKey(s.host, x.id)]?.state ?? "idle") : x.state,
+  );
   const menu = menuAt(x);
   // The account it last ran as (its log's folder), when there is more than one.
   const account = useHive((s) => accountName(s.settings.claude, x));
@@ -255,7 +260,7 @@ function ContinueIn({ session, disabled }: { session: Session; disabled: boolean
 export function SessionMenu() {
   const menu = useHive((s) => s.sessionMenu);
   const x = useHive((s) => s.sessions?.find((y) => y.id === s.sessionMenu?.session));
-  const live = useHive((s) => !!x && !!s.agents[x.id]);
+  const live = useHive((s) => !!x && !!s.agents[agentKey(s.host, x.id)]);
   if (!menu || !x) return null;
   // Running outside Hive: not resumed or deleted here, with no text.
   const outside = x.running && !live;

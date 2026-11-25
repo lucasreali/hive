@@ -1,6 +1,6 @@
 import { Channel, type InvokeArgs, invoke } from "@tauri-apps/api/core";
 import type { ServiceMessage } from "../protocol";
-import { showFailure } from "../store";
+import { showFailure, useHive } from "../store";
 import type { Transport } from ".";
 
 /**
@@ -10,15 +10,29 @@ import type { Transport } from ".";
  */
 const send = (cmd: string, args?: InvokeArgs) => showFailure(invoke<void>(cmd, args));
 
+/**
+ * The host the UI's requests about spaces, projects, worktrees, files and sessions go to (26.18):
+ * the shown one's (`HiveState.host`), whose data the UI shows; absent for the local service.
+ */
+const shownHost = () => useHive.getState().host ?? undefined;
+
+/** `send` to the shown host's service (`shownHost`). */
+const hosted = (cmd: string, args?: Record<string, unknown>) =>
+  send(cmd, { ...args, host: shownHost() });
+
 // Commands live in src-tauri/src/lib.rs (`commands`); each terminal gets its own Channel (#24).
 export const tauriTransport: Transport = {
   async connect(onMessage) {
     await invoke("connect", { onMessage: new Channel<ServiceMessage>(onMessage) });
   },
   setMode: (mode) => send("set_mode", { mode }),
+  reconnectHost: (host) => send("reconnect_host", { host }),
+  restartRemote: (host) => send("restart_remote", { host }),
+  byeHost: (host, end) => send("bye_host", { host, end }),
   openTerminal(cwd, cols, rows, onData, account) {
     const channel = new Channel<ArrayBuffer>((bytes) => onData(new Uint8Array(bytes)));
-    return invoke<number>("open_terminal", { cwd, cols, rows, account, onData: channel });
+    const host = shownHost();
+    return invoke<number>("open_terminal", { host, cwd, cols, rows, account, onData: channel });
   },
   attachTerminal(id, onData) {
     const channel = new Channel<ArrayBuffer>((bytes) => onData(new Uint8Array(bytes)));
@@ -28,60 +42,61 @@ export const tauriTransport: Transport = {
   resizeTerminal: (id, cols, rows) => send("resize_terminal", { id, cols, rows }),
   closeTerminal: (id) => send("close_terminal", { id }),
   ackTerminal: (id, bytes) => send("ack_terminal", { id, bytes }),
-  listProjects: () => send("list_projects"),
-  addProject: (path) => send("add_project", { path }),
-  removeProject: (id) => send("remove_project", { id }),
-  initGit: (id) => send("init_git", { id }),
-  createProject: (parent, name, git) => send("create_project", { parent, name, git }),
-  createDir: (parent, name) => send("create_dir", { parent, name }),
-  createSpace: (name, env) => send("create_space", { name, env }),
-  updateSpace: (id, name, env) => send("update_space", { id, name, env }),
-  deleteSpace: (id) => send("delete_space", { id }),
-  selectSpace: (id) => send("select_space", { id }),
+  listProjects: () => hosted("list_projects"),
+  addProject: (path) => hosted("add_project", { path }),
+  removeProject: (id) => hosted("remove_project", { id }),
+  initGit: (id) => hosted("init_git", { id }),
+  createProject: (parent, name, git) => hosted("create_project", { parent, name, git }),
+  createDir: (parent, name) => hosted("create_dir", { parent, name }),
+  createSpace: (name, env) => hosted("create_space", { name, env }),
+  updateSpace: (id, name, env) => hosted("update_space", { id, name, env }),
+  deleteSpace: (id) => hosted("delete_space", { id }),
+  selectSpace: (id) => hosted("select_space", { id }),
   listClaudeLogins: () => send("list_claude_logins"),
-  listGhAccounts: (ghConfigDir) => send("list_gh_accounts", { ghConfigDir }),
-  switchGhAccount: (ghConfigDir, account) => send("switch_gh_account", { ghConfigDir, account }),
-  getGhIdentity: (ghConfigDir, account) => send("get_gh_identity", { ghConfigDir, account }),
-  listPulls: (project, force) => send("list_pulls", { project, force }),
-  openPull: (project, number) => send("open_pull", { project, number }),
-  actOnPull: (project, number, action) => send("act_on_pull", { project, number, action }),
+  listGhAccounts: (ghConfigDir) => hosted("list_gh_accounts", { ghConfigDir }),
+  switchGhAccount: (ghConfigDir, account) => hosted("switch_gh_account", { ghConfigDir, account }),
+  getGhIdentity: (ghConfigDir, account) => hosted("get_gh_identity", { ghConfigDir, account }),
+  listPulls: (project, force) => hosted("list_pulls", { project, force }),
+  openPull: (project, number) => hosted("open_pull", { project, number }),
+  actOnPull: (project, number, action) => hosted("act_on_pull", { project, number, action }),
   createPull: (worktree, title, body, base, draft) =>
-    send("create_pull", { worktree, title, body, base, draft }),
-  listRuns: (project, branch, force) => send("list_runs", { project, branch, force }),
-  openRun: (project, run) => send("open_run", { project, run }),
-  openJobLog: (project, job) => send("open_job_log", { project, job }),
-  actOnRun: (project, run, action, branch) => send("act_on_run", { project, run, action, branch }),
-  listDirs: (path, windows, hidden) => send("list_dirs", { path, windows, hidden }),
-  listBranches: (project) => send("list_branches", { project }),
-  validateWorktreeName: (project, name) => send("validate_worktree_name", { project, name }),
-  createWorktree: (project, name, base) => send("create_worktree", { project, name, base }),
+    hosted("create_pull", { worktree, title, body, base, draft }),
+  listRuns: (project, branch, force) => hosted("list_runs", { project, branch, force }),
+  openRun: (project, run) => hosted("open_run", { project, run }),
+  openJobLog: (project, job) => hosted("open_job_log", { project, job }),
+  actOnRun: (project, run, action, branch) =>
+    hosted("act_on_run", { project, run, action, branch }),
+  listDirs: (path, windows, hidden) => hosted("list_dirs", { path, windows, hidden }),
+  listBranches: (project) => hosted("list_branches", { project }),
+  validateWorktreeName: (project, name) => hosted("validate_worktree_name", { project, name }),
+  createWorktree: (project, name, base) => hosted("create_worktree", { project, name, base }),
   createIssueWorktree: (project, number, base) =>
-    send("create_issue_worktree", { project, number, base }),
-  removeWorktree: (path, force) => send("remove_worktree", { path, force }),
-  renameWorktree: (path, name) => send("rename_worktree", { path, name }),
-  watchWorktree: (path, base) => send("watch_worktree", { path, base }),
-  unwatchWorktree: () => send("unwatch_worktree"),
-  expandIgnored: (path, folders) => send("expand_ignored", { path, folders }),
-  setView: (terminal, focused, visible) => send("set_view", { terminal, focused, visible }),
-  listChanges: (path, base) => send("list_changes", { path, base }),
-  listScripts: (path) => send("list_scripts", { path }),
-  listSessions: () => send("list_sessions"),
-  locateSession: (id, target) => send("locate_session", { id, target }),
-  deleteSession: (id) => send("delete_session", { id }),
-  moveSession: (id, configDir) => send("move_session", { id, configDir }),
-  searchFiles: (worktree, query) => send("search_files", { worktree, query }),
-  openFile: (worktree, path, base) => send("open_file", { worktree, path, base }),
-  openTable: (worktree, path) => send("open_table", { worktree, path }),
+    hosted("create_issue_worktree", { project, number, base }),
+  removeWorktree: (path, force) => hosted("remove_worktree", { path, force }),
+  renameWorktree: (path, name) => hosted("rename_worktree", { path, name }),
+  watchWorktree: (path, base) => hosted("watch_worktree", { path, base }),
+  unwatchWorktree: () => hosted("unwatch_worktree"),
+  expandIgnored: (path, folders) => hosted("expand_ignored", { path, folders }),
+  setView: (terminal, focused, visible) => hosted("set_view", { terminal, focused, visible }),
+  listChanges: (path, base) => hosted("list_changes", { path, base }),
+  listScripts: (path) => hosted("list_scripts", { path }),
+  listSessions: () => hosted("list_sessions"),
+  locateSession: (id, target) => hosted("locate_session", { id, target }),
+  deleteSession: (id) => hosted("delete_session", { id }),
+  moveSession: (id, configDir) => hosted("move_session", { id, configDir }),
+  searchFiles: (worktree, query) => hosted("search_files", { worktree, query }),
+  openFile: (worktree, path, base) => hosted("open_file", { worktree, path, base }),
+  openTable: (worktree, path) => hosted("open_table", { worktree, path }),
   editTable: (worktree, path, content, edit) =>
-    send("edit_table", { worktree, path, content, edit }),
+    hosted("edit_table", { worktree, path, content, edit }),
   saveFile: (worktree, path, content, version) =>
-    invoke("save_file", { worktree, path, content, version }),
-  createFile: (worktree, folder, name) => send("create_file", { worktree, folder, name }),
-  renameFile: (worktree, path, name) => send("rename_file", { worktree, path, name }),
-  moveFile: (worktree, path, folder) => send("move_file", { worktree, path, folder }),
-  deleteFile: (worktree, path) => send("delete_file", { worktree, path }),
-  createFolder: (worktree, folder, name) => send("create_folder", { worktree, folder, name }),
-  openInEditor: (worktree, path, reveal) => send("open_in_editor", { worktree, path, reveal }),
+    invoke("save_file", { host: shownHost(), worktree, path, content, version }),
+  createFile: (worktree, folder, name) => hosted("create_file", { worktree, folder, name }),
+  renameFile: (worktree, path, name) => hosted("rename_file", { worktree, path, name }),
+  moveFile: (worktree, path, folder) => hosted("move_file", { worktree, path, folder }),
+  deleteFile: (worktree, path) => hosted("delete_file", { worktree, path }),
+  createFolder: (worktree, folder, name) => hosted("create_folder", { worktree, folder, name }),
+  openInEditor: (worktree, path, reveal) => hosted("open_in_editor", { worktree, path, reveal }),
   getSettings: () => send("get_settings"),
   setSettings: (settings) => send("set_settings", { settings }),
   createAccount: (name) => send("create_account", { name }),
