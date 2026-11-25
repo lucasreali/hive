@@ -28,6 +28,10 @@ fn the_ssh_command_is_fixed_options_then_the_alias_then_a_constant_command() {
         "-o",
         "ForwardAgent=no",
         "-o",
+        "ForwardX11=no",
+        "-o",
+        "ForwardX11Trusted=no",
+        "-o",
         "ServerAliveInterval=10",
         "-o",
         "ServerAliveCountMax=3",
@@ -649,7 +653,7 @@ async fn a_new_host_gets_this_app_s_hive_then_links_with_its_keep_time_and_app_i
         (run, upload, again),
         (&command(Script::Run), &command(Script::Upload), run)
     );
-    assert!(runs.iter().all(|run| run[15..17] == ["--", "gpu"]));
+    assert!(runs.iter().all(|run| run[19..21] == ["--", "gpu"]));
     let hive = lab.path("home/.hive/bin/hive");
     assert_eq!(
         std::fs::read(hive).unwrap(),

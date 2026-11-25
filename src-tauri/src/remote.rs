@@ -40,9 +40,10 @@ pub const SSH: &str = "/usr/bin/ssh";
 
 /// `ssh`'s options, each its own argument (spike §6.1). Given on the command line, they win over
 /// the user's `~/.ssh/config`; everything else (`HostName`, `User`, `ProxyJump`, the agent's
-/// keys, `ControlMaster`, Q12) comes from there. The agent itself is never forwarded: a
-/// `ForwardAgent yes` there would let the remote host use the user's keys while the link is up.
-const OPTIONS: [&str; 15] = [
+/// keys, `ControlMaster`, Q12) comes from there. The agent and X11 are never forwarded
+/// (`ClearAllForwardings` leaves both): a `ForwardAgent yes` there would let the remote host use
+/// the user's keys while the link is up, a `ForwardX11 yes` reach this Mac's display.
+const OPTIONS: [&str; 19] = [
     "-T",
     "-o",
     "BatchMode=yes",
@@ -52,6 +53,10 @@ const OPTIONS: [&str; 15] = [
     "ClearAllForwardings=yes",
     "-o",
     "ForwardAgent=no",
+    "-o",
+    "ForwardX11=no",
+    "-o",
+    "ForwardX11Trusted=no",
     "-o",
     "ServerAliveInterval=10",
     "-o",
