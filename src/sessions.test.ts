@@ -221,6 +221,8 @@ test("a session moved while another host is shown still opens on its own host (2
   expect(open.mock.calls.map((call) => [call[0], call[4], call[5]])).toEqual([
     [stopped.cwd, { config_dir: "/w" }, null],
   ]);
+  // Its tab is this Mac's too, not the host shown.
+  expect(useHive.getState().tabs.map((t) => [t.id, t.host])).toEqual([[5, undefined]]);
   // A remote's session goes on as its own account, its log never moved: the answer would never come.
   useHive.setState({
     spaces: [{ id: "s", name: "S", projects: [], env: { ...NO_ENV, claude_account: "/w" } }],

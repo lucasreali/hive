@@ -1306,3 +1306,15 @@ test("splitting a remote's terminal opens the new one on its host, whatever host
   opened.push(right?.id as number);
   opens.mockRestore();
 });
+
+test("splitting this Mac's terminal while a remote shows opens a tab of this Mac's (26.18 review)", async () => {
+  const { id } = await open();
+  const opens = spyOn(transport, "openTerminal");
+  useHive.setState({ host: "gpu-box", links: { "gpu-box": { state: "connected", since: 0 } } });
+  await splitTerminal(id);
+  expect(opens.mock.calls[0]?.[5]).toBeNull();
+  const right = useHive.getState().tabs.at(-1);
+  expect([right?.id === id, right?.host]).toEqual([false, undefined]);
+  opened.push(right?.id as number);
+  opens.mockRestore();
+});

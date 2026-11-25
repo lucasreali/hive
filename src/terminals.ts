@@ -276,7 +276,7 @@ export const openTerminal = (
   startTerminal(
     cwd,
     (term, onData) => transport.openTerminal(cwd, term.cols, term.rows, onData, account, host),
-    host ?? undefined,
+    host,
   );
 
 /**
@@ -293,7 +293,7 @@ export const reattachTerminal = (id: number, cwd: string, host?: string): Promis
       redraw(id, term);
       return id;
     },
-    host,
+    host ?? null,
   );
 
 /**
@@ -318,8 +318,9 @@ function redraw(id: number, term: Terminal): void {
 async function startTerminal(
   cwd: string,
   connect: (term: Terminal, onData: (bytes: Uint8Array) => void) => Promise<number>,
-  // The host it runs on (26.18): a new terminal's is the host shown, as the request goes there.
-  host = useHive.getState().host ?? undefined,
+  // The host it runs on (26.18: null for this Mac), as its request went: never the one shown
+  // since (26.18 review).
+  host: string | null,
 ): Promise<number> {
   const term = new Terminal({
     lineHeight: 1.2,
@@ -372,7 +373,7 @@ async function startTerminal(
   el.addEventListener("paste", (event) => onPaste(term, event), { capture: true });
   copyOnSelect(term, el);
   entries.set(id, { term, fit, search, el, webgl: null, marks });
-  addTab(id, cwd, host);
+  addTab(id, cwd, host ?? undefined);
   return id;
 }
 
