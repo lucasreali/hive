@@ -2582,7 +2582,15 @@ async fn pump(link: &Mutex<Link>, mut frames: FramedRead<Reader<'_>, FrameCodec>
         value["channel"] = ui.into();
         let remote = link.host.is_some();
         value = link.tagged(value);
-        match value["type"].as_str().unwrap_or_default() {
+        let kind = value["type"].as_str().unwrap_or_default();
+        // Until the UI tells hosts apart (26.18), a remote's message goes no further unless its
+        // link acts on it or it is one of the remote's own terminals' the UI may take: no arm
+        // below ever sees another one (a remote's `file`, `editor_target`, `settings`, …).
+        let shown = frame.channel != 0 && REMOTE_TO_UI.contains(&kind);
+        if remote && !shown && !REMOTE_LINK.contains(&kind) {
+            continue;
+        }
+        match kind {
             // A connection has one handshake: a remote service's second `welcome` is
             // ignored, so it never opens the window for `terminals_kept` again (26.16).
             "welcome" if welcomed => continue,
@@ -2593,8 +2601,10 @@ async fn pump(link: &Mutex<Link>, mut frames: FramedRead<Reader<'_>, FrameCodec>
                 link.welcome = Some(value.clone());
                 // The UI always gets the projects after the handshake.
                 let _ = link.send(0, &Control::ListProjects);
+                // A remote's is its link's state, not the UI's.
                 if remote {
                     remote::welcomed(&mut link);
+                    continue;
                 }
             }
             // A remote's refusal is its link's state (26.17), not the local service's dialog.
@@ -2625,12 +2635,12 @@ async fn pump(link: &Mutex<Link>, mut frames: FramedRead<Reader<'_>, FrameCodec>
                 link.reset(frame.channel, value["offset"].as_u64().unwrap_or_default());
                 continue;
             }
-            // The `hive-file:` scheme's, never the UI's.
+            // The `hive-file:` scheme's, never the UI's; the local service's only.
             "file_range" => {
                 link.range(value);
                 continue;
             }
-            // A remote's `file` never reaches the UI ([`REMOTE_TO_UI`]).
+            // The scheme reads the local service's files only.
             "file" => scheme::with_url(&mut value, cfg!(target_os = "macos")),
             "terminal_opened" => {
                 if let Some(term) = link.terminals.get_mut(&frame.channel) {
@@ -2638,34 +2648,36 @@ async fn pump(link: &Mutex<Link>, mut frames: FramedRead<Reader<'_>, FrameCodec>
                     term.account = value["account"].clone();
                 }
             }
-            // A path the app may open once (`open_path`); never a remote's (26.17): it names a
-            // path on another machine.
-            "editor_target" | "session_located" if !remote => {
+            // A path the app may open once (`open_path`): the local service's only.
+            "editor_target" | "session_located" => {
                 if let Some(path) = value["windows_path"].as_str() {
                     link.approve(path.to_owned(), value["reveal"] == true);
                 }
             }
-            // What quitting asks about, the settings and an uninstall are the local service's.
-            _ if !remote => link.follow(&value),
-            _ => {}
-        }
-        // Until the UI tells hosts apart (26.18), a remote's message reaches it only when it
-        // cannot be taken for the local service's: one of the remote's own terminals'.
-        let kind = value["type"].as_str().unwrap_or_default();
-        if remote && !(frame.channel != 0 && REMOTE_TO_UI.contains(&kind)) {
-            continue;
+            // What quitting asks about, the settings and an uninstall: the local service's only.
+            _ => link.follow(&value),
         }
         link.to_ui(value);
     }
     End::Closed
 }
 
+/// What a remote service's link acts on itself (26.17) and never passes to the UI: its
+/// handshake, its refusal, its kept terminals and their resets.
+const REMOTE_LINK: &[&str] = &[
+    "welcome",
+    "version_mismatch",
+    "terminals_kept",
+    "terminal_reset",
+];
+
 /// The messages a remote service's link passes to the UI (26.17), each on one of its own
 /// terminals' channels, which the UI knows by an id no other link's terminal has. Every other
 /// one (anything on channel 0, an agent's, a notification) the UI would apply as the local
-/// service's, so it is dropped until the UI tells hosts apart (26.18). A remote's `file` must
-/// never come here with the URL the pump gives it: the `hive-file:` scheme reads the local
-/// service's files only.
+/// service's, so it is dropped before the pump acts on it, until the UI tells hosts apart
+/// (26.18). Never add `file` without stripping its `media.url` and never giving it a
+/// `hive-file:` URL (`scheme::with_url` reads the local service's files), nor
+/// `editor_target`/`session_located`, which approve a local path for `open_path`.
 const REMOTE_TO_UI: &[&str] = &[
     "terminal_opened",
     "terminal_exited",

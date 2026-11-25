@@ -403,6 +403,22 @@ fn an_upload_is_checked_before_it_runs_and_renamed_only_once_it_runs() {
 }
 
 #[test]
+fn a_remote_never_gives_the_ui_a_file_or_the_app_a_path_to_open() {
+    // A `file` would get a `hive-file:` URL to the local service's files, and a path to open
+    // would be approved for `open_path` here: neither may ever pass, nor be acted on.
+    let never = ["file", "file_range", "editor_target", "session_located"];
+    for kind in never
+        .iter()
+        .chain(&["settings", "restore_sessions", "welcome"])
+    {
+        assert!(!crate::REMOTE_TO_UI.contains(kind), "{kind}");
+    }
+    for kind in never {
+        assert!(!crate::REMOTE_LINK.contains(&kind), "{kind}");
+    }
+}
+
+#[test]
 fn a_host_without_sha256sum_cannot_be_installed_on() {
     let lab = Lab::new("no-sha256sum");
     // The tools the upload needs, and no `sha256sum`.
@@ -1158,6 +1174,7 @@ async fn the_local_settings_link_the_hosts_and_requests_go_to_each_host_s_link()
         json!({"type": "projects", "projects": []}),
         json!({"type": "error", "message": "spoofed"}),
         json!({"type": "editor_target", "worktree": "/r", "path": "a", "windows_path": "/etc/passwd", "reveal": false}),
+        json!({"type": "session_located", "id": "a", "target": "log", "windows_path": "/etc/hosts", "error": null}),
         json!({"type": "file", "worktree": "/r", "path": "a.html", "media": media}),
     ];
     for message in &dropped {
@@ -1168,9 +1185,12 @@ async fn the_local_settings_link_the_hosts_and_requests_go_to_each_host_s_link()
         channel: 2,
         payload: message.to_string().into_bytes().into(),
     };
+    // On its terminal's channel too: no agent's, no notification, no file or path to open.
     let agent = json!({"type": "agent_state", "id": "a", "state": "working"});
     let notification = json!({"type": "terminal_notification", "title": "t", "body": "b"});
-    for message in [agent, notification] {
+    let mut on_its_terminal = vec![agent, notification];
+    on_its_terminal.extend(dropped.iter().skip(dropped.len() - 3).cloned());
+    for message in on_its_terminal {
         remote.writer.send(on_terminal(message)).await.unwrap();
     }
     // One of its own terminal's does reach it, with the host: the first the UI gets.
@@ -1184,11 +1204,10 @@ async fn the_local_settings_link_the_hosts_and_requests_go_to_each_host_s_link()
         got,
         json!({"type": "badge", "text": "ok", "channel": 2, "host": "gpu"})
     );
-    let unasked = "Hive opens only a path the service sent: /etc/passwd";
-    assert_eq!(
-        hive.open_path("/etc/passwd".into(), false),
-        Err(unasked.into())
-    );
+    for path in ["/etc/passwd", "/etc/hosts"] {
+        let unasked = format!("Hive opens only a path the service sent: {path}");
+        assert_eq!(hive.open_path(path.into(), false), Err(unasked));
+    }
     let gpu = hive.on(Some("gpu")).unwrap().link;
     assert!(lock(&gpu).approved.is_empty() && lock(&gpu).at_risk.is_empty());
     // The remote's `settings` started no link to `evil`.
