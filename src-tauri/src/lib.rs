@@ -2630,8 +2630,8 @@ async fn pump(link: &Mutex<Link>, mut frames: FramedRead<Reader<'_>, FrameCodec>
                 link.range(value);
                 continue;
             }
-            // The scheme reads the local service's files only.
-            "file" if !remote => scheme::with_url(&mut value, cfg!(target_os = "macos")),
+            // A remote's `file` never reaches the UI ([`REMOTE_TO_UI`]).
+            "file" => scheme::with_url(&mut value, cfg!(target_os = "macos")),
             "terminal_opened" => {
                 if let Some(term) = link.terminals.get_mut(&frame.channel) {
                     term.worktree = value["worktree"].clone();
@@ -2663,7 +2663,9 @@ async fn pump(link: &Mutex<Link>, mut frames: FramedRead<Reader<'_>, FrameCodec>
 /// The messages a remote service's link passes to the UI (26.17), each on one of its own
 /// terminals' channels, which the UI knows by an id no other link's terminal has. Every other
 /// one (anything on channel 0, an agent's, a notification) the UI would apply as the local
-/// service's, so it is dropped until the UI tells hosts apart (26.18).
+/// service's, so it is dropped until the UI tells hosts apart (26.18). A remote's `file` must
+/// never come here with the URL the pump gives it: the `hive-file:` scheme reads the local
+/// service's files only.
 const REMOTE_TO_UI: &[&str] = &[
     "terminal_opened",
     "terminal_exited",
