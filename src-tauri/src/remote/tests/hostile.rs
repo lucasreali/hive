@@ -82,8 +82,19 @@ async fn a_remote_past_a_cap_is_dropped_with_why_a_broken_stream_retried() {
         let mut service = Service::accept(&listener).await;
         service.welcome(60).await;
         until(&mut rx, "connected").await;
-        // The link may close before all of it is written.
-        let _ = service.writer.get_mut().write_all(&bad).await;
+        // Sent again and again until the link closes: a flood stays a flood however slowly a
+        // loaded machine reads it.
+        let Service {
+            mut reader,
+            mut writer,
+        } = service;
+        tokio::spawn(async move {
+            for _ in 0..1000 {
+                if writer.get_mut().write_all(&bad).await.is_err() {
+                    break;
+                }
+            }
+        });
         let seen = until(&mut rx, state).await;
         assert_eq!(states(&seen), [state], "{reason}");
         let ended = seen.last().unwrap();
@@ -95,7 +106,7 @@ async fn a_remote_past_a_cap_is_dropped_with_why_a_broken_stream_retried() {
             assert_eq!(ended["kind"], "limit");
         }
         // Its `ssh` is gone.
-        let closed = async { while service.reader.next().await.is_some() {} };
+        let closed = async { while reader.next().await.is_some() {} };
         tokio::time::timeout(WAIT, closed).await.unwrap();
         remotes.end();
     }
