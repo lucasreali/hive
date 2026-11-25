@@ -3,11 +3,15 @@
 //! link is dropped and the UI told why (`host_link` `disconnected`, kind `limit`); its text is
 //! clipped before anything reads it.
 //!
-//! - **Messages:** at most [`RATE`] control or data frames a second.
+//! - **Messages:** at most [`RATE`] control or data frames, and [`RATE_BYTES`] bytes of them, a
+//!   second; at most [`ALERTS`] that would show an OS notification in [`ALERT_WINDOW`]. One the
+//!   UI takes is read as its type ([`typed`]): a field of another type ends the link, an
+//!   unknown one is dropped.
 //! - **Lists:** at most [`PROJECTS`] projects, [`SESSIONS`] sessions, and [`LIST`] items in any
 //!   other list of a message.
 //! - **Terminal output:** at most [`UNACKED`] bytes of one terminal's output the UI has not
-//!   acknowledged (9.19): the service stops at 512 KiB and a read.
+//!   acknowledged (9.19), the service stopping at 512 KiB and a read, and [`LINK_UNACKED`] of
+//!   all of a link's terminals.
 //! - **Queue:** at most [`QUEUE_FRAMES`] frames, or [`QUEUE_BYTES`] bytes, waiting to be written
 //!   to a remote that stopped reading them.
 //! - **Text:** titles, badges, errors and the like ([`CLIPPED`]) cut at [`TEXT`] characters.
@@ -18,12 +22,18 @@
 use std::sync::atomic::{AtomicUsize, Ordering::SeqCst};
 use std::time::{Duration, Instant};
 
+use hive_protocol::Control;
 use serde_json::Value;
 use tokio::sync::Notify;
 
 /// The most control and data frames a remote sends in [`RATE_WINDOW`].
 pub(crate) const RATE: usize = 1000;
 const RATE_WINDOW: Duration = Duration::from_secs(1);
+/// The most bytes of control and data frames a remote sends in [`RATE_WINDOW`].
+pub(crate) const RATE_BYTES: usize = 16 << 20;
+/// The most messages that show an OS notification a remote sends in [`ALERT_WINDOW`].
+pub(crate) const ALERTS: usize = 20;
+const ALERT_WINDOW: Duration = Duration::from_secs(10);
 /// The most projects a remote's `projects` lists.
 pub(crate) const PROJECTS: usize = 1000;
 /// The most sessions a remote's `sessions` lists (its service sends at most 500).
@@ -33,6 +43,8 @@ pub(crate) const SESSIONS: usize = 1000;
 pub(crate) const LIST: usize = 50_000;
 /// The most bytes of one remote terminal's output the UI has not acknowledged.
 pub(crate) const UNACKED: u64 = 16 << 20;
+/// The most bytes of all of a remote link's terminals' output the UI has not acknowledged.
+pub(crate) const LINK_UNACKED: u64 = 64 << 20;
 /// The most frames, and bytes, waiting to be written to a remote.
 pub(crate) const QUEUE_FRAMES: usize = 1024;
 pub(crate) const QUEUE_BYTES: usize = 64 << 20;
@@ -53,25 +65,80 @@ const CLIPPED_IN: &[(&str, &str)] = &[("terminal_notification", "body")];
 /// Why the link was dropped once its remote stopped reading what the app sends.
 pub(crate) const QUEUE_FULL: &str = "stopped reading what the app sends";
 
-/// Counts a remote's frames: more than [`RATE`] in a [`RATE_WINDOW`] is a flood.
+/// A count over a time window: it starts again at the first count past the window.
+#[derive(Debug, Default)]
+struct Window {
+    start: Option<Instant>,
+    total: usize,
+}
+
+impl Window {
+    /// Adds `n` at `now` to a window `span` long; the total in it.
+    fn add(&mut self, now: Instant, span: Duration, n: usize) -> usize {
+        match self.start {
+            Some(start) if now.duration_since(start) < span => {
+                self.total = self.total.saturating_add(n);
+            }
+            _ => (self.start, self.total) = (Some(now), n),
+        }
+        self.total
+    }
+}
+
+/// Counts a remote's frames, their bytes and its notifications: more than [`RATE`] frames or
+/// [`RATE_BYTES`] bytes in a [`RATE_WINDOW`], or more than [`ALERTS`] in an [`ALERT_WINDOW`],
+/// is a flood.
 #[derive(Debug, Default)]
 pub(crate) struct Rate {
-    start: Option<Instant>,
-    count: usize,
+    frames: Window,
+    bytes: Window,
+    alerts: Window,
 }
 
 impl Rate {
-    /// One frame read at `now`; an error once there were too many.
-    pub(crate) fn count(&mut self, now: Instant) -> Result<(), String> {
-        match self.start {
-            Some(start) if now.duration_since(start) < RATE_WINDOW => self.count += 1,
-            _ => (self.start, self.count) = (Some(now), 1),
-        }
-        if self.count > RATE {
+    /// One frame of `len` bytes read at `now`; an error once there were too many.
+    pub(crate) fn count(&mut self, now: Instant, len: usize) -> Result<(), String> {
+        if self.frames.add(now, RATE_WINDOW, 1) > RATE {
             return Err(format!("sent more than {RATE} messages in a second"));
+        }
+        if self.bytes.add(now, RATE_WINDOW, len) > RATE_BYTES {
+            return Err("sent more than 16 MiB of messages in a second".to_owned());
         }
         Ok(())
     }
+
+    /// `message`, read at `now`, would show an OS notification ([`alerting`]); an error once
+    /// there were too many.
+    pub(crate) fn alert(&mut self, now: Instant, message: &Value) -> Result<(), String> {
+        let n = usize::from(alerting(message));
+        if self.alerts.add(now, ALERT_WINDOW, n) > ALERTS {
+            return Err(format!(
+                "sent more than {ALERTS} notifications in 10 seconds"
+            ));
+        }
+        Ok(())
+    }
+}
+
+/// Whether the UI shows an OS notification for `message` (`src/notify.ts`): a command that
+/// finished, a program's notification, a usage alert, or an agent's state that says `notify`.
+pub(crate) fn alerting(message: &Value) -> bool {
+    let kind = message["type"].as_str().unwrap_or_default();
+    let always = ["command_finished", "terminal_notification", "usage_alert"];
+    always.contains(&kind) || message["notify"] == true
+}
+
+/// A remote's `message` for the UI as its own type would write it (`Control`): a field of
+/// another type is an error, an unknown field is dropped. Its `channel` and `host` are kept.
+pub(crate) fn typed(message: Value) -> Result<Value, String> {
+    let kind = message["type"].as_str().unwrap_or_default().to_owned();
+    let (channel, host) = (message["channel"].clone(), message["host"].clone());
+    let control = serde_json::from_value::<Control>(message);
+    let control = control.map_err(|_| format!("sent a {kind} the app cannot read"))?;
+    let mut typed = serde_json::to_value(control).unwrap_or_default();
+    typed["channel"] = channel;
+    typed["host"] = host;
+    Ok(typed)
 }
 
 /// The frames a connection's writer has not written yet; capped on a remote's link
@@ -112,10 +179,12 @@ impl Queue {
     }
 }
 
-/// Why a remote terminal's output that the UI has not acknowledged, `unacked` bytes, drops the
-/// link: `None` while it is within [`UNACKED`].
-pub(crate) fn unacked(unacked: u64) -> Option<String> {
-    (unacked > UNACKED).then(|| "sent more terminal output than the app could show".to_owned())
+/// Why a remote terminal's output that the UI has not acknowledged, `unacked` bytes of it and
+/// `all` of its link's terminals, drops the link: `None` while within [`UNACKED`] and
+/// [`LINK_UNACKED`].
+pub(crate) fn unacked(unacked: u64, all: u64) -> Option<String> {
+    let over = unacked > UNACKED || all > LINK_UNACKED;
+    over.then(|| "sent more terminal output than the app could show".to_owned())
 }
 
 /// Checks a remote's control `message` against the list caps, then clips its text.

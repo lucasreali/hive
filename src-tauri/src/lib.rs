@@ -566,6 +566,10 @@ pub fn identified_notifier(
 }
 
 /// The text without control characters, which a Windows toast's XML refuses.
+/// The most characters of an OS notification's title and body (26.19).
+const NOTIFICATION_TITLE: usize = 256;
+const NOTIFICATION_BODY: usize = 1024;
+
 fn printable(text: &str) -> String {
     text.chars().filter(|c| !c.is_control()).collect()
 }
@@ -811,11 +815,11 @@ const URL_SHOWN: usize = 200;
 /// terminal (`markdown`, #43, 8.20) may also be `http://`, or a `mailto:` address, its query
 /// (a prefilled body, an `attach=`) dropped. Never `file:`, `javascript:` or another scheme.
 pub fn openable(url: &str, markdown: bool) -> Option<String> {
+    // An `http(s)` URL always has a host (the parser refuses one without).
     let url = tauri::Url::parse(url.trim()).ok()?;
-    let web = url.host_str().is_some_and(|host| !host.is_empty());
     match url.scheme() {
-        "https" if web => Some(url.into()),
-        "http" if web && markdown => Some(url.into()),
+        "https" => Some(url.into()),
+        "http" if markdown => Some(url.into()),
         "mailto" if markdown => Some(format!("mailto:{}", url.path())),
         _ => None,
     }
@@ -1343,7 +1347,10 @@ impl Hive {
             bring_up(&app);
             lock(&link).to_ui(json!({"type": "notification_clicked", "agent": agent}));
         };
-        notify(&printable(title), &printable(body), Box::new(click))
+        // Cut whatever the UI passes on, a remote's text included (26.19).
+        let cut = |text: &str, most: usize| printable(text).chars().take(most).collect::<String>();
+        let (title, body) = (cut(title, NOTIFICATION_TITLE), cut(body, NOTIFICATION_BODY));
+        notify(&title, &body, Box::new(click))
     }
 
     /// Asks the OS with `check` whether Hive may show notifications (17.19).
@@ -2622,7 +2629,7 @@ async fn pump(link: &Mutex<Link>, mut frames: FramedRead<Reader<'_>, FrameCodec>
         };
         // Terminal output is capped by what the UI acknowledged, below.
         if remote && frame.kind != FrameType::Terminal {
-            if let Err(why) = rate.count(Instant::now()) {
+            if let Err(why) = rate.count(Instant::now(), frame.payload.len()) {
                 return End::Limit(why);
             }
         }
@@ -2643,21 +2650,26 @@ async fn pump(link: &Mutex<Link>, mut frames: FramedRead<Reader<'_>, FrameCodec>
             for (channel, bytes) in joined {
                 // Counted only once sent to a UI: a terminal waiting for one is replayed from
                 // what it got.
-                if let Some(Term {
+                let Some(Term {
                     output: Some(output),
                     received,
                     unacked,
                     ..
                 }) = link.terminals.get_mut(&channel)
-                {
-                    *received = received.saturating_add(bytes.len() as u64);
-                    *unacked = unacked.saturating_add(bytes.len() as u64);
-                    // A remote that ignores the UI's pace (9.19) is dropped (26.19).
-                    if let Some(why) = limits::unacked(*unacked).filter(|_| remote) {
-                        return End::Limit(why);
-                    }
-                    let _ = output.send(InvokeResponseBody::Raw(bytes));
+                else {
+                    continue;
+                };
+                *received = received.saturating_add(bytes.len() as u64);
+                *unacked = unacked.saturating_add(bytes.len() as u64);
+                let (output, one) = (output.clone(), *unacked);
+                // A remote that ignores the UI's pace (9.19) is dropped (26.19), one terminal's
+                // or all of its terminals' output.
+                let all = link.terminals.values().map(|term| term.unacked);
+                let all = all.fold(0, u64::saturating_add);
+                if let Some(why) = limits::unacked(one, all).filter(|_| remote) {
+                    return End::Limit(why);
                 }
+                let _ = output.send(InvokeResponseBody::Raw(bytes));
             }
             continue;
         }
@@ -2690,13 +2702,26 @@ async fn pump(link: &Mutex<Link>, mut frames: FramedRead<Reader<'_>, FrameCodec>
         };
         value["channel"] = ui.into();
         value = link.tagged(value);
-        let kind = value["type"].as_str().unwrap_or_default();
+        let kind = value["type"].as_str().unwrap_or_default().to_owned();
+        let kind = kind.as_str();
         // Until the UI tells hosts apart (26.18), a remote's message goes no further unless its
         // link acts on it or it is one of the remote's own terminals' the UI may take: no arm
         // below ever sees another one (a remote's `file`, `editor_target`, `settings`, …).
         let shown = frame.channel != 0 && REMOTE_TO_UI.contains(&kind);
         if remote && !shown && !REMOTE_LINK.contains(&kind) {
             continue;
+        }
+        // What the UI takes of a remote is read as its type, and its notifications are
+        // counted (26.19).
+        if remote && shown {
+            let checked = limits::typed(value).and_then(|typed| {
+                rate.alert(Instant::now(), &typed)?;
+                Ok(typed)
+            });
+            match checked {
+                Ok(typed) => value = typed,
+                Err(why) => return End::Limit(why),
+            }
         }
         match kind {
             // A connection has one handshake: a remote service's second `welcome` is
@@ -2749,7 +2774,16 @@ async fn pump(link: &Mutex<Link>, mut frames: FramedRead<Reader<'_>, FrameCodec>
                 continue;
             }
             // The scheme reads the local service's files only.
-            "file" => scheme::with_url(&mut value, cfg!(target_os = "macos")),
+            // The scheme reads the local service's files only: a remote's (should the allowlist
+            // let one through) keeps no URL, not even one it wrote (26.19).
+            "file" => {
+                if let Some(media) = value["media"].as_object_mut() {
+                    media.remove("url");
+                }
+                if !remote {
+                    scheme::with_url(&mut value, cfg!(target_os = "macos"));
+                }
+            }
             "terminal_opened" => {
                 if let Some(term) = link.terminals.get_mut(&frame.channel) {
                     term.worktree = value["worktree"].clone();

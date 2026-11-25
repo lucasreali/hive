@@ -3160,6 +3160,12 @@ fn a_notification_click_names_its_agent_to_the_ui_with_or_without_the_window() {
         rx.try_recv().is_err(),
         "nothing goes to the UI before the click"
     );
+    // A title past 256 characters and a body past 1024 are cut (26.19: a remote's text).
+    let (long_title, long_body) = ("t".repeat(257), "b".repeat(1025));
+    let args = json!({"title": long_title, "body": long_body, "agent": "a2"});
+    assert_eq!(invoke(&webview, "show_notification", args), Ok(Value::Null));
+    let (title, body, _) = shown.try_recv().unwrap();
+    assert_eq!((title, body), ("t".repeat(256), "b".repeat(1024)));
     // The window comes up too; the mock runtime keeps no window state to check it with.
     click();
     let clicked = json!({"type": "notification_clicked", "agent": "a1"});
@@ -3741,6 +3747,33 @@ fn the_privacy_settings_open_at_their_panes_and_nowhere_else() {
         refused.open_privacy_settings("screen_recording"),
         Err("no handler".into())
     );
+}
+
+#[tokio::test]
+async fn the_local_service_has_no_caps_and_its_file_gets_only_the_app_s_url() {
+    let (_hive, mut service, mut rx) = welcomed().await;
+    // More messages in a second than a remote may send (26.19): all reach the UI.
+    let nonsense = Frame {
+        kind: FrameType::Control,
+        channel: 0,
+        payload: br#"{"type":"nonsense"}"#.to_vec().into(),
+    };
+    for _ in 0..1500 {
+        service.writer.send(nonsense.clone()).await.unwrap();
+    }
+    for _ in 0..1500 {
+        assert_eq!(next(&mut rx).await["type"], "nonsense");
+    }
+    // A `media.url` the service wrote is dropped; the app gives one only with a token.
+    let file = br#"{"type":"file","worktree":"/w","path":"a.png","media":{"mime":"image/png","url":"https://evil.example/"}}"#;
+    let frame = Frame {
+        kind: FrameType::Control,
+        channel: 0,
+        payload: file.to_vec().into(),
+    };
+    service.writer.send(frame).await.unwrap();
+    let got = next(&mut rx).await;
+    assert_eq!(got["media"], json!({"mime": "image/png"}));
 }
 
 #[test]

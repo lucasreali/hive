@@ -38,6 +38,8 @@ async fn a_remote_past_a_cap_is_dropped_with_why_a_broken_stream_retried() {
     let flood = encoded((0..3 * crate::limits::RATE).map(|_| raw(&nonsense)));
     let projects = json!({"type": "projects", "projects": vec![0; 1001]});
     let files = json!({"type": "files", "files": vec![0; 50_001]});
+    let pad = "p".repeat(hive_protocol::MAX_PAYLOAD - 64);
+    let heavy = encoded((0..5).map(|_| raw(&json!({"type": "nonsense", "pad": pad}))));
     let cases = [
         (
             header(0, hive_protocol::MAX_PAYLOAD + 1),
@@ -63,6 +65,11 @@ async fn a_remote_past_a_cap_is_dropped_with_why_a_broken_stream_retried() {
             encoded([raw(&files)]),
             "disconnected",
             "Hive dropped the link to gpu: it sent a list of 50001 items, over the 50000 the app takes.",
+        ),
+        (
+            heavy,
+            "disconnected",
+            "Hive dropped the link to gpu: it sent more than 16 MiB of messages in a second.",
         ),
     ];
     for (bad, state, reason) in cases {
@@ -95,7 +102,7 @@ async fn a_remote_past_a_cap_is_dropped_with_why_a_broken_stream_retried() {
 
 /// A `Hive` whose local service links it to the host `gpu`, connected: the app, the local and
 /// the remote test services, and the UI's messages.
-async fn gpu(
+async fn to_gpu(
     lab: &Lab,
 ) -> (
     Hive,
@@ -119,7 +126,7 @@ async fn gpu(
 #[tokio::test]
 async fn a_remote_names_no_path_or_url_the_app_opens_and_its_text_is_clipped() {
     let lab = Lab::new("names");
-    let (hive, _local, mut remote, mut rx) = gpu(&lab).await;
+    let (hive, _local, mut remote, mut rx) = to_gpu(&lab).await;
     let gpu = hive.on(Some("gpu")).unwrap();
     let id = gpu.open_terminal("/w".into(), 80, 24, None, output().0);
     assert_eq!(id, Ok(1));
@@ -191,7 +198,7 @@ async fn shown(bytes: &mut mpsc::UnboundedReceiver<Vec<u8>>, want: usize) -> usi
 #[tokio::test]
 async fn a_remote_terminal_s_output_flows_at_the_ui_s_pace_and_no_faster() {
     let lab = Lab::new("pace");
-    let (hive, _local, mut remote, mut rx) = gpu(&lab).await;
+    let (hive, _local, mut remote, mut rx) = to_gpu(&lab).await;
     let gpu = hive.on(Some("gpu")).unwrap();
     let (out, mut bytes) = output();
     assert_eq!(gpu.open_terminal("/w".into(), 80, 24, None, out), Ok(1));
@@ -233,7 +240,7 @@ async fn a_remote_terminal_s_output_flows_at_the_ui_s_pace_and_no_faster() {
 #[tokio::test]
 async fn a_remote_that_stops_reading_is_dropped_before_the_queue_grows() {
     let lab = Lab::new("queue");
-    let (hive, _local, mut remote, mut rx) = gpu(&lab).await;
+    let (hive, _local, mut remote, mut rx) = to_gpu(&lab).await;
     let gpu = hive.on(Some("gpu")).unwrap();
     assert_eq!(
         gpu.open_terminal("/w".into(), 80, 24, None, output().0),
@@ -256,5 +263,83 @@ async fn a_remote_that_stops_reading_is_dropped_before_the_queue_grows() {
         (&json!("limit"), &json!(reason))
     );
     assert!(lock(&gpu.link).frames.is_none());
+    hive.remotes().unwrap().end();
+}
+
+#[tokio::test]
+async fn what_the_ui_takes_of_a_remote_is_read_as_its_type_and_its_notifications_counted() {
+    let lab = Lab::new("typed");
+    let (hive, _local, mut remote, mut rx) = to_gpu(&lab).await;
+    let gpu = hive.on(Some("gpu")).unwrap();
+    assert_eq!(
+        gpu.open_terminal("/w".into(), 80, 24, None, output().0),
+        Ok(1)
+    );
+    assert_eq!(remote.control().await.0, 1);
+    // A field the type has not is dropped.
+    let padded = json!({"type": "badge", "text": "ok", "pad": "p".repeat(1000)});
+    remote.writer.send(on(1, &padded)).await.unwrap();
+    let got = next_of(&mut rx, "badge").await;
+    assert_eq!(
+        got,
+        json!({"type": "badge", "text": "ok", "channel": 1, "host": "gpu"})
+    );
+    // Up to 20 notifications in 10 seconds reach the UI; the next ends the link.
+    let finished = json!({"type": "command_finished", "exit": 1, "secs": 60});
+    for _ in 0..crate::limits::ALERTS {
+        remote.writer.send(on(1, &finished)).await.unwrap();
+        next_of(&mut rx, "command_finished").await;
+    }
+    remote.writer.send(on(1, &finished)).await.unwrap();
+    let seen = until(&mut rx, "disconnected").await;
+    assert!(
+        seen.iter().all(|m| m["type"] != "command_finished"),
+        "{seen:?}"
+    );
+    let reason = "Hive dropped the link to gpu: it sent more than 20 notifications in 10 seconds.";
+    assert_eq!(seen.last().unwrap()["reason"], reason);
+    hive.remotes().unwrap().end();
+    // A field of another type (an object React cannot show) ends the link.
+    let lab = Lab::new("typed-wrong");
+    let (hive, _local, mut remote, mut rx) = to_gpu(&lab).await;
+    let gpu = hive.on(Some("gpu")).unwrap();
+    assert_eq!(
+        gpu.open_terminal("/w".into(), 80, 24, None, output().0),
+        Ok(1)
+    );
+    assert_eq!(remote.control().await.0, 1);
+    let wrong = json!({"type": "badge", "text": {"x": 1}});
+    remote.writer.send(on(1, &wrong)).await.unwrap();
+    let seen = until(&mut rx, "disconnected").await;
+    assert!(seen.iter().all(|m| m["type"] != "badge"), "{seen:?}");
+    let stopped = seen.last().unwrap();
+    let reason = "Hive dropped the link to gpu: it sent a badge the app cannot read.";
+    assert_eq!(
+        (&stopped["kind"], &stopped["reason"]),
+        (&json!("limit"), &json!(reason))
+    );
+    hive.remotes().unwrap().end();
+}
+
+#[tokio::test]
+async fn all_of_a_remote_s_terminals_together_flow_no_faster_than_the_ui() {
+    let lab = Lab::new("pace-all");
+    let (hive, _local, mut remote, mut rx) = to_gpu(&lab).await;
+    let gpu = hive.on(Some("gpu")).unwrap();
+    // Six terminals of 12 MiB each, under each one's cap: past 64 MiB of them all, the link ends.
+    for id in 1..=6 {
+        let opened = gpu.open_terminal("/w".into(), 80, 24, None, output().0);
+        assert_eq!(opened, Ok(id));
+        assert_eq!(remote.control().await.0, id);
+    }
+    let chunk = vec![b'y'; hive_protocol::MAX_PAYLOAD];
+    let frames = (1..=6).flat_map(|id| (0..3).map(move |_| id));
+    let all = encoded(frames.map(|id| Frame::terminal(id, chunk.clone())));
+    // The link may close before all of it is written.
+    let _ = remote.writer.get_mut().write_all(&all).await;
+    let seen = until(&mut rx, "disconnected").await;
+    let reason =
+        "Hive dropped the link to gpu: it sent more terminal output than the app could show.";
+    assert_eq!(seen.last().unwrap()["reason"], reason);
     hive.remotes().unwrap().end();
 }

@@ -8,20 +8,75 @@ fn more_than_the_rate_in_a_second_is_a_flood() {
     let mut rate = Rate::default();
     let start = Instant::now();
     for _ in 0..RATE {
-        assert_eq!(rate.count(start), Ok(()));
+        assert_eq!(rate.count(start, 0), Ok(()));
     }
     let flood = Err("sent more than 1000 messages in a second".to_owned());
-    assert_eq!(rate.count(start + Duration::from_millis(999)), flood);
+    assert_eq!(rate.count(start + Duration::from_millis(999), 0), flood);
     // A new second counts from one again: the last one's frames are gone.
     let mut rate = Rate::default();
     for _ in 0..RATE {
-        rate.count(start).unwrap();
+        rate.count(start, 0).unwrap();
     }
-    assert_eq!(rate.count(start + RATE_WINDOW), Ok(()));
+    assert_eq!(rate.count(start + RATE_WINDOW, 0), Ok(()));
     for _ in 1..RATE {
-        rate.count(start + RATE_WINDOW).unwrap();
+        rate.count(start + RATE_WINDOW, 0).unwrap();
     }
-    assert!(rate.count(start + RATE_WINDOW).is_err());
+    assert!(rate.count(start + RATE_WINDOW, 0).is_err());
+    // Bytes too: 16 MiB a second.
+    let mut rate = Rate::default();
+    let bytes = Err("sent more than 16 MiB of messages in a second".to_owned());
+    assert_eq!(rate.count(start, RATE_BYTES - 1), Ok(()));
+    assert_eq!(rate.count(start, 1), Ok(()));
+    assert_eq!(rate.count(start, 1), bytes);
+    assert_eq!(rate.count(start + RATE_WINDOW, RATE_BYTES), Ok(()));
+    assert_eq!(RATE_BYTES, 16 * 1024 * 1024);
+}
+
+#[test]
+fn more_than_20_notifications_in_10_seconds_is_a_flood() {
+    let mut rate = Rate::default();
+    let start = Instant::now();
+    let finished = json!({"type": "command_finished", "exit": 1, "secs": 60});
+    let badge = json!({"type": "badge", "text": "b"});
+    for _ in 0..ALERTS {
+        assert_eq!(rate.alert(start, &finished), Ok(()));
+        assert_eq!(rate.alert(start, &badge), Ok(()));
+    }
+    let flood = Err("sent more than 20 notifications in 10 seconds".to_owned());
+    let late = start + ALERT_WINDOW - Duration::from_millis(1);
+    assert_eq!(rate.alert(late, &finished), flood);
+    assert_eq!(rate.alert(start + ALERT_WINDOW, &finished), Ok(()));
+    let alerting_ones = [
+        finished,
+        json!({"type": "terminal_notification", "title": "t", "body": "b", "notify": false}),
+        json!({"type": "usage_alert"}),
+        json!({"type": "agent_state", "notify": true}),
+    ];
+    assert!(alerting_ones.iter().all(alerting));
+    let quiet = [badge, json!({"type": "agent_state", "notify": false})];
+    assert!(!quiet.iter().any(alerting));
+}
+
+#[test]
+fn what_the_ui_takes_of_a_remote_is_read_as_its_type() {
+    let padded = json!({"type": "badge", "text": "ok", "pad": "x", "channel": 2, "host": "gpu"});
+    let read = typed(padded);
+    let want = json!({"type": "badge", "text": "ok", "channel": 2, "host": "gpu"});
+    assert_eq!(read, Ok(want));
+    let wrong = [
+        (json!({"type": "badge", "text": {"x": 1}}), "badge"),
+        (json!({"type": "error", "message": {}}), "error"),
+        (
+            json!({"type": "command_finished", "exit": "1) Hive:", "secs": 1}),
+            "command_finished",
+        ),
+    ];
+    for (message, kind) in wrong {
+        assert_eq!(
+            typed(message),
+            Err(format!("sent a {kind} the app cannot read"))
+        );
+    }
 }
 
 #[test]
@@ -65,12 +120,11 @@ async fn a_full_queue_wakes_its_link() {
 
 #[test]
 fn terminal_output_past_what_the_ui_acknowledged_is_a_limit() {
-    assert_eq!(unacked(UNACKED), None);
-    assert_eq!(
-        unacked(UNACKED + 1),
-        Some("sent more terminal output than the app could show".into())
-    );
-    assert_eq!(UNACKED, 16 * 1024 * 1024);
+    let over = Some("sent more terminal output than the app could show".to_owned());
+    assert_eq!(unacked(UNACKED, LINK_UNACKED), None);
+    assert_eq!(unacked(UNACKED + 1, 0), over);
+    assert_eq!(unacked(0, LINK_UNACKED + 1), over);
+    assert_eq!((UNACKED, LINK_UNACKED), (16 << 20, 64 << 20));
 }
 
 /// A message of `kind` whose `field` is a list of `len` numbers.
