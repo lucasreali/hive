@@ -1071,8 +1071,11 @@ impl Link {
                         break;
                     };
                     let mut term = Term::new(ui, None, kept.cwd);
-                    term.worktree = kept.worktree.into();
-                    term.account = kept.account.into();
+                    // A remote's worktree and account would place its tab as a local one's.
+                    if self.host.is_none() {
+                        term.worktree = kept.worktree.into();
+                        term.account = kept.account.into();
+                    }
                     let (cwd, worktree, account) = (&term.cwd, &term.worktree, &term.account);
                     let message = json!({"type": "terminal_kept", "channel": ui, "cwd": cwd, "worktree": worktree, "account": account});
                     self.to_ui(self.tagged(message));
@@ -2643,6 +2646,12 @@ async fn pump(link: &Mutex<Link>, mut frames: FramedRead<Reader<'_>, FrameCodec>
             // The scheme reads the local service's files only.
             "file" => scheme::with_url(&mut value, cfg!(target_os = "macos")),
             "terminal_opened" => {
+                // Until the UI tells hosts apart (26.18), a remote's worktree and account would
+                // put its tab under a local worktree and name it as a local one.
+                if remote {
+                    value["worktree"] = Value::Null;
+                    value["account"] = Value::Null;
+                }
                 if let Some(term) = link.terminals.get_mut(&frame.channel) {
                     term.worktree = value["worktree"].clone();
                     term.account = value["account"].clone();
