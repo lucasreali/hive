@@ -622,6 +622,21 @@ label:has(> input[type="checkbox"]:disabled) {
   padding: 4px 0;
 }
 
+/* The shown host's link is down (26.18): its last tree, dimmed, under a note with Reconnect. */
+.sidebar-tree[data-dimmed] {
+  opacity: 0.5;
+}
+
+.host-down {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 12px;
+  border-bottom: 1px solid var(--border-subtle);
+  color: var(--text-2);
+}
+
 /* Terminal area */
 .terminals {
   flex: 1;
@@ -1524,6 +1539,31 @@ div.media-view {
 .connection-state,
 .app-version {
   color: var(--text-3);
+}
+
+/* A remote host's link (26.18): its name, its state and, while it is down, its action. */
+.host-chip {
+  margin-left: 12px;
+  min-width: 0;
+}
+
+.host-chip .connection-state {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 320px;
+}
+
+.connection[data-status="connecting"] .connection-dot,
+.connection[data-status="installing"] .connection-dot,
+.connection[data-status="reconnecting"] .connection-dot {
+  background: var(--state-permission);
+}
+
+.host-action {
+  padding: 0 6px;
+  height: 18px;
+  font-size: inherit;
 }
 
 /* The service still uses the folders of Hive before 22.1. */
@@ -3868,6 +3908,25 @@ fieldset.new-account {
 }
 
 /* Where a tab dragged onto the terminals lands (20.5): the pane, or the half, it would take. */
+/* Over a down host's terminals (26.18): they keep their buffers and take no input. */
+.host-overlay {
+  position: absolute;
+  z-index: 3;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: color-mix(in srgb, var(--bg) 70%, transparent);
+  color: var(--text);
+}
+
+.host-overlay span {
+  padding: 8px 14px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+}
+
 .pane-drop {
   position: absolute;
   z-index: 2;

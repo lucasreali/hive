@@ -3,6 +3,7 @@ import { version } from "../../package.json";
 import { type Connection, currentSpace, openModal, spaceAccount, useHive } from "../store";
 import { usageLines } from "../usage";
 import { isMac } from "../window";
+import { HostChips } from "./Hosts";
 import { loggedIn, useClaudeLogins, useLogIn } from "./SettingsDialog";
 
 const LABEL: Record<Connection["status"], string> = {
@@ -79,6 +80,7 @@ export function StatusBar() {
         <span>{place}</span>
         <span className="connection-state">{LABEL[connection.status]}</span>
       </div>
+      <HostChips />
       {warning ? (
         <span className="folder-warning" title={warning}>
           Old folders in use

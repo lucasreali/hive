@@ -9,6 +9,7 @@ import {
   useSyncExternalStore,
 } from "react";
 import { useShallow } from "zustand/react/shallow";
+import { spaceLabel } from "../hosts";
 import type {
   Agent,
   AgentState,
@@ -23,7 +24,11 @@ import { useReorder } from "../reorder";
 import {
   accountLine,
   activateTab,
+  type HiveState,
+  hostView,
   inAgentOrder,
+  knownHosts,
+  linkDown,
   mostUrgent,
   moveAgent,
   muted,
@@ -31,6 +36,7 @@ import {
   openModal,
   openProjectMenu,
   select,
+  showHost,
   spaceProjects,
   stepAgent,
   toggleCollapsed,
@@ -40,6 +46,7 @@ import { openClaude, showOpenFailure } from "../terminals";
 import { transport } from "../transport";
 import { Select } from "../ui/Select";
 import { keyText } from "../window";
+import { HostDown } from "./Hosts";
 import {
   BranchIcon,
   ChevronIcon,
@@ -88,6 +95,8 @@ function Rollup({ agents }: { agents: (a: Agent) => boolean }) {
 export function Sidebar() {
   const all = useHive(useShallow(spaceProjects));
   const width = useHive((s) => s.sidebarWidth);
+  // The shown host's link is down (26.18): its last tree, dimmed.
+  const dimmed = useHive((s) => linkDown(s, s.host));
   // A group (14.1) is no repository: no pull requests or runs of its own.
   const ids = all.filter((p) => !p.group).map((p) => p.id);
   usePullBadges(ids);
@@ -120,7 +129,8 @@ export function Sidebar() {
           </button>
         </div>
       </div>
-      <div className="sidebar-tree">
+      <HostDown />
+      <div className="sidebar-tree" data-dimmed={dimmed || undefined}>
         {list.length === 0 ? (
           <div className="hint">No projects</div>
         ) : (
@@ -139,29 +149,73 @@ export function Sidebar() {
 const NEW_SPACE = "\0new";
 const EDIT_SPACE = "\0edit";
 
-/** The current space (6.14): picks another, or opens the dialog for a new one or this one. */
+/** A space's value in the select: its host ("" for this Mac) and its id (26.18). */
+const spaceValue = (host: string | null, id: string) => `${host ?? ""}\n${id}`;
+
+/**
+ * The current space (6.14): picks another, or opens the dialog for a new one or this one.
+ * This Mac's spaces come first, then each connected host's, as "Work · gpu-box" (26.18, Q1);
+ * with hosts, a new space is made on the host the user picks.
+ */
 function SpacePicker() {
-  const spaces = useHive((s) => s.spaces);
+  const choices = useHive(useShallow(spaceChoices));
+  const host = useHive((s) => s.host);
   const current = useHive((s) => s.currentSpace);
-  if (!spaces || current === null) return null;
+  if (current === null) return null;
+  const spaces = choices.map((choice) => {
+    const [at, id, label] = choice.split("\n") as [string, string, string];
+    return { host: at || null, value: spaceValue(at || null, id), label };
+  });
+  const hosts = [...new Set(spaces.map((x) => x.host))];
+  const remotes = hosts.some((h) => h !== null);
   const options = [
-    ...spaces.map((s) => ({ value: s.id, label: s.name })),
-    { value: NEW_SPACE, label: "New space…" },
+    ...spaces,
+    ...(remotes
+      ? hosts.map((h) => ({
+          value: `${NEW_SPACE}${h ?? ""}`,
+          label: `New space on ${h ?? "this Mac"}…`,
+        }))
+      : [{ value: NEW_SPACE, label: "New space…" }]),
     { value: EDIT_SPACE, label: "Edit space…" },
   ];
   return (
     <Select
       className="space-select"
       aria-label="Space"
-      value={current}
+      value={spaceValue(host, current)}
       options={options}
       onChange={(value) => {
-        if (value === NEW_SPACE) openModal("new-space");
-        else if (value === EDIT_SPACE) openModal("edit-space");
-        else void transport.selectSpace(value);
+        if (value.startsWith(NEW_SPACE)) {
+          if (remotes) showHost(value.slice(NEW_SPACE.length) || null);
+          openModal("new-space");
+        } else if (value === EDIT_SPACE) openModal("edit-space");
+        else
+          pickSpace(
+            value.slice(0, value.indexOf("\n")) || null,
+            value.slice(value.indexOf("\n") + 1),
+          );
       }}
     />
   );
+}
+
+/** Shows space `id` of `host` (26.18): its host's spaces, then that space there. */
+function pickSpace(host: string | null, id: string): void {
+  showHost(host);
+  if (useHive.getState().currentSpace !== id) void transport.selectSpace(id);
+}
+
+/**
+ * The spaces the switcher lists (26.18), each as "<host>\n<id>\n<label>" (host "" for this
+ * Mac): this Mac's, then each remote's whose link is up, and the shown host's even while its
+ * link is down.
+ */
+export function spaceChoices(s: HiveState): string[] {
+  return knownHosts(s)
+    .filter((host) => host === null || host === s.host || s.links[host]?.state === "connected")
+    .flatMap((host) =>
+      (hostView(s, host).spaces ?? []).map((x) => `${host ?? ""}\n${x.id}\n${spaceLabel(x, host)}`),
+    );
 }
 
 /**

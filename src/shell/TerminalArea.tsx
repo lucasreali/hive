@@ -72,6 +72,7 @@ import {
 } from "../terminals";
 import { isDirty, isFor } from "../viewer/buffer";
 import { isMac, keyText } from "../window";
+import { HostOverlay } from "./Hosts";
 import {
   AddFolderIcon,
   CloseIcon,
@@ -641,6 +642,7 @@ function TerminalHost(props: { hidden: boolean; half?: "left" | "right" }) {
           aria-hidden="true"
         />
       )}
+      {!hidden && panes.length > 0 && <HostOverlay />}
       <TerminalSearch />
       {menu && <TerminalPaneMenu menu={menu} onClose={closeMenu} />}
     </>
