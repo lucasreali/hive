@@ -993,6 +993,15 @@ impl Link {
             return;
         };
         self.to_ui(welcome);
+        self.replay_terminals();
+        let _ = self.send(0, &Control::GetSettings);
+        let _ = self.send(0, &Control::ListProjects);
+        let _ = self.send(0, &Control::Resync);
+    }
+
+    /// Tells a reloaded UI each terminal this link keeps (`terminal_kept`), in id order: all a
+    /// remote's link replays (26.17), since the UI takes nothing else of a remote's yet.
+    fn replay_terminals(&self) {
         let mut kept: Vec<_> = self.terminals.values().collect();
         kept.sort_by_key(|term| term.ui);
         for term in kept {
@@ -1000,9 +1009,6 @@ impl Link {
             let message = json!({"type": "terminal_kept", "channel": id, "cwd": cwd, "worktree": worktree, "account": account});
             self.to_ui(self.tagged(message));
         }
-        let _ = self.send(0, &Control::GetSettings);
-        let _ = self.send(0, &Control::ListProjects);
-        let _ = self.send(0, &Control::Resync);
     }
 
     /// The frame channel of the terminal the UI knows as `ui`.
@@ -1561,10 +1567,9 @@ impl Hive {
     }
 
     /// The computer woke from sleep (Q7): each remote link waiting to reconnect tries at once.
-    pub fn woke(&self) {
-        if let Ok(remotes) = self.remotes() {
-            remotes.wake();
-        }
+    /// Whether this app links to remote hosts at all.
+    pub fn woke(&self) -> bool {
+        self.remotes().map(|remotes| remotes.wake()).is_ok()
     }
 
     /// The link to `host` (26.17): a remote's by its alias, the local service's for `None`.
@@ -2640,12 +2645,34 @@ async fn pump(link: &Mutex<Link>, mut frames: FramedRead<Reader<'_>, FrameCodec>
                     link.approve(path.to_owned(), value["reveal"] == true);
                 }
             }
-            _ => link.follow(&value),
+            // What quitting asks about, the settings and an uninstall are the local service's.
+            _ if !remote => link.follow(&value),
+            _ => {}
+        }
+        // Until the UI tells hosts apart (26.18), a remote's message reaches it only when it
+        // cannot be taken for the local service's: one of the remote's own terminals'.
+        let kind = value["type"].as_str().unwrap_or_default();
+        if remote && !(frame.channel != 0 && REMOTE_TO_UI.contains(&kind)) {
+            continue;
         }
         link.to_ui(value);
     }
     End::Closed
 }
+
+/// The messages a remote service's link passes to the UI (26.17), each on one of its own
+/// terminals' channels, which the UI knows by an id no other link's terminal has. Every other
+/// one (anything on channel 0, an agent's, a notification) the UI would apply as the local
+/// service's, so it is dropped until the UI tells hosts apart (26.18).
+const REMOTE_TO_UI: &[&str] = &[
+    "terminal_opened",
+    "terminal_exited",
+    "error",
+    "badge",
+    "command_finished",
+    "terminal_progress",
+    "unhooked_agent",
+];
 
 /// Whether `frame` is the service's `terminals_kept` (26.16), on channel 0.
 fn is_kept(frame: &Frame) -> bool {
@@ -2747,11 +2774,9 @@ pub fn web_content_terminated<R: Runtime>(webview: &tauri::Webview<R>) {
 }
 
 /// The computer woke from sleep (Q7, macOS's `NSWorkspaceDidWakeNotification`):
-/// [`Hive::woke`] for the app's `Hive`.
-pub fn woke<R: Runtime>(app: &AppHandle<R>) {
-    if let Some(hive) = app.try_state::<Hive>() {
-        hive.woke();
-    }
+/// [`Hive::woke`] for the app's `Hive`: whether it links to remote hosts.
+pub fn woke<R: Runtime>(app: &AppHandle<R>) -> bool {
+    app.try_state::<Hive>().is_some_and(|hive| hive.woke())
 }
 
 /// A click on the Dock icon (`RunEvent::Reopen`): with no visible window (minimized, hidden)

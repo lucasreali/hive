@@ -77,7 +77,7 @@ const RUN: &str = concat!(
 /// by its `--version`, and only then renamed over `hive` (a running service keeps its file).
 const UPLOAD: &str = concat!(
     bin!(),
-    r#"umask 077; mkdir -p "$d" || exit 1; read -r n s || exit 1; f=$d/hive.new; rm -f "$f"; cat > "$f" || exit 1; [ $(wc -c < "$f") = "$n" ] || { rm -f "$f"; echo "hive-upload: the uploaded size does not match" >&2; exit 4; }; set -- $(sha256sum "$f"); [ "$1" = "$s" ] || { rm -f "$f"; echo "hive-upload: the uploaded checksum does not match" >&2; exit 4; }; chmod 755 "$f" && [ "$("$f" --version)" = "hive $v" ] || { rm -f "$f"; echo "hive-upload: the uploaded hive does not run" >&2; exit 4; }; mv -f "$f" "$d/hive""#
+    r#"umask 077; mkdir -p "$d" && chmod 700 "$d" || exit 1; read -r n s || exit 1; f=$d/hive.new; rm -f "$f"; cat > "$f" || exit 1; [ $(wc -c < "$f") = "$n" ] || { rm -f "$f"; echo "hive-upload: the uploaded size does not match" >&2; exit 4; }; set -- $(sha256sum "$f"); [ "$1" = "$s" ] || { rm -f "$f"; echo "hive-upload: the uploaded checksum does not match" >&2; exit 4; }; chmod 755 "$f" && [ "$("$f" --version)" = "hive $v" ] || { rm -f "$f"; echo "hive-upload: the uploaded hive does not run" >&2; exit 4; }; mv -f "$f" "$d/hive""#
 );
 
 /// What a remote command does.
@@ -101,8 +101,8 @@ pub fn command(script: Script) -> String {
     format!("exec /bin/sh -c '{text}' hive {VERSION}{extra}")
 }
 
-/// A host alias `ssh` may be given ([`check_host`]: no leading `-`, no whitespace or control
-/// characters, at most 255 bytes).
+/// A host alias `ssh` may be given ([`check_host`]: no leading `-`, only ASCII letters, digits
+/// and `. _ @ : % [ ] -`, at most 255 bytes).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Alias(String);
 
@@ -404,8 +404,8 @@ impl Remotes {
         })
     }
 
-    /// A UI (re)connected: every link sends it there, after its state and what its service
-    /// said (`Link::replay`); its old terminals close unless the UI reloaded after a crash.
+    /// A UI (re)connected: every link sends it there, after its state and its kept terminals
+    /// (`Link::replay_terminals`); its old terminals close unless the UI reloaded after a crash.
     pub fn connect(&self, ui: &Option<Channel<Value>>, crashed: bool) {
         for remote in self.hosts().iter() {
             let mut link = lock(&remote.link);
@@ -418,7 +418,7 @@ impl Remotes {
             if let Some(status) = link.status.clone() {
                 link.to_ui(status);
             }
-            link.replay();
+            link.replay_terminals();
         }
     }
 

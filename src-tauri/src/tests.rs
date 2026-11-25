@@ -3378,14 +3378,19 @@ fn the_window_comes_up_when_there_is_one() {
 
 #[test]
 fn a_wake_reaches_the_app_s_hive_if_any() {
+    // No `Hive` yet, or one that links to no host: nothing to wake.
     let app = mock_builder().build(mock_context(noop_assets())).unwrap();
-    woke(app.handle());
+    assert!(!woke(app.handle()));
+    let app = mock_builder()
+        .manage(hive())
+        .build(mock_context(noop_assets()))
+        .unwrap();
+    assert!(!woke(app.handle()));
     let app = mock_builder()
         .manage(hive().with_remote("/nonexistent/ssh".into(), "/nonexistent".into()))
         .build(mock_context(noop_assets()))
         .unwrap();
-    woke(app.handle());
-    assert!(app.state::<Hive>().link().remotes.is_some());
+    assert!(woke(app.handle()));
 }
 
 /// Sends `message` from the service on `channel` and waits for the UI to get it.

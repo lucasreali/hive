@@ -112,7 +112,9 @@ fn main() {
             #[cfg(target_os = "macos")]
             {
                 let handle = app.handle().clone();
-                if !hive_lib::macos::observe_wake(move || hive_lib::woke(&handle)) {
+                if !hive_lib::macos::observe_wake(move || {
+                    hive_lib::woke(&handle);
+                }) {
                     eprintln!("hive-app: waking from sleep cannot reconnect the remote hosts");
                 }
             }
