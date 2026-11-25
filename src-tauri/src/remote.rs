@@ -39,9 +39,10 @@ use crate::{dropped, lock, pipe, speak, start, End, Link, STDERR_LIMIT, VERSION}
 pub const SSH: &str = "/usr/bin/ssh";
 
 /// `ssh`'s options, each its own argument (spike §6.1). Given on the command line, they win over
-/// the user's `~/.ssh/config`; everything else (`HostName`, `User`, `ProxyJump`, the agent,
-/// `ControlMaster`, Q12) comes from there.
-const OPTIONS: [&str; 13] = [
+/// the user's `~/.ssh/config`; everything else (`HostName`, `User`, `ProxyJump`, the agent's
+/// keys, `ControlMaster`, Q12) comes from there. The agent itself is never forwarded: a
+/// `ForwardAgent yes` there would let the remote host use the user's keys while the link is up.
+const OPTIONS: [&str; 15] = [
     "-T",
     "-o",
     "BatchMode=yes",
@@ -49,6 +50,8 @@ const OPTIONS: [&str; 13] = [
     "StrictHostKeyChecking=yes",
     "-o",
     "ClearAllForwardings=yes",
+    "-o",
+    "ForwardAgent=no",
     "-o",
     "ServerAliveInterval=10",
     "-o",

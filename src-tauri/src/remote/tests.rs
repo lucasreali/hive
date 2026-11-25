@@ -26,6 +26,8 @@ fn the_ssh_command_is_fixed_options_then_the_alias_then_a_constant_command() {
         "-o",
         "ClearAllForwardings=yes",
         "-o",
+        "ForwardAgent=no",
+        "-o",
         "ServerAliveInterval=10",
         "-o",
         "ServerAliveCountMax=3",
@@ -44,7 +46,7 @@ fn the_ssh_command_is_fixed_options_then_the_alias_then_a_constant_command() {
         .iter()
         .any(|arg| arg.to_string_lossy().contains("Control")));
     assert_eq!(
-        ssh_args(&alias, Script::Upload)[15],
+        ssh_args(&alias, Script::Upload)[expected.len()],
         OsString::from(command(Script::Upload))
     );
     for bad in ["-oProxyCommand=sh", "gpu box", "", "gpu\u{7}"] {
@@ -647,7 +649,7 @@ async fn a_new_host_gets_this_app_s_hive_then_links_with_its_keep_time_and_app_i
         (run, upload, again),
         (&command(Script::Run), &command(Script::Upload), run)
     );
-    assert!(runs.iter().all(|run| run[13..15] == ["--", "gpu"]));
+    assert!(runs.iter().all(|run| run[15..17] == ["--", "gpu"]));
     let hive = lab.path("home/.hive/bin/hive");
     assert_eq!(
         std::fs::read(hive).unwrap(),
