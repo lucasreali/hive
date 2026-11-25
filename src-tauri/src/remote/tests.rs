@@ -840,7 +840,7 @@ async fn a_dropped_link_keeps_its_terminals_and_retries_every_30_s_while_it_does
     let new = next_of(&mut rx, "terminal_kept").await;
     assert_eq!(
         new,
-        json!({"type": "terminal_kept", "channel": 70, "cwd": "/r/src", "worktree": "/r", "account": "Work", "host": "gpu"})
+        json!({"type": "terminal_kept", "channel": 70, "cwd": "/r/src", "worktree": null, "account": null, "host": "gpu"})
     );
     // The one the service did not keep ended.
     let exited = next_of(&mut rx, "terminal_exited").await;
@@ -1148,7 +1148,7 @@ async fn the_local_settings_link_the_hosts_and_requests_go_to_each_host_s_link()
     assert_eq!(remote.control().await, (2, Control::Ack { bytes: 10 }));
     // The remote's terminal messages and output reach that terminal, with the host.
     let opened = Control::TerminalOpened {
-        worktree: None,
+        worktree: Some("/w".into()),
         account: "Default".into(),
     };
     remote.send(2, opened).await;
@@ -1160,6 +1160,13 @@ async fn the_local_settings_link_the_hosts_and_requests_go_to_each_host_s_link()
     let opened = next_of(&mut rx, "terminal_opened").await;
     assert_eq!(opened["channel"], 2);
     assert_eq!(opened["host"], "gpu");
+    // Its worktree and account are another machine's: the UI gets neither (26.18).
+    assert_eq!(
+        (&opened["worktree"], &opened["account"]),
+        (&Value::Null, &Value::Null)
+    );
+    let gpu = hive.on(Some("gpu")).unwrap().link;
+    assert_eq!(lock(&gpu).terminals[&2].worktree, Value::Null);
     let shown = tokio::time::timeout(WAIT, bytes.recv()).await.unwrap();
     assert_eq!(shown.unwrap(), b"$ ");
     hive.attach_terminal(2, output().0).unwrap();
