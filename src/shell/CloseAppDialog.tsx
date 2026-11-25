@@ -156,6 +156,12 @@ export function CloseAppDialog({ updating = false }: { updating?: boolean }) {
                 Keep {count === 1 ? "1 agent" : `${count} agents`} running on {host}?
               </label>
             ))}
+          {!updating && remotes.length > 0 && (
+            <p className="field-help">
+              A host keeps the agents you keep for the time set in Settings → Hosts; Hive takes them
+              up again when it opens.
+            </p>
+          )}
         </div>
         <footer>
           <button type="button" className="secondary" onClick={cancel}>
