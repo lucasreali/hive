@@ -288,7 +288,8 @@ export function SessionMenu() {
         { disabled: outside },
       )}
       {item(ArrowBendUpRightIcon, "Continue in New Session", () => void resume(x, true))}
-      <ContinueIn session={x} disabled={live || x.running} />
+      {/* A remote's log does not move to another account (26.18 review): its service is not asked. */}
+      {!remote && <ContinueIn session={x} disabled={live || x.running} />}
 
       {item(
         CopyIcon,

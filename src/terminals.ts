@@ -381,8 +381,12 @@ async function startTerminal(
  * into it as the user would, as the Claude `account` when given; from then on Hive only
  * observes it.
  */
-export const openClaude = (cwd: string, args = "", account?: AccountDir): Promise<number> =>
-  openWith(cwd, `claude${args && ` ${args}`}`, account);
+export const openClaude = (
+  cwd: string,
+  args = "",
+  account?: AccountDir,
+  host?: string | null,
+): Promise<number> => openWith(cwd, `claude${args && ` ${args}`}`, account, host);
 
 /**
  * For a click or key that opens a terminal (`openTerminal`, `openClaude`, `openWith`,
@@ -396,8 +400,10 @@ export async function openWith(
   cwd: string,
   command: string,
   account?: AccountDir,
+  // The host it runs on (26.18: null for this Mac); the host shown when not given.
+  host?: string | null,
 ): Promise<number> {
-  const id = await openTerminal(cwd, account);
+  const id = await openTerminal(cwd, account, host);
   await transport.writeTerminal(id, `${command}\r`);
   return id;
 }

@@ -103,7 +103,8 @@ export async function resume(
     if (error) return showNotice("error", `Cannot move the session: ${error}`);
   }
   try {
-    await openClaude(session.cwd, resumeArgs(session.id, fork), { config_dir: dir });
+    // On the session's own host (26.18 review), even when another is shown once the move is done.
+    await openClaude(session.cwd, resumeArgs(session.id, fork), { config_dir: dir }, s.host);
   } catch (error) {
     showNotice("error", `Cannot open a terminal in ${session.cwd}: ${error}`);
   }

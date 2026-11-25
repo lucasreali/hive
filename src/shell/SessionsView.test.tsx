@@ -364,6 +364,10 @@ test("a remote space's sessions: its running agent is live, and nothing opens it
   const host = "gpu-box";
   render(<App />);
   act(() => {
+    // With accounts, this Mac's sessions could continue in another; a remote's never do.
+    const accounts = [{ name: "Work", config_dir: "/w" }];
+    const claude = { accounts, default_name: "Default", share_sessions: false };
+    useHive.setState({ settings: { ...initialState.settings, claude } });
     onMessage({ type: "host_link", host, state: "connected" });
     onMessage({ type: "projects", projects: [shop, api], host });
     onMessage({ type: "sessions", sessions: MOCK_SESSIONS, error: null, truncated: false, host });
@@ -390,5 +394,6 @@ test("a remote space's sessions: its running agent is live, and nothing opens it
   expect(items).not.toContain("Open Log");
   expect(items).not.toContain("Reveal Log");
   expect(items).not.toContain("Open Working Directory");
+  expect(items).not.toContain("Continue in");
   expect(items).toContain("Copy Session ID");
 });

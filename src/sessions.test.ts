@@ -20,7 +20,7 @@ import {
   sessionTokens,
   tokens,
 } from "./sessions";
-import { initialState, useHive } from "./store";
+import { initialState, showHost, useHive } from "./store";
 import { closeTerminal } from "./terminals";
 import { transport } from "./transport";
 import { MOCK_SESSIONS } from "./transport/mock";
@@ -199,6 +199,30 @@ test("a move waits for its answer at most 30 s, and one move of a session at a t
   jest.advanceTimersByTime(MOVE_WAIT_MS);
   jest.useRealTimers();
   open.mockRestore();
+  moved.mockRestore();
+});
+
+test("a session moved while another host is shown still opens on its own host (26.18 review)", async () => {
+  const open = spyOn(transport, "openTerminal").mockResolvedValue(5);
+  const write = spyOn(transport, "writeTerminal").mockResolvedValue();
+  const moved = spyOn(transport, "moveSession").mockResolvedValue();
+  const claude = { accounts: [{ name: "Work", config_dir: "/w" }], default_name: "Default" };
+  useHive.setState({
+    settings: { ...initialState.settings, claude: { ...claude, share_sessions: true } },
+    spaces: [{ id: "s", name: "S", projects: [], env: { ...NO_ENV, claude_account: "/w" } }],
+    currentSpace: "s",
+  });
+  const resumed = resume(stopped);
+  expect(moved).toHaveBeenCalledWith(stopped.id, "/w");
+  // A remote is shown before the move is answered: this Mac's session opens on this Mac.
+  showHost("gpu-box");
+  onMoved({ type: "session_moved", id: stopped.id, config_dir: "/w" });
+  await resumed;
+  expect(open.mock.calls.map((call) => [call[0], call[4], call[5]])).toEqual([
+    [stopped.cwd, { config_dir: "/w" }, null],
+  ]);
+  open.mockRestore();
+  write.mockRestore();
   moved.mockRestore();
 });
 
