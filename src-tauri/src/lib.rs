@@ -2776,17 +2776,9 @@ async fn pump(link: &Mutex<Link>, mut frames: FramedRead<Reader<'_>, FrameCodec>
                 link.range(value);
                 continue;
             }
-            // The scheme reads the local service's files only.
             // The scheme reads the local service's files only: a remote's (should the allowlist
             // let one through) keeps no URL, not even one it wrote (26.19).
-            "file" => {
-                if let Some(media) = value["media"].as_object_mut() {
-                    media.remove("url");
-                }
-                if !remote {
-                    scheme::with_url(&mut value, cfg!(target_os = "macos"));
-                }
-            }
+            "file" => scheme::with_url(&mut value, cfg!(target_os = "macos"), !remote),
             "terminal_opened" => {
                 // Until the UI tells hosts apart (26.18), a remote's worktree and account would
                 // put its tab under a local worktree and name it as a local one.
