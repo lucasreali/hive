@@ -57,7 +57,18 @@ pub async fn run(paths: &Paths, hive: &Path, remote: bool, replace: bool) -> io:
 async fn end_running(paths: &Paths, wait: Duration) -> io::Result<()> {
     use std::fs::TryLockError;
     use std::io::Read as _;
-    let file = match File::open(paths.lock()) {
+    use std::os::unix::fs::OpenOptionsExt as _;
+    // The lockfile names the process to end: only one in our own runtime folder is trusted (a
+    // shared `/tmp/hive-<uid>` could be another user's), and never through a link.
+    match paths.check_runtime() {
+        Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(()),
+        checked => checked?,
+    }
+    let open = File::options()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW)
+        .open(paths.lock());
+    let file = match open {
         Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(()),
         file => file?,
     };
@@ -206,14 +217,30 @@ mod tests {
             config: dir.join("config"),
         };
         let wait = Duration::from_millis(300);
-        // No lockfile, or a lockfile nobody holds: nothing runs, nothing to end.
+        // No runtime folder, no lockfile, or a lockfile nobody holds: nothing runs.
         end_running(&paths, wait).await.unwrap();
-        std::fs::create_dir_all(&paths.runtime).unwrap();
+        paths.make_runtime().unwrap();
+        end_running(&paths, wait).await.unwrap();
         std::fs::write(paths.lock(), "1").unwrap();
         end_running(&paths, wait).await.unwrap();
-        // A lockfile that cannot be read is an error, not "nothing runs".
         use std::os::unix::fs::PermissionsExt;
         let mode = |mode| std::fs::Permissions::from_mode(mode);
+        // A runtime folder others can reach, or a lockfile that is a link: never trusted.
+        std::fs::set_permissions(&paths.runtime, mode(0o755)).unwrap();
+        let err = end_running(&paths, wait).await.unwrap_err();
+        assert!(
+            err.to_string()
+                .starts_with("refusing insecure runtime directory"),
+            "{err}"
+        );
+        std::fs::set_permissions(&paths.runtime, mode(0o700)).unwrap();
+        std::fs::rename(paths.lock(), dir.join("planted")).unwrap();
+        std::os::unix::fs::symlink(dir.join("planted"), paths.lock()).unwrap();
+        let err = end_running(&paths, wait).await.unwrap_err();
+        assert_eq!(err.raw_os_error(), Some(libc::ELOOP), "{err}");
+        std::fs::remove_file(paths.lock()).unwrap();
+        std::fs::write(paths.lock(), "1").unwrap();
+        // A lockfile that cannot be read is an error, not "nothing runs".
         std::fs::set_permissions(paths.lock(), mode(0o000)).unwrap();
         assert!(end_running(&paths, wait).await.is_err());
         std::fs::set_permissions(paths.lock(), mode(0o600)).unwrap();
