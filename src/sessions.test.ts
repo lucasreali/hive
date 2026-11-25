@@ -221,6 +221,14 @@ test("a session moved while another host is shown still opens on its own host (2
   expect(open.mock.calls.map((call) => [call[0], call[4], call[5]])).toEqual([
     [stopped.cwd, { config_dir: "/w" }, null],
   ]);
+  // A remote's session goes on as its own account, its log never moved: the answer would never come.
+  useHive.setState({
+    spaces: [{ id: "s", name: "S", projects: [], env: { ...NO_ENV, claude_account: "/w" } }],
+    currentSpace: "s",
+  });
+  await resume(stopped);
+  expect(moved).toHaveBeenCalledTimes(1);
+  expect(open.mock.calls.at(-1)?.slice(4)).toEqual([{ config_dir: stopped.config_dir }, "gpu-box"]);
   open.mockRestore();
   write.mockRestore();
   moved.mockRestore();

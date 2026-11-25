@@ -1,7 +1,15 @@
 import { isTauri } from "@tauri-apps/api/core";
 import { agentKey } from "./hosts";
 import type { OpenSession, ServiceMessage, Session, SessionTarget } from "./protocol";
-import { activateTab, ask, currentSpace, showNotice, spaceAccount, useHive } from "./store";
+import {
+  activateTab,
+  ask,
+  currentSpace,
+  onRemote,
+  showNotice,
+  spaceAccount,
+  useHive,
+} from "./store";
 import { openClaude } from "./terminals";
 import { transport } from "./transport";
 import { openPath } from "./viewer/external";
@@ -83,7 +91,8 @@ export function onMoved(moved: Moved): void {
  * `claude --resume` in a new terminal in its folder, as the account `accountFor` picks. Its log
  * is moved into that account's folder first when it is in another (Claude Code resumes only a
  * log in its own folder). `fork` always starts a new session; one running elsewhere is forked
- * as its own account, since its log cannot move.
+ * as its own account, since its log cannot move; so is a remote's (26.18 review: its service's
+ * answer to a move never reaches the UI).
  */
 export async function resume(
   session: Session,
@@ -97,7 +106,8 @@ export async function resume(
   if (tab && !fork) return activateTab(tab);
   // Running outside Hive: a second `claude` on the same session would write the same log.
   if (session.running && !fork) return;
-  const dir = session.running ? session.config_dir : accountFor(session, account);
+  const stays = session.running || onRemote(s);
+  const dir = stays ? session.config_dir : accountFor(session, account);
   if (dir !== session.config_dir) {
     const error = await moveTo(session.id, dir);
     if (error) return showNotice("error", `Cannot move the session: ${error}`);
