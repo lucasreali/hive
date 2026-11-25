@@ -256,7 +256,7 @@ export const pasteToTerminal = (id: number, text: string) => terminal(id)?.paste
 const LINKS = {
   activate: (_event: MouseEvent, url: string) => {
     const safe = safeUrl(url);
-    if (safe) void openLink(safe);
+    if (safe) void openLink(safe, { markdown: true });
   },
 };
 

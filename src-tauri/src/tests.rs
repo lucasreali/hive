@@ -377,7 +377,8 @@ fn the_built_config_has_the_csp_and_builds_its_own_window() {
     let macos: Value = serde_json::from_str(include_str!("../tauri.macos.conf.json")).unwrap();
     let windows = macos["app"]["windows"].as_array().unwrap();
     assert!(windows.iter().all(|window| window["create"] == false));
-    // The webview opens links only; paths go through `open_path`.
+    // The webview opens nothing itself: paths go through `open_path`, links through
+    // `open_url` (26.19).
     let capability: Value =
         serde_json::from_str(include_str!("../capabilities/default.json")).unwrap();
     let opener: Vec<_> = capability["permissions"]
@@ -386,13 +387,7 @@ fn the_built_config_has_the_csp_and_builds_its_own_window() {
         .iter()
         .filter(|permission| permission.to_string().contains("opener:"))
         .collect();
-    assert_eq!(
-        opener,
-        [
-            &json!("opener:allow-open-url"),
-            &json!("opener:allow-default-urls")
-        ]
-    );
+    assert!(opener.is_empty(), "{opener:?}");
 }
 
 #[test]
@@ -3746,6 +3741,46 @@ fn the_privacy_settings_open_at_their_panes_and_nowhere_else() {
         refused.open_privacy_settings("screen_recording"),
         Err("no handler".into())
     );
+}
+
+#[test]
+fn a_link_opens_only_as_an_https_url_or_from_markdown() {
+    let (tx, opened) = std::sync::mpsc::channel::<String>();
+    let hive = hive().with_url(move |url: &str| {
+        tx.send(url.into()).unwrap();
+        Ok(())
+    });
+    let app = mock_builder()
+        .manage(hive)
+        .invoke_handler(tauri::generate_handler![open_url])
+        .build(mock_context(noop_assets()))
+        .unwrap();
+    let webview = tauri::WebviewWindowBuilder::new(&app, "main", Default::default())
+        .build()
+        .unwrap();
+    let open = |url: &str, markdown: bool| {
+        invoke(
+            &webview,
+            "open_url",
+            json!({"url": url, "markdown": markdown}),
+        )
+    };
+    assert_eq!(open("https://github.com/o/r", false), Ok(Value::Null));
+    assert_eq!(opened.try_recv().unwrap(), "https://github.com/o/r");
+    assert_eq!(open("mailto:a@b.dev?body=x", true), Ok(Value::Null));
+    assert_eq!(opened.try_recv().unwrap(), "mailto:a@b.dev");
+    // Anything else never reaches the opener; a long one is cut in the error.
+    let long = format!("javascript:{}", "a".repeat(300));
+    let shown: String = long.chars().take(200).collect();
+    let refused = json!(format!("Hive opens only https links: {shown}"));
+    assert_eq!(open(&long, true), Err(refused));
+    assert_eq!(
+        open("http://a.dev", false),
+        Err(json!("Hive opens only https links: http://a.dev"))
+    );
+    assert!(opened.try_recv().is_err());
+    let none = self::hive().open_url("https://a.dev", false);
+    assert_eq!(none, Err("this app cannot open URLs".into()));
 }
 
 #[test]

@@ -14,8 +14,6 @@
     "core:window:allow-set-background-color",
     "core:webview:allow-set-webview-background-color",
     "core:window:allow-set-badge-count",
-    "core:window:allow-request-user-attention",
-    "opener:allow-open-url",
-    "opener:allow-default-urls"
+    "core:window:allow-request-user-attention"
   ]
 }

@@ -157,6 +157,11 @@ fn each_failure_has_its_kind_message_and_retry() {
             format!("gpu runs Hive 0.1.0 with its terminals; this app is Hive {VERSION}."),
         ),
         (
+            Failure::Limit("sent more than 1000 messages in a second".into()),
+            "limit",
+            "Hive dropped the link to gpu: it sent more than 1000 messages in a second.".to_owned(),
+        ),
+        (
             Failure::Network("No route to host".into()),
             "network",
             "Cannot reach gpu: No route to host".to_owned(),
@@ -1306,3 +1311,6 @@ async fn a_new_terminal_skips_the_channels_its_link_already_uses() {
     assert!(!hive.woke());
     remotes.end();
 }
+
+// A remote that misbehaves (26.19).
+mod hostile;

@@ -36,6 +36,8 @@ pub mod download;
 /// The app's descriptor limit (17.6).
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 pub mod fds;
+/// What a remote service may cost the app (26.19).
+mod limits;
 
 /// The app's log and panic hook (D18.6).
 #[cfg(unix)]
@@ -782,6 +784,9 @@ struct Term {
     account: Value,
     /// How many bytes of its output reached the UI (26.16): the offset a reattach asks for.
     received: u64,
+    /// How many of those the UI has not acknowledged yet (9.19): capped for a remote's
+    /// ([`limits::UNACKED`], 26.19).
+    unacked: u64,
 }
 
 impl Term {
@@ -793,7 +798,26 @@ impl Term {
             worktree: Value::Null,
             account: Value::Null,
             received: 0,
+            unacked: 0,
         }
+    }
+}
+
+/// The most characters of a refused URL an error shows.
+const URL_SHOWN: usize = 200;
+
+/// The URL to open for `url` (26.19, spike §8.2), or `None`: an `https://` URL with a host,
+/// whatever link sent it (a pull request's, a run's, the menu's). A link in Markdown or in a
+/// terminal (`markdown`, #43, 8.20) may also be `http://`, or a `mailto:` address, its query
+/// (a prefilled body, an `attach=`) dropped. Never `file:`, `javascript:` or another scheme.
+pub fn openable(url: &str, markdown: bool) -> Option<String> {
+    let url = tauri::Url::parse(url.trim()).ok()?;
+    let web = url.host_str().is_some_and(|host| !host.is_empty());
+    match url.scheme() {
+        "https" if web => Some(url.into()),
+        "http" if web && markdown => Some(url.into()),
+        "mailto" if markdown => Some(format!("mailto:{}", url.path())),
+        _ => None,
     }
 }
 
@@ -815,6 +839,8 @@ struct Link {
     ui: Option<Channel<Value>>,
     /// Frames to the service; `None` when there is no connection.
     frames: Option<mpsc::UnboundedSender<Frame>>,
+    /// The frames of `frames` not written yet, capped on a remote's link (26.19).
+    queue: Arc<limits::Queue>,
     /// Replayed to a reloaded UI.
     welcome: Option<Value>,
     /// Every open terminal, by frame channel.
@@ -915,8 +941,12 @@ impl Link {
         match (message["type"].as_str(), id) {
             (Some("agent_state"), Some(id)) => {
                 let state = serde_json::from_value(message["state"].clone()).ok();
+                // Bounded, whatever a service sends (26.19): quitting asks while any is there.
+                let room = self.at_risk.len() < limits::AGENTS && id.len() <= limits::ID;
                 if state.is_some_and(at_risk) {
-                    self.at_risk.insert(id);
+                    if room {
+                        self.at_risk.insert(id);
+                    }
                 } else {
                     self.at_risk.remove(&id);
                 }
@@ -951,13 +981,20 @@ impl Link {
 
     fn frame(&self, frame: Frame) -> Result<(), String> {
         // The writer could not encode it and would end the connection.
-        if frame.payload.len() > MAX_PAYLOAD {
-            return Err(FrameError::Oversized(frame.payload.len()).to_string());
+        let len = frame.payload.len();
+        if len > MAX_PAYLOAD {
+            return Err(FrameError::Oversized(len).to_string());
         }
-        self.frames
-            .as_ref()
-            .and_then(|frames| frames.send(frame).ok())
-            .ok_or_else(|| NOT_CONNECTED.to_owned())
+        let frames = self.frames.as_ref().ok_or(NOT_CONNECTED)?;
+        // A remote that stops reading ends its link instead of growing the queue (26.19).
+        if !self.queue.push(len) {
+            return Err(format!(
+                "{} {}",
+                self.host.as_deref().unwrap_or_default(),
+                limits::QUEUE_FULL
+            ));
+        }
+        frames.send(frame).map_err(|_| NOT_CONNECTED.to_owned())
     }
 
     fn send(&self, channel: u32, message: &Control) -> Result<(), String> {
@@ -1159,6 +1196,17 @@ impl Host {
         lock(&self.link)
     }
 
+    /// The link, for a request whose answer the app would open or reveal (`editor_target`,
+    /// `session_located`): the local service's only. A remote host's is refused (26.19, spike
+    /// §8.1), whatever it would answer.
+    fn opens(&self) -> Result<MutexGuard<'_, Link>, String> {
+        let link = self.link();
+        match &link.host {
+            Some(host) => Err(format!("Hive opens nothing of the remote host {host}")),
+            None => Ok(link),
+        }
+    }
+
     /// Opens a terminal on a new channel; its output goes to `output`. Returns its id, also its
     /// channel.
     /// A terminal in `cwd` with the Claude `account` asked for (12.2; `None`: the current one).
@@ -1199,6 +1247,8 @@ enum End {
     Closed,
     /// The stream broke the protocol.
     Broken(String),
+    /// A remote went past one of its link's caps (26.19): why.
+    Limit(String),
 }
 
 impl Hive {
@@ -1422,6 +1472,16 @@ impl Hive {
         drop(link);
         let open = self.open.as_ref().ok_or("this app cannot open paths")?;
         open(&path, reveal)
+    }
+
+    /// Opens `url` in the default browser ([`openable`]: an `https://` one, whatever link it
+    /// came from; a Markdown or terminal link may also be `http://` or `mailto:`). The webview
+    /// has no permission to open a URL itself.
+    pub fn open_url(&self, url: &str, markdown: bool) -> Result<(), String> {
+        let shown: String = url.chars().take(URL_SHOWN).collect();
+        let url = openable(url, markdown).ok_or(format!("Hive opens only https links: {shown}"))?;
+        let open = self.url.as_ref().ok_or("this app cannot open URLs")?;
+        open(&url)
     }
 
     /// Reads the files copied to the clipboard from `clipboard` (18.3).
@@ -1689,7 +1749,7 @@ impl Hive {
                 // the connection is kept for the next one.
                 End::Refused => return refused(&mut lock(&link)),
                 End::Closed => exit.await,
-                End::Broken(error) => error,
+                End::Broken(error) | End::Limit(error) => error,
             };
             disconnected(&mut lock(&link), reason);
         });
@@ -1731,6 +1791,8 @@ impl Hive {
         let (host, channel) = self.terminal(id);
         let mut link = host.link();
         let term = link.terminals.get_mut(&channel).ok_or("no such terminal")?;
+        // The new UI acknowledges from here; the old one's are written off below.
+        term.unacked = 0;
         let message = match term.output.replace(output) {
             None => Control::AttachTerminal {
                 from: term.received,
@@ -1765,8 +1827,11 @@ impl Hive {
     /// `bytes` more of terminal `id`'s output were written to its screen (9.19).
     pub fn ack_terminal(&self, id: u32, bytes: u32) -> Result<(), String> {
         let (host, channel) = self.terminal(id);
-        let sent = host.link().send(channel, &Control::Ack { bytes });
-        sent
+        let mut link = host.link();
+        if let Some(term) = link.terminals.get_mut(&channel) {
+            term.unacked = term.unacked.saturating_sub(bytes.into());
+        }
+        link.send(channel, &Control::Ack { bytes })
     }
 
     /// The `hive-file:` scheme's answer for the URL path `path` (`/<token>/<path>`, 24.2): the
@@ -1985,7 +2050,8 @@ impl Host {
 
     /// The answer arrives as `session_located`.
     pub fn locate_session(&self, id: String, target: SessionTarget) -> Result<(), String> {
-        self.link().send(0, &Control::LocateSession { id, target })
+        self.opens()?
+            .send(0, &Control::LocateSession { id, target })
     }
 
     /// The answer arrives as `session_deleted` or `delete_session_failed`.
@@ -2133,7 +2199,7 @@ impl Host {
             path,
             reveal,
         };
-        self.link().send(0, &open)
+        self.opens()?.send(0, &open)
     }
 
     /// The answer arrives as `settings`.
@@ -2300,7 +2366,7 @@ impl Host {
 
     /// The answer arrives as `editor_target` with an empty `worktree`.
     pub fn open_settings_file(&self) -> Result<(), String> {
-        self.link().send(0, &Control::OpenSettingsFile)
+        self.opens()?.send(0, &Control::OpenSettingsFile)
     }
 
     /// The answer arrives as `diagnostics`.
@@ -2315,7 +2381,7 @@ impl Host {
 
     /// The answer arrives as `editor_target` with an empty `worktree` and the `path` `shared`.
     pub fn open_shared(&self) -> Result<(), String> {
-        self.link().send(0, &Control::OpenShared)
+        self.opens()?.send(0, &Control::OpenShared)
     }
 }
 
@@ -2460,12 +2526,22 @@ fn speak(
     hello: &Control,
 ) -> impl Future<Output = End> + Send + 'static {
     let (frames, mut queue) = mpsc::unbounded_channel();
-    let _ = frames.send(Frame::control(0, hello));
-    lock(link).frames = Some(frames);
+    let hello = Frame::control(0, hello);
+    let counted = {
+        let mut link = lock(link);
+        link.queue = Arc::new(limits::Queue::new(link.host.is_some()));
+        link.queue.push(hello.payload.len());
+        let _ = frames.send(hello);
+        link.frames = Some(frames);
+        Arc::clone(&link.queue)
+    };
     tokio::spawn(async move {
         let mut writer = FramedWrite::new(writer, FrameCodec);
         while let Some(frame) = queue.recv().await {
-            if writer.send(frame).await.is_err() {
+            let len = frame.payload.len();
+            let written = writer.send(frame).await;
+            counted.pop(len);
+            if written.is_err() {
                 break;
             }
         }
@@ -2525,14 +2601,31 @@ async fn pump(link: &Mutex<Link>, mut frames: FramedRead<Reader<'_>, FrameCodec>
     // This connection's handshake came (26.16): kept per call, so a connection that ended
     // without `disconnected` (a refused one) never makes the next one's `welcome` look repeated.
     let mut welcomed = false;
+    // A remote's link has caps (26.19): on its frames, and on what waits to be written to it.
+    let (remote, queue) = {
+        let link = lock(link);
+        (link.host.is_some(), Arc::clone(&link.queue))
+    };
+    let mut rate = limits::Rate::default();
     while let Some(frame) = match held.take() {
         Some(next) => next,
-        None => frames.next().await,
+        None => tokio::select! {
+            next = frames.next() => next,
+            () = queue.full.notified() => return End::Limit(limits::QUEUE_FULL.to_owned()),
+        },
     } {
         let frame = match frame {
             Ok(frame) => frame,
+            // A frame too large or of an unknown type too (a remote's is retried as a network
+            // failure, 26.17: a shell's startup file printing on stdout is no attack).
             Err(error) => return End::Broken(error.to_string()),
         };
+        // Terminal output is capped by what the UI acknowledged, below.
+        if remote && frame.kind != FrameType::Terminal {
+            if let Err(why) = rate.count(Instant::now()) {
+                return End::Limit(why);
+            }
+        }
         // Any frame closes the window `welcome` opened for `terminals_kept` (26.16); one that
         // is not it says the service kept none of this link's terminals (26.17).
         let after_welcome = std::mem::take(&mut lock(link).after_welcome);
@@ -2553,10 +2646,16 @@ async fn pump(link: &Mutex<Link>, mut frames: FramedRead<Reader<'_>, FrameCodec>
                 if let Some(Term {
                     output: Some(output),
                     received,
+                    unacked,
                     ..
                 }) = link.terminals.get_mut(&channel)
                 {
                     *received = received.saturating_add(bytes.len() as u64);
+                    *unacked = unacked.saturating_add(bytes.len() as u64);
+                    // A remote that ignores the UI's pace (9.19) is dropped (26.19).
+                    if let Some(why) = limits::unacked(*unacked).filter(|_| remote) {
+                        return End::Limit(why);
+                    }
                     let _ = output.send(InvokeResponseBody::Raw(bytes));
                 }
             }
@@ -2570,6 +2669,16 @@ async fn pump(link: &Mutex<Link>, mut frames: FramedRead<Reader<'_>, FrameCodec>
             eprintln!("hive-app: skipped a control message it cannot read");
             continue;
         };
+        // A remote's lists are capped and its text clipped before anything reads it (26.19),
+        // whatever its type: the allowlist below may grow (26.18).
+        let checked = if remote {
+            limits::check(&mut value)
+        } else {
+            Ok(())
+        };
+        if let Err(why) = checked {
+            return End::Limit(why);
+        }
         // Messages for a terminal this UI did not open (e.g. one closed by a reload) are
         // dropped; the others name it by its id in the UI.
         let ui = match frame.channel {
@@ -2580,7 +2689,6 @@ async fn pump(link: &Mutex<Link>, mut frames: FramedRead<Reader<'_>, FrameCodec>
             },
         };
         value["channel"] = ui.into();
-        let remote = link.host.is_some();
         value = link.tagged(value);
         let kind = value["type"].as_str().unwrap_or_default();
         // Until the UI tells hosts apart (26.18), a remote's message goes no further unless its
@@ -2648,9 +2756,11 @@ async fn pump(link: &Mutex<Link>, mut frames: FramedRead<Reader<'_>, FrameCodec>
                     term.account = value["account"].clone();
                 }
             }
-            // A path the app may open once (`open_path`): the local service's only.
+            // A path the app may open once (`open_path`): the local service's only, never a
+            // remote's (26.19), whatever the allowlist above lets through.
             "editor_target" | "session_located" => {
-                if let Some(path) = value["windows_path"].as_str() {
+                let path = value["windows_path"].as_str().filter(|_| !remote);
+                if let Some(path) = path {
                     link.approve(path.to_owned(), value["reveal"] == true);
                 }
             }
@@ -3262,6 +3372,12 @@ pub mod commands {
     #[tauri::command]
     pub fn open_path(hive: State<'_, Hive>, path: String, reveal: bool) -> Result<(), String> {
         hive.open_path(path, reveal)
+    }
+
+    /// A link the user clicked (26.19): `markdown` for one in Markdown or a terminal.
+    #[tauri::command]
+    pub fn open_url(hive: State<'_, Hive>, url: String, markdown: bool) -> Result<(), String> {
+        hive.open_url(&url, markdown)
     }
 
     #[tauri::command]

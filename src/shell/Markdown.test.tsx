@@ -190,12 +190,17 @@ test("a click opens the link outside the app and the webview does not navigate",
   expect(aux(1)).toBe(true);
   expect(notice()).toBe("Only the Hive app opens links: https://a.dev");
 
-  await openLink("https://a.dev", true);
-  expect(calls).toEqual([["plugin:opener|open_url", { url: "https://a.dev" }]]);
+  // In the app, the app opens it, told it is a Markdown link (only https otherwise, 26.19).
+  await openLink("https://a.dev", { tauri: true });
+  await openLink("mailto:x@a.dev", { markdown: true, tauri: true });
+  expect(calls).toEqual([
+    ["open_url", { url: "https://a.dev", markdown: false }],
+    ["open_url", { url: "mailto:x@a.dev", markdown: true }],
+  ]);
   mockIPC(() => {
     throw new Error("no browser");
   });
-  await openLink("https://a.dev", true);
+  await openLink("https://a.dev", { tauri: true });
   expect(notice()).toContain("no browser");
 });
 
