@@ -32,6 +32,10 @@ tauri-plugin-window-state = "2.5.0"
 tokio = { version = "1.53.1", features = ["process", "io-util", "sync", "rt", "macros", "time"] }
 tokio-util = { version = "0.7.19", features = ["codec"] }
 
+[features]
+# The test against a real remote host over ssh (26.20, `src/remote/tests/ci.rs`): only ci.yml's
+# `remote` job sets that host up and builds it.
+remote-ci = []
 
 [lints]
 workspace = true
