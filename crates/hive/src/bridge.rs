@@ -66,7 +66,7 @@ async fn end_running(paths: &Paths, wait: Duration) -> io::Result<()> {
     }
     let open = File::options()
         .read(true)
-        .custom_flags(libc::O_NOFOLLOW)
+        .custom_flags(nix::libc::O_NOFOLLOW)
         .open(paths.lock());
     let file = match open {
         Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(()),
@@ -237,7 +237,7 @@ mod tests {
         std::fs::rename(paths.lock(), dir.join("planted")).unwrap();
         std::os::unix::fs::symlink(dir.join("planted"), paths.lock()).unwrap();
         let err = end_running(&paths, wait).await.unwrap_err();
-        assert_eq!(err.raw_os_error(), Some(libc::ELOOP), "{err}");
+        assert_eq!(err.raw_os_error(), Some(nix::libc::ELOOP), "{err}");
         std::fs::remove_file(paths.lock()).unwrap();
         std::fs::write(paths.lock(), "1").unwrap();
         // A lockfile that cannot be read is an error, not "nothing runs".
