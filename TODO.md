@@ -601,7 +601,7 @@ Every task that changes `crates/hive` or `src-tauri` gets `security-reviewer`. T
   - **Off for a remote space** (the items hidden): Open with default app, Reveal, Open settings file, Open shared folder, the dev-server preview. Files dropped from Finder type nothing and show a toast.
   - **Mock transport:** a second host (`?mock=remote`).
   - **Tests:** bun for each case; e2e for the switcher, the overlay and the quit dialog, in light and dark.
-  - ⏸ **Checkpoint:** the human looks at it in the real app against the CI-style container host of 26.20, or a host of their own.
+  - ⏸ **Checkpoint:** the human looks at it in the real app against the CI-style container host of 26.20, or a host of their own. *Waived by the human (2026-11-25): the look is deferred to after the release.*
 - [ ] **26.19 A remote cannot harm the app.** `task/26.19-hostile-remote` — Spike §8. Needs 26.17.
   - **Opens:** for a remote link the app refuses every open or reveal, whatever the service sends (`editor_target`, `session_located`, `open_settings_file`, `open_shared`).
   - **URLs:** only `https://` URLs open, for every link.

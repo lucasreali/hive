@@ -2958,9 +2958,10 @@ pub mod commands {
     }
 
     /// The app quits (26.18): `host`'s service keeps its terminals, or ends them when `end`.
+    /// It waits (at most 2 s) on the main thread: the window closes right after.
     #[tauri::command]
-    pub async fn bye_host(hive: State<'_, Hive>, host: String, end: bool) -> Result<(), String> {
-        hive.bye_host(&host, end).await
+    pub fn bye_host(hive: State<'_, Hive>, host: String, end: bool) -> Result<(), String> {
+        tauri::async_runtime::block_on(hive.bye_host(&host, end))
     }
 
     /// Restarts `host`'s service of another version (Q8).
