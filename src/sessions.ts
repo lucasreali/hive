@@ -14,9 +14,20 @@ type Handing = "open" | "reveal";
 /** How each located path goes to Windows, by `<id>:<target>`, until the service answers. */
 const pending = new Map<string, Handing>();
 
-/** `claude`'s arguments to go on with a session, or to start a new one from it (`fork`). */
-export const resumeArgs = (session: Session, fork = false) =>
-  `--resume ${session.id}${fork ? " --fork-session" : ""}`;
+/**
+ * A Claude session id, as the service's `valid_id` takes one: letters, digits and `-`, at most
+ * 64, not starting with `-`. Only such an id is ever typed into a terminal.
+ */
+export const isSessionId = (id: string): boolean => /^[A-Za-z0-9][A-Za-z0-9-]{0,63}$/.test(id);
+
+/**
+ * `claude`'s arguments to go on with session `id`, or to start a new one from it (`fork`).
+ * Throws for anything that is not a session id ([`isSessionId`]): it would run in the shell.
+ */
+export function resumeArgs(id: string, fork = false): string {
+  if (!isSessionId(id)) throw new Error("not a session id");
+  return `--resume ${id}${fork ? " --fork-session" : ""}`;
+}
 
 type Moved = Extract<ServiceMessage, { type: "session_moved" | "move_session_failed" }>;
 
@@ -78,6 +89,7 @@ export async function resume(
   fork = false,
   account?: string | null,
 ): Promise<void> {
+  if (!isSessionId(session.id)) return showNotice("error", "Cannot resume: not a session id");
   const s = useHive.getState();
   const agent = s.agents[session.id];
   const tab = agent && s.tabs.find((t) => t.id === agent.terminal);
@@ -90,7 +102,7 @@ export async function resume(
     if (error) return showNotice("error", `Cannot move the session: ${error}`);
   }
   try {
-    await openClaude(session.cwd, resumeArgs(session, fork), { config_dir: dir });
+    await openClaude(session.cwd, resumeArgs(session.id, fork), { config_dir: dir });
   } catch (error) {
     showNotice("error", `Cannot open a terminal in ${session.cwd}: ${error}`);
   }
@@ -103,7 +115,7 @@ export async function resume(
 export async function restore(sessions: OpenSession[]): Promise<void> {
   for (const { id, cwd, config_dir } of sessions) {
     try {
-      await openClaude(cwd, `--resume ${id}`, { config_dir });
+      await openClaude(cwd, resumeArgs(id), { config_dir });
     } catch (error) {
       showNotice("error", `Cannot resume the session in ${cwd}: ${error}`);
     }
