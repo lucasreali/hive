@@ -74,7 +74,8 @@ async fn a_remote_past_a_cap_is_dropped_with_why_a_broken_stream_retried() {
     ];
     for (bad, state, reason) in cases {
         let mut remotes = lab.remotes(Arc::default());
-        let _clock = fake_clock(&mut remotes);
+        // A retry waits for ever: no later connection of this link meets the next case's accept.
+        remotes.sleep = Box::new(|_| Box::pin(std::future::pending()));
         let remotes = Arc::new(remotes);
         let (channel, mut rx) = ui();
         remotes.sync(settings(&["gpu"], 1), Some(&channel));
