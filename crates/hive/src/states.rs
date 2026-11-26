@@ -2059,7 +2059,9 @@ mod tests {
             agent.feed("s", &hook("SubagentStart", Some(sub), json!({})), now);
         }
         agent.feed("s", &launched("a", "backgroundTaskId", "t1"), now);
+        agent.feed("s", &tool("PermissionRequest", Some("a"), "x"), now);
         agent.feed("s", &failed("a"), now);
+        assert_eq!(agent.subagents[0].activity, None);
         // Its launch may still wake it (5.10): it waits, working, without pruning others.
         assert_eq!(
             shown(&agent),
