@@ -86,6 +86,10 @@ test("terminal and project actions call their commands", async () => {
   await tauriTransport.createIssueWorktree("/r", 42, "main");
   await tauriTransport.removeWorktree("/r/w", true);
   await tauriTransport.renameWorktree("/r/w", "y");
+  await tauriTransport.createReview("/r/w");
+  await tauriTransport.planBringBack("/r/v");
+  await tauriTransport.bringBack("/r/v", "b", "cd", "ab");
+  await tauriTransport.discardReview("/r/v", false);
   await tauriTransport.watchWorktree("/r", "branch");
   await tauriTransport.unwatchWorktree();
   await tauriTransport.expandIgnored("/r", ["target"]);
@@ -155,6 +159,10 @@ test("terminal and project actions call their commands", async () => {
     ["create_issue_worktree", { project: "/r", number: 42, base: "main" }],
     ["remove_worktree", { path: "/r/w", force: true }],
     ["rename_worktree", { path: "/r/w", name: "y" }],
+    ["create_review", { path: "/r/w" }],
+    ["plan_bring_back", { path: "/r/v" }],
+    ["bring_back", { path: "/r/v", into: "b", base: "cd", tip: "ab" }],
+    ["discard_review", { path: "/r/v", force: false }],
     ["watch_worktree", { path: "/r", base: "branch" }],
     ["unwatch_worktree", {}],
     ["expand_ignored", { path: "/r", folders: ["target"] }],

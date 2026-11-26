@@ -2193,6 +2193,42 @@ button.chevron:hover {
   padding-left: 54px;
 }
 
+/* A review (27.4) under the worktree it reviews, and all under it, one level in. */
+.in-review > .tree-row.worktree {
+  padding-left: 34px;
+}
+
+.in-review .tree-row.agent {
+  padding-left: 54px;
+}
+
+.in-review .subagent-line {
+  --line: 59px;
+  padding-left: 70px;
+}
+
+.in-group .in-review > .tree-row.worktree {
+  padding-left: 48px;
+}
+
+.in-group .in-review .tree-row.agent {
+  padding-left: 68px;
+}
+
+.in-group .in-review .subagent-line {
+  --line: 73px;
+  padding-left: 84px;
+}
+
+.review-badge {
+  flex: none;
+}
+
+/* Git's own message, line by line (a conflict, 27.4). */
+.field-error.said {
+  white-space: pre-wrap;
+}
+
 /* Empty state (screen 1e) */
 .empty-state {
   height: 100%;

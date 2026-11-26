@@ -157,6 +157,15 @@ export type ServiceMessage =
   | { type: "remove_worktree_failed"; path: string; message: string }
   | { type: "worktree_renamed"; project: Project; from: string; path: string }
   | { type: "rename_worktree_failed"; path: string; name: string; message: string }
+  | ({ type: "bring_back_plan" } & BringBackPlan)
+  | {
+      type: "brought_back";
+      project: Project;
+      path: string;
+      commits: number;
+      fast_forward: boolean;
+    }
+  | { type: "bring_back_failed"; path: string; message: string }
   | { type: "worktree_status"; path: string; status: WorktreeStatus | null }
   | ({ type: "files" } & WorktreeFiles)
   // A refused request, e.g. watching a worktree that is not followed. Not stored.
@@ -287,7 +296,32 @@ export type Worktree = {
   claude: boolean;
   /** Null when git could not tell. */
   status: WorktreeStatus | null;
+  /** The worktree (its path) this one reviews (27.4): shown under that one. */
+  review_of?: string | null;
 };
+
+/** A commit "Bring changes back" would bring (27.4). */
+export type ReviewCommit = { id: string; summary: string };
+
+/**
+ * What "Bring changes back" of a review would do (27.4): its branch's commits missing from the
+ * reviewed worktree's branch `into` (at `base`), newest first (at most 100 listed, `total` counts them all),
+ * and whether `into` only moves forward to `tip`.
+ */
+export type ReviewPlan = {
+  reviewed: string;
+  into: string;
+  /** `into`'s commit when planned: "Bring back" must still find it there. */
+  base: string;
+  branch: string;
+  tip: string;
+  commits: ReviewCommit[];
+  total: number;
+  fast_forward: boolean;
+};
+
+/** The service's `bring_back_plan`: a plan, or why there is none. */
+export type BringBackPlan = { path: string; plan: ReviewPlan | null; error: string | null };
 
 /**
  * Mirrors `hive_protocol::WorktreeStatus`: files changed and their lines added and removed

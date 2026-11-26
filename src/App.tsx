@@ -8,6 +8,7 @@ import { LineMenu, LinePopover } from "./shell/LineAuthor";
 import { NewPullDialog } from "./shell/NewPullDialog";
 import { NewWorktreeDialog } from "./shell/NewWorktreeDialog";
 import { Palette } from "./shell/Palette";
+import { BringBackDialog, DiscardReviewDialog, ReviewWorktreeDialog } from "./shell/ReviewDialogs";
 import { RightPanel } from "./shell/RightPanel";
 import { SessionMenu } from "./shell/SessionsView";
 import { SettingsDialog } from "./shell/SettingsDialog";
@@ -71,6 +72,9 @@ export function App() {
         {modal === "worktree-picker" && !blocked && <WorktreePicker />}
         {modal === "remove-worktree" && !blocked && <RemoveWorktreeDialog />}
         {modal === "rename-worktree" && !blocked && <RenameWorktreeDialog />}
+        {modal === "review-worktree" && !blocked && <ReviewWorktreeDialog />}
+        {modal === "bring-back" && !blocked && <BringBackDialog />}
+        {modal === "discard-review" && !blocked && <DiscardReviewDialog />}
         {under === "new-space" && !blocked && <SpaceDialog editing={false} />}
         {under === "edit-space" && !blocked && <SpaceDialog editing />}
         {modal === "settings" && !blocked && <SettingsDialog />}
