@@ -1234,9 +1234,12 @@ async fn project_requests_go_to_the_service_and_answers_to_the_ui() {
         path: "/r/v".into(),
     };
     assert_eq!(service.control().await, (0, plan));
-    hive.bring_back("/r/v".into(), "ab".into()).unwrap();
+    hive.bring_back("/r/v".into(), "b".into(), "cd".into(), "ab".into())
+        .unwrap();
     let bring = Control::BringBack {
         path: "/r/v".into(),
+        into: "b".into(),
+        base: "cd".into(),
         tip: "ab".into(),
     };
     assert_eq!(service.control().await, (0, bring));
@@ -2466,7 +2469,7 @@ fn commands_reach_the_managed_hive() {
     let rename = json!({"path": "/r/w", "name": "x"});
     let review = json!({"path": "/r/w"});
     let plan = json!({"path": "/r/v"});
-    let bring = json!({"path": "/r/v", "tip": "ab"});
+    let bring = json!({"path": "/r/v", "into": "b", "base": "cd", "tip": "ab"});
     let discard = json!({"path": "/r/v", "force": true});
     let watch = json!({"path": "/r", "base": "branch"});
     let expand = json!({"path": "/r", "folders": ["target"]});

@@ -1,6 +1,12 @@
 import { expect, test } from "bun:test";
 import type { ServiceMessage } from "../protocol";
-import { createMockTransport, MOCK_REPOS, MOCK_REVIEW_COMMITS, mockReviewName } from "./mock";
+import {
+  createMockTransport,
+  MOCK_REPOS,
+  MOCK_REVIEW_BASE,
+  MOCK_REVIEW_COMMITS,
+  mockReviewName,
+} from "./mock";
 
 const tick = () => new Promise((resolve) => setTimeout(resolve, 0));
 
@@ -64,6 +70,7 @@ test("reviews (27.4): made, planned, brought back once and discarded as the serv
     plan: {
       reviewed: shop.path,
       into: "main",
+      base: MOCK_REVIEW_BASE,
       branch: "review-main",
       tip,
       commits: MOCK_REVIEW_COMMITS,
@@ -76,21 +83,25 @@ test("reviews (27.4): made, planned, brought back once and discarded as the serv
     plan: { into: "worktree-fix-login", fast_forward: true },
   });
 
-  expect(await said(() => transport.bringBack("/nope", tip))).toBe("/nope is not a review");
-  expect(await said(() => transport.bringBack(wt("review-main"), "0"))).toBe(
-    "review-main changed since its commits were shown: look again",
-  );
+  const base = MOCK_REVIEW_BASE;
+  const back = (path: string, tip: string, into = "main") =>
+    transport.bringBack(path, into, base, tip);
+  expect(await said(() => back("/nope", tip))).toBe("/nope is not a review");
+  const moved = "review-main changed since the commits were shown: look again";
+  expect(await said(() => back(wt("review-main"), "0"))).toBe(moved);
+  expect(await said(() => back(wt("review-main"), tip, "other"))).toBe(moved);
+  expect(await said(() => transport.bringBack(wt("review-main"), "main", "0", tip))).toBe(moved);
   // fix-login has changes to tracked files in the fake service.
-  expect(await said(() => transport.bringBack(wt("review-fix-login"), tip))).toBe(
+  expect(await said(() => back(wt("review-fix-login"), tip, "worktree-fix-login"))).toBe(
     "fix-login has uncommitted changes: commit or discard them first",
   );
-  expect(await answer(() => transport.bringBack(wt("review-main"), tip))).toMatchObject({
+  expect(await answer(() => back(wt("review-main"), tip))).toMatchObject({
     type: "brought_back",
     path: wt("review-main"),
     commits: 2,
     fast_forward: false,
   });
-  expect(await said(() => transport.bringBack(wt("review-main"), tip))).toBe(
+  expect(await said(() => back(wt("review-main"), tip))).toBe(
     "nothing to bring back: every commit of review-main is on main",
   );
   expect(await answer(() => transport.planBringBack(wt("review-main")))).toMatchObject({

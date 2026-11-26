@@ -116,7 +116,8 @@ export function BringBackDialog() {
       <form
         onSubmit={(e) => {
           e.preventDefault();
-          if (plan && plan.total > 0) void transport.bringBack(w.path, plan.tip);
+          if (plan && plan.total > 0)
+            void transport.bringBack(w.path, plan.into, plan.base, plan.tip);
         }}
       >
         <header>

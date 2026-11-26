@@ -499,6 +499,7 @@ fn samples() -> Vec<Control> {
             plan: Some(ReviewPlan {
                 reviewed: s("/r/.claude/worktrees/x"),
                 into: s("worktree-x"),
+                base: s("beef"),
                 branch: s("review-x"),
                 tip: s("c0ffee"),
                 commits: vec![ReviewCommit {

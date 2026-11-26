@@ -190,11 +190,11 @@ export interface Transport {
   /** What bringing the review `path`'s changes back would do; answered by `bring_back_plan`. */
   planBringBack(path: string): Promise<void>;
   /**
-   * Brings the review `path`'s commits into the reviewed branch while its branch is still at
-   * `tip` (the plan shown): only on the user's click (#12). Answered by `brought_back` or
-   * `bring_back_failed`.
+   * Brings the review `path`'s commits into the reviewed branch while the plan shown still holds
+   * (the reviewed branch `into` at `base`, the review's at `tip`): only on the user's click
+   * (#12). Answered by `brought_back` or `bring_back_failed`.
    */
-  bringBack(path: string, tip: string): Promise<void>;
+  bringBack(path: string, into: string, base: string, tip: string): Promise<void>;
   /**
    * Removes the review `path` as `removeWorktree` does, and its branch when every commit of it
    * was brought back. Answered by `worktree_removed` or `remove_worktree_failed`.

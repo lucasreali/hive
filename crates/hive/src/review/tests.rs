@@ -66,6 +66,18 @@ impl Repo {
     }
 }
 
+/// "Bring back" of the review `path` as its plan shows now, with `tip` as the review's tip.
+fn bring(repo: &Repo, path: &str, tip: &str) -> io::Result<(Project, u64, bool)> {
+    let now = plan(&repo.projects, path).ok();
+    let (into, base) = now.map(|p| (p.into, p.base)).unwrap_or_default();
+    let shown = Shown {
+        into: &into,
+        base: &base,
+        tip,
+    };
+    bring_back(&repo.projects, path, shown, &env())
+}
+
 /// The space's identity, and no global git config (a signing setting of the user's).
 fn env() -> Vec<(&'static str, String)> {
     vec![
@@ -323,6 +335,7 @@ fn a_plan_lists_the_commits_that_would_go() {
         ReviewPlan {
             reviewed: w.clone(),
             into: "worktree-fix".into(),
+            base: repo.git(&w, &["rev-parse", "HEAD"]),
             branch: "review-fix".into(),
             tip: tip.clone(),
             commits: vec![
@@ -368,14 +381,13 @@ fn changes_come_back_as_a_fast_forward_when_the_branch_did_not_move() {
     let review = repo.review(&w);
     commit_file(Path::new(&review), "b");
     let tip = repo.git(&review, &["rev-parse", "HEAD"]);
-    let (project, commits, fast_forward) =
-        bring_back(&repo.projects, &review, &tip, &env()).unwrap();
+    let (project, commits, fast_forward) = bring(&repo, &review, &tip).unwrap();
     assert_eq!((commits, fast_forward), (1, true));
     assert_eq!(repo.git(&w, &["rev-parse", "HEAD"]), tip);
     assert!(Path::new(&w).join("b").exists());
     assert!(project.worktrees.iter().any(|x| x.path == review));
     // Brought back, there is nothing more.
-    let again = bring_back(&repo.projects, &review, &tip, &env()).unwrap_err();
+    let again = bring(&repo, &review, &tip).unwrap_err();
     assert_eq!(
         again.to_string(),
         "nothing to bring back: every commit of review-fix is on worktree-fix"
@@ -391,7 +403,7 @@ fn changes_come_back_as_a_merge_commit_when_both_moved() {
     commit_file(Path::new(&w), "c");
     let tip = repo.git(&review, &["rev-parse", "HEAD"]);
     let before = repo.git(&w, &["rev-parse", "HEAD"]);
-    let (_, commits, fast_forward) = bring_back(&repo.projects, &review, &tip, &env()).unwrap();
+    let (_, commits, fast_forward) = bring(&repo, &review, &tip).unwrap();
     assert_eq!((commits, fast_forward), (1, false));
     let parents = repo.git(&w, &["log", "-1", "--format=%P"]);
     assert_eq!(parents, format!("{before} {tip}"));
@@ -412,7 +424,7 @@ fn a_conflict_is_aborted_with_gits_message() {
     }
     let tip = repo.git(&review, &["rev-parse", "HEAD"]);
     let before = repo.git(&w, &["rev-parse", "HEAD"]);
-    let err = bring_back(&repo.projects, &review, &tip, &env()).unwrap_err();
+    let err = bring(&repo, &review, &tip).unwrap_err();
     let err = err.to_string();
     assert!(
         err.starts_with("git merge stopped; nothing was changed:\n"),
@@ -477,6 +489,35 @@ fn a_merge_that_takes_too_long_is_stopped_and_aborted() {
 }
 
 #[test]
+fn a_merge_git_refuses_leaves_what_was_staged_meanwhile() {
+    let repo = Repo::new();
+    let w = repo.linked("fix");
+    let review = repo.review(&w);
+    std::fs::write(Path::new(&review).join("a"), "theirs").unwrap();
+    run(Path::new(&review), &["commit", "-q", "-am", "theirs"]);
+    commit_file(Path::new(&w), "c");
+    let shown = plan(&repo.projects, &review).unwrap();
+    // Staged after the check for changes: git refuses to merge over it.
+    std::fs::write(Path::new(&w).join("a"), "staged").unwrap();
+    run(Path::new(&w), &["add", "a"]);
+    let err = merge(Path::new(&w), &shown, &env(), MERGE_TIME).unwrap_err();
+    assert!(err.to_string().contains("overwritten"), "{err}");
+    assert_eq!(repo.git(&w, &["diff", "--cached", "--name-only"]), "a");
+    assert_eq!(
+        std::fs::read_to_string(Path::new(&w).join("a")).unwrap(),
+        "staged"
+    );
+}
+
+#[test]
+fn only_the_end_of_what_git_said_is_kept() {
+    assert_eq!(tail("abc", 2), "bc");
+    assert_eq!(tail("abc", 5), "abc");
+    // Never inside a character.
+    assert_eq!(tail("aéb", 2), "b");
+}
+
+#[test]
 fn an_untracked_file_in_the_way_stops_the_merge_with_gits_word() {
     let repo = Repo::new();
     let w = repo.linked("fix");
@@ -486,7 +527,7 @@ fn an_untracked_file_in_the_way_stops_the_merge_with_gits_word() {
     std::fs::write(Path::new(&w).join("u"), "mine").unwrap();
     let tip = repo.git(&review, &["rev-parse", "HEAD"]);
     let before = repo.git(&w, &["rev-parse", "HEAD"]);
-    let err = bring_back(&repo.projects, &review, &tip, &env()).unwrap_err();
+    let err = bring(&repo, &review, &tip).unwrap_err();
     assert!(err.to_string().contains("untracked"), "{err}");
     assert_eq!(repo.git(&w, &["rev-parse", "HEAD"]), before);
     assert_eq!(
@@ -502,15 +543,31 @@ fn nothing_comes_back_with_changes_on_either_side_or_a_moved_review() {
     let review = repo.review(&w);
     commit_file(Path::new(&review), "b");
     let tip = repo.git(&review, &["rev-parse", "HEAD"]);
-    let refused = |tip: &str| {
-        bring_back(&repo.projects, &review, tip, &env())
-            .unwrap_err()
-            .to_string()
-    };
+    let refused = |tip: &str| bring(&repo, &review, tip).unwrap_err().to_string();
 
     assert_eq!(
         refused("0000"),
-        "review-fix changed since its commits were shown: look again"
+        "review-fix changed since the commits were shown: look again"
+    );
+    // The reviewed branch moved, or is another one, since the plan was shown.
+    let shown = plan(&repo.projects, &review).unwrap();
+    let with = |into: &str, base: &str| {
+        let shown = Shown {
+            into,
+            base,
+            tip: &tip,
+        };
+        bring_back(&repo.projects, &review, shown, &env())
+            .unwrap_err()
+            .to_string()
+    };
+    assert_eq!(
+        with(&shown.into, "0000"),
+        "worktree-fix changed since the commits were shown: look again"
+    );
+    assert_eq!(
+        with("other", &shown.base),
+        "fix is now on worktree-fix since the commits were shown: look again"
     );
     std::fs::write(Path::new(&review).join("b"), "edited").unwrap();
     assert_eq!(
@@ -526,9 +583,7 @@ fn nothing_comes_back_with_changes_on_either_side_or_a_moved_review() {
         "fix has uncommitted changes: commit or discard them first"
     );
     assert_eq!(
-        bring_back(&repo.projects, &w, &tip, &env())
-            .unwrap_err()
-            .to_string(),
+        bring(&repo, &w, &tip).unwrap_err().to_string(),
         "fix is not a review"
     );
 }
@@ -561,7 +616,7 @@ fn a_discarded_review_takes_its_branch_only_when_brought_back() {
     let review = repo.review(&w);
     commit_file(Path::new(&review), "b");
     let tip = repo.git(&review, &["rev-parse", "HEAD"]);
-    bring_back(&repo.projects, &review, &tip, &env()).unwrap();
+    bring(&repo, &review, &tip).unwrap();
     discard(&review, false).unwrap();
     assert!(!has("review-fix"));
 

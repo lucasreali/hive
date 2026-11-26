@@ -2066,8 +2066,20 @@ impl Host {
     }
 
     /// The answer arrives as `brought_back` or `bring_back_failed`.
-    pub fn bring_back(&self, path: String, tip: String) -> Result<(), String> {
-        self.link().send(0, &Control::BringBack { path, tip })
+    pub fn bring_back(
+        &self,
+        path: String,
+        into: String,
+        base: String,
+        tip: String,
+    ) -> Result<(), String> {
+        let bring = Control::BringBack {
+            path,
+            into,
+            base,
+            tip,
+        };
+        self.link().send(0, &bring)
     }
 
     /// The answer arrives as `worktree_removed` or `remove_worktree_failed`.
@@ -3331,9 +3343,11 @@ pub mod commands {
         hive: State<'_, Hive>,
         host: Option<String>,
         path: String,
+        into: String,
+        base: String,
         tip: String,
     ) -> Result<(), String> {
-        hive.on(host.as_deref())?.bring_back(path, tip)
+        hive.on(host.as_deref())?.bring_back(path, into, base, tip)
     }
 
     #[tauri::command]

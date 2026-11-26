@@ -861,6 +861,9 @@ export const MOCK_REVIEW_COMMITS: ReviewCommit[] = [
   { id: "4d7e013", summary: "Test the expired session" },
 ];
 
+/** The reviewed branch's commit in every fake plan. */
+export const MOCK_REVIEW_BASE = "77aa000";
+
 /** A stand-in for `hive::review::review_name`: `review-<name>`, any other character a `-`. */
 export const mockReviewName = (name: string) =>
   `review-${name.toLowerCase().replace(/[^a-z0-9_]+/g, "-")}`.replace(/-+$/, "");
@@ -1723,6 +1726,7 @@ export function createMockTransport(
       const plan = {
         reviewed: reviewed.path,
         into: reviewed.branch ?? "",
+        base: MOCK_REVIEW_BASE,
         branch: review.branch ?? "",
         tip: commits[0]?.id ?? "0000000",
         commits,
@@ -1731,7 +1735,7 @@ export function createMockTransport(
       };
       later({ type: "bring_back_plan", path, plan, error: null });
     },
-    async bringBack(path, tip) {
+    async bringBack(path, into, base, tip) {
       const failed = (message: string) => void later({ type: "bring_back_failed", path, message });
       const review = worktreeAt(path);
       const reviewed = review?.review_of ? worktreeAt(review.review_of) : undefined;
@@ -1748,8 +1752,8 @@ export function createMockTransport(
           `nothing to bring back: every commit of ${review.branch} is on ${reviewed.branch}`,
         );
       }
-      if (commits[0]?.id !== tip) {
-        return failed(`${review.branch} changed since its commits were shown: look again`);
+      if (into !== reviewed.branch || base !== MOCK_REVIEW_BASE || commits[0]?.id !== tip) {
+        return failed(`${review.branch} changed since the commits were shown: look again`);
       }
       reviews.set(path, []);
       const project = holder(path) as Project;

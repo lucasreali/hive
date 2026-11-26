@@ -38,6 +38,8 @@ const SUMMARY_LIMIT: usize = 200;
 const MERGE_TIME: Duration = Duration::from_secs(120);
 /// Most bytes read from one git command's stdout.
 const OUTPUT_LIMIT: u64 = 16 * 1024 * 1024;
+/// Most bytes of what git said kept in an error: its end, where git says why it stopped.
+const SAID_LIMIT: usize = 64 * 1024;
 
 /// A review worktree and the worktree it reviews, both of the repository `project`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -235,9 +237,14 @@ fn branch_of(w: &Worktree) -> io::Result<String> {
         .ok_or_else(|| io::Error::other(format!("{} is detached: it is on no branch", w.name)))
 }
 
-/// `git <args>` in `dir`, its output as text without the last newline.
+/// `git <args>` in `dir` within [`git::TIME_LIMIT`]: these run while worktree changes wait.
+fn read(dir: &Path, args: &[&str], ok: &[i32]) -> io::Result<Vec<u8>> {
+    git::output_within(dir, args, ok, git::TIME_LIMIT)
+}
+
+/// [`read`], its output as text without the last newline.
 fn text(dir: &Path, args: &[&str]) -> io::Result<String> {
-    let out = git::output(dir, args, &[0])?;
+    let out = read(dir, args, &[0])?;
     Ok(String::from_utf8_lossy(&out).trim_end().to_owned())
 }
 
@@ -262,7 +269,7 @@ pub fn plan(projects: &Projects, path: &str) -> io::Result<ReviewPlan> {
     let (tip, base) = (commit(dir, &branch)?, commit(dir, &into)?);
     let range = format!("{base}..{tip}");
     let shown = format!("--max-count={BRING_BACK_SHOWN}");
-    let log = git::output(
+    let log = read(
         dir,
         &["log", "-z", "--format=%H%x1f%s", &shown, &range],
         &[0],
@@ -270,10 +277,11 @@ pub fn plan(projects: &Projects, path: &str) -> io::Result<ReviewPlan> {
     Ok(ReviewPlan {
         reviewed: reviewed.path,
         into,
+        fast_forward: count(dir, &format!("{tip}..{base}"))? == 0,
+        base,
         branch,
         commits: parse_log(&log),
         total: count(dir, &range)?,
-        fast_forward: count(dir, &format!("{tip}..{base}"))? == 0,
         tip,
     })
 }
@@ -301,7 +309,7 @@ fn clean(w: &Worktree) -> io::Result<()> {
     // Untracked files are no changes git could lose: a merge that would write over one stops
     // (and says so), and a review's folder is one in the main worktree.
     let args = ["status", "--porcelain", "-z", "--untracked-files=no"];
-    match git::output(Path::new(&w.path), &args, &[0])?.is_empty() {
+    match read(Path::new(&w.path), &args, &[0])?.is_empty() {
         true => Ok(()),
         false => Err(io::Error::other(format!(
             "{} has uncommitted changes: commit or discard them first",
@@ -310,24 +318,36 @@ fn clean(w: &Worktree) -> io::Result<()> {
     }
 }
 
+/// What the user saw of a [`ReviewPlan`] when they clicked "Bring back" (#12).
+#[derive(Debug, Clone, Copy)]
+pub struct Shown<'a> {
+    pub into: &'a str,
+    pub base: &'a str,
+    pub tip: &'a str,
+}
+
 /// Brings the review `path`'s commits into its reviewed branch, in the reviewed worktree, with
-/// `env` (the space's git identity, 21.5): only while both worktrees are clean and the review's
-/// branch is still at `tip`. Answers the project, the commits brought and whether it was a
+/// `env` (the space's git identity, 21.5): only while both worktrees are clean and the plan is
+/// still the one `shown`. Answers the project, the commits brought and whether it was a
 /// fast-forward.
 pub fn bring_back(
     projects: &Projects,
     path: &str,
-    tip: &str,
+    shown: Shown,
     env: &[(&str, String)],
 ) -> io::Result<(Project, u64, bool)> {
     let (owner, review, reviewed) = pair(projects, path)?;
     clean(&review)?;
     clean(&reviewed)?;
     let plan = plan(projects, path)?;
-    if plan.tip != tip {
+    let moved = match (plan.into == shown.into, plan.base == shown.base) {
+        (false, _) => Some(format!("{} is now on {}", reviewed.name, plan.into)),
+        (true, false) => Some(format!("{} changed", plan.into)),
+        _ => (plan.tip != shown.tip).then(|| format!("{} changed", plan.branch)),
+    };
+    if let Some(moved) = moved {
         return Err(io::Error::other(format!(
-            "{} changed since its commits were shown: look again",
-            plan.branch
+            "{moved} since the commits were shown: look again"
         )));
     }
     if plan.total == 0 {
@@ -358,29 +378,44 @@ fn merge(dir: &Path, plan: &ReviewPlan, env: &[(&str, String)], time: Duration) 
         .env("GIT_TERMINAL_PROMPT", "0")
         .env("GIT_MERGE_AUTOEDIT", "no");
     let keep = Stdout::Max(OUTPUT_LIMIT);
-    let said = match git::ran(command, "git", &args, &[], keep, Some(time)) {
+    let (said, killed) = match git::ran(command, "git", &args, &[], keep, Some(time)) {
         Ok(ran) if ran.code == Some(0) => return Ok(()),
         // Git says what stopped it on both: a conflict on stdout, a refusal on stderr.
-        Ok(ran) => String::from_utf8_lossy(&[ran.out, ran.err].concat())
-            .trim()
-            .to_owned(),
-        Err(err) => err.to_string(),
+        Ok(ran) => (
+            String::from_utf8_lossy(&[ran.out, ran.err].concat()).into_owned(),
+            false,
+        ),
+        Err(err) => (err.to_string(), true),
     };
-    // Stopped after the merge was made (a hook after it, past `time`): it is done all the same.
-    if count(dir, &format!("HEAD..{}", plan.tip))? == 0 {
+    let merging = read(dir, &["rev-parse", "-q", "--verify", "MERGE_HEAD"], &[0, 1])?;
+    // Stopped by Hive after its commit (a hook after it, past `time`): done all the same.
+    let done = killed && count(dir, &format!("HEAD..{}", plan.tip))? == 0;
+    if !merging.is_empty() {
+        // A conflict, a merge stopped before its commit, or what one stopped after it left:
+        // `--abort` goes back to `HEAD`.
+        git::output(dir, &["merge", "--abort"], &[0])?;
+    } else if killed && !done {
+        // Stopped by Hive before git wrote `MERGE_HEAD`: its files go back to before, which
+        // was clean. (A merge git refused itself changed nothing, and is left alone: what was
+        // staged meanwhile stays.)
+        git::output(dir, &["reset", "--merge"], &[0])?;
+    }
+    if done {
         return Ok(());
     }
-    // Back to before, which was clean: a conflict is aborted; a merge stopped before it wrote
-    // `MERGE_HEAD` (a hook before the commit, past `time`) may have left its files.
-    let merging = git::output(dir, &["rev-parse", "-q", "--verify", "MERGE_HEAD"], &[0, 1])?;
-    let undo = match merging.is_empty() {
-        true => ["reset", "--merge"],
-        false => ["merge", "--abort"],
-    };
-    git::output(dir, &undo, &[0])?;
     Err(io::Error::other(format!(
-        "git merge stopped; nothing was changed:\n{said}"
+        "git merge stopped; nothing was changed:\n{}",
+        tail(said.trim(), SAID_LIMIT)
     )))
+}
+
+/// The last `limit` bytes of `text` at most, from a character's start.
+fn tail(text: &str, limit: usize) -> &str {
+    let mut start = text.len().saturating_sub(limit);
+    while !text.is_char_boundary(start) {
+        start += 1;
+    }
+    &text[start..]
 }
 
 /// Removes the review `path` as [`Projects::remove_worktree`] does (`force`, `proc`, `before`),

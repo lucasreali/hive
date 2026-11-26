@@ -663,12 +663,22 @@ async fn app_frame(
                 plan: plan.ok(),
             }
         }),
-        Ok(Control::BringBack { path, tip }) => {
+        Ok(Control::BringBack {
+            path,
+            into,
+            base,
+            tip,
+        }) => {
             // The merge commit has the space's git identity (21.5), as its terminals would.
             let space = tokio::task::block_in_place(|| state.projects.space_env(&path));
             let env = crate::spaces::vars(&space);
             state.change_worktrees(move |projects| {
-                match review::bring_back(projects, &path, &tip, &env) {
+                let shown = review::Shown {
+                    into: &into,
+                    base: &base,
+                    tip: &tip,
+                };
+                match review::bring_back(projects, &path, shown, &env) {
                     Ok((project, commits, fast_forward)) => Control::BroughtBack {
                         project,
                         path,

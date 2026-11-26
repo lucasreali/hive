@@ -786,10 +786,13 @@ pub enum Control {
     /// App → service, on the user's click only (#12): brings the review `path`'s commits into
     /// its reviewed worktree's branch, in that worktree: a fast-forward when possible, else a
     /// merge commit (never a rebase). Refused when either worktree has uncommitted changes, or
-    /// when the review's branch is no longer at `tip` (the plan shown); a conflict is aborted
-    /// and its message answered. Answered by `BroughtBack` or `BringBackFailed`.
+    /// when anything differs from the plan shown: the reviewed branch `into` at `base`, the
+    /// review's branch at `tip`; a conflict is aborted and its message answered. Answered by
+    /// `BroughtBack` or `BringBackFailed`.
     BringBack {
         path: String,
+        into: String,
+        base: String,
         tip: String,
     },
     BroughtBack {
@@ -2015,9 +2018,11 @@ pub struct Worktree {
 /// What "Bring changes back" of a review (27.4) would do.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ReviewPlan {
-    /// The reviewed worktree (its path), and its branch the commits go to.
+    /// The reviewed worktree (its path), its branch the commits go to and that branch's commit:
+    /// `BringBack` must still find both.
     pub reviewed: String,
     pub into: String,
+    pub base: String,
     /// The review's branch, and its tip: the commit id `BringBack` must still find there.
     pub branch: String,
     pub tip: String,
@@ -3535,17 +3540,20 @@ mod tests {
         );
         let bring = Control::BringBack {
             path: "/r/v".into(),
+            into: "b".into(),
+            base: "cd".into(),
             tip: "ab".into(),
         };
         assert_eq!(
             &Frame::control(0, &bring).payload[..],
-            br#"{"type":"bring_back","path":"/r/v","tip":"ab"}"#
+            br#"{"type":"bring_back","path":"/r/v","into":"b","base":"cd","tip":"ab"}"#
         );
         let plan = Control::BringBackPlan {
             path: "/r/v".into(),
             plan: Some(ReviewPlan {
                 reviewed: "/r/w".into(),
                 into: "b".into(),
+                base: "cd".into(),
                 branch: "review-w".into(),
                 tip: "ab".into(),
                 commits: vec![ReviewCommit {
@@ -3559,7 +3567,7 @@ mod tests {
         };
         assert_eq!(
             &Frame::control(0, &plan).payload[..],
-            br#"{"type":"bring_back_plan","path":"/r/v","plan":{"reviewed":"/r/w","into":"b","branch":"review-w","tip":"ab","commits":[{"id":"ab","summary":"fix"}],"total":1,"fast_forward":true},"error":null}"#
+            br#"{"type":"bring_back_plan","path":"/r/v","plan":{"reviewed":"/r/w","into":"b","base":"cd","branch":"review-w","tip":"ab","commits":[{"id":"ab","summary":"fix"}],"total":1,"fast_forward":true},"error":null}"#
         );
         assert_eq!(Frame::control(0, &plan).to_control().unwrap(), plan);
         let discard = Control::DiscardReview {

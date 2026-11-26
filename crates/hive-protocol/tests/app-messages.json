@@ -528,6 +528,7 @@
     "plan": {
       "reviewed": "/r/.claude/worktrees/x",
       "into": "worktree-x",
+      "base": "beef",
       "branch": "review-x",
       "tip": "c0ffee",
       "commits": [

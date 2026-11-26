@@ -105,6 +105,8 @@ async fn a_review_is_made_brought_back_on_request_and_discarded() {
     // A tip the user did not see is refused; the one shown is merged.
     let bring = |tip: &str| Control::BringBack {
         path: path.clone(),
+        into: plan.into.clone(),
+        base: plan.base.clone(),
         tip: tip.into(),
     };
     let Control::BringBackFailed { message, .. } = request(&mut conn, bring("0")).await else {
@@ -112,7 +114,7 @@ async fn a_review_is_made_brought_back_on_request_and_discarded() {
     };
     assert_eq!(
         message,
-        "review-main changed since its commits were shown: look again"
+        "review-main changed since the commits were shown: look again"
     );
     let Control::BroughtBack {
         project,

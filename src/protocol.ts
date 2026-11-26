@@ -293,12 +293,14 @@ export type ReviewCommit = { id: string; summary: string };
 
 /**
  * What "Bring changes back" of a review would do (27.4): its branch's commits missing from the
- * reviewed worktree's branch `into`, newest first (at most 100 listed, `total` counts them all),
+ * reviewed worktree's branch `into` (at `base`), newest first (at most 100 listed, `total` counts them all),
  * and whether `into` only moves forward to `tip`.
  */
 export type ReviewPlan = {
   reviewed: string;
   into: string;
+  /** `into`'s commit when planned: "Bring back" must still find it there. */
+  base: string;
   branch: string;
   tip: string;
   commits: ReviewCommit[];

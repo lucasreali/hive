@@ -168,6 +168,7 @@ test("a review is created by the service and selected; its notes keep the dialog
 const plan = (extra: Partial<ReviewPlan> = {}): ReviewPlan => ({
   reviewed: login.path,
   into: "worktree-fix-login",
+  base: "77aa000",
   branch: "review-fix-login",
   tip: "9f1c2ab0000",
   commits: MOCK_REVIEW_COMMITS,
@@ -204,7 +205,12 @@ test("bringing changes back shows the commits first and merges only on the click
   expect(dialog.textContent).not.toContain("more");
   expect(submit.disabled).toBe(false);
   fireEvent.click(submit);
-  expect(bring).toHaveBeenLastCalledWith(reviewPath, "9f1c2ab0000");
+  expect(bring).toHaveBeenLastCalledWith(
+    reviewPath,
+    "worktree-fix-login",
+    "77aa000",
+    "9f1c2ab0000",
+  );
 
   // git's message, line by line; another review's failure is not this one's.
   act(() => apply({ type: "bring_back_failed", path: "/x", message: "no" }));
