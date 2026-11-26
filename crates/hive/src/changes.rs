@@ -258,29 +258,25 @@ pub fn parse_staged(out: &[u8]) -> HashMap<Vec<u8>, Staged> {
     let mut records = out.split(|&b| b == 0);
     while let Some(record) = records.next() {
         let fields = |n| record.splitn(n, |&b| b == b' ').collect::<Vec<_>>();
-        let (n, path) = match record.first() {
-            Some(b'1') => (9, 8),
+        // The fields of each kind of record, where its path is, and whether it can be staged.
+        let (n, path, stageable) = match record.first() {
+            Some(b'1') => (9, 8, true),
             Some(b'2') => {
                 // A rename's old path is the next record.
                 records.next();
-                (10, 9)
+                (10, 9, true)
             }
-            Some(b'?' | b'u') => {
-                let n = if record.first() == Some(&b'u') { 11 } else { 2 };
-                if let Some(path) = fields(n).get(n - 1) {
-                    staged.insert(path.to_vec(), Staged::No);
-                }
-                continue;
-            }
+            Some(b'?') => (2, 1, false),
+            Some(b'u') => (11, 10, false),
             _ => continue,
         };
         let fields = fields(n);
         let (Some(xy), Some(path)) = (fields.get(1), fields.get(path)) else {
             continue;
         };
-        let state = match (xy.first(), xy.get(1)) {
-            (Some(b'.'), _) => Staged::No,
-            (_, Some(b'.')) => Staged::Yes,
+        let state = match (stageable, xy.first(), xy.get(1)) {
+            (false, ..) | (_, Some(b'.'), _) => Staged::No,
+            (_, _, Some(b'.')) => Staged::Yes,
             _ => Staged::Partly,
         };
         staged.insert(path.to_vec(), state);
