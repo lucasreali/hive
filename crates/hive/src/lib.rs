@@ -2,6 +2,7 @@
 
 pub mod actions;
 pub mod adapter;
+pub mod anchor;
 pub mod bridge;
 pub mod browser_cleanup;
 pub mod changes;
@@ -32,6 +33,7 @@ pub mod paths;
 pub mod power;
 pub mod procs;
 pub mod projects;
+pub mod provenance;
 pub mod pulls;
 pub mod registry;
 pub mod ring;
@@ -42,6 +44,7 @@ pub mod session_watch;
 pub mod sessions;
 pub mod settings;
 pub mod shared;
+pub mod slim;
 pub mod snapshot;
 pub mod spaces;
 pub mod states;

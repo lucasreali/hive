@@ -236,6 +236,8 @@ fn main() {
             commands::list_sessions,
             commands::locate_session,
             commands::delete_session,
+            commands::who_wrote,
+            commands::list_session_files,
             commands::move_session,
             commands::save_file,
             commands::create_file,

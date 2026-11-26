@@ -205,6 +205,17 @@ export type ServiceMessage =
   // Handled by `resume` (src/sessions.ts), not stored.
   | { type: "session_moved"; id: string; config_dir: string | null }
   | { type: "move_session_failed"; id: string; message: string }
+  // Who wrote a line (27.5): the open question's answer (`provenance` in the store).
+  | {
+      type: "line_author";
+      worktree: string;
+      path: string;
+      line: number;
+      side: LineSide;
+      origin: LineOrigin;
+    }
+  // The files a session changed (27.5), kept by session (`sessionFiles` in the store).
+  | { type: "session_files"; id: string; files: SessionFile[]; truncated: boolean }
   | { type: "file_saved"; worktree: string; path: string; version: string }
   | { type: "save_failed"; worktree: string; path: string; error: SaveError; message: string }
   | { type: "file_created"; worktree: string; path: string }
@@ -517,8 +528,54 @@ export type Session = {
    * shell Hive's terminals run; null when that shell (Command Prompt) cannot quote its folders.
    */
   resume_command: string | null;
+  /** The files Hive recorded it changing (27.5), 0 when none. */
+  files_changed: number;
 };
 export type SessionTarget = "log" | "folder";
+
+/** Which side of a file a line number counts on (27.5): the worktree's file, or the diff's base. */
+export type LineSide = "worktree" | "base";
+
+/** A commit, as `git blame` names it (`ms`: its author time). */
+export type LineCommit = { id: string; author: string; ms: number; summary: string };
+
+/** The recorded edit that wrote a line (27.5); `start`/`len`: the lines still from it. */
+export type LineEdit = {
+  session: string;
+  title: string | null;
+  /** Its log is gone (deleted in the Sessions view): the record stays. */
+  deleted: boolean;
+  project: string | null;
+  worktree: string;
+  agent: string | null;
+  agent_type: string | null;
+  tool: string;
+  tool_use_id: string | null;
+  ms: number;
+  /** The user changed the edit before accepting it. */
+  user_modified: boolean;
+  start: number;
+  len: number;
+};
+
+/**
+ * Who wrote a line, as far as Hive recorded (27.5): a session's edit (`commit` null: followed
+ * live; set: found through `git blame`, so only probable), the user in Hive's editor, or unknown.
+ */
+export type LineOrigin =
+  | { kind: "session"; edit: LineEdit; commit: LineCommit | null }
+  | { kind: "editor"; ms: number }
+  | { kind: "unknown"; commit: LineCommit | null };
+
+/** A file a session changed (27.5): `path` relative to `worktree`, `first_line` to open it at. */
+export type SessionFile = {
+  worktree: string;
+  path: string;
+  edits: number;
+  lines_now: number;
+  first_line: number | null;
+  last_ms: number;
+};
 
 /** A line of a file holding the searched text (`line` is 1-based). */
 export type SearchMatch = { path: string; line: number; text: string };

@@ -3884,6 +3884,125 @@ button.result-file:hover,
   outline: none;
 }
 
+/* "Who wrote this line?" (27.5): the edit found, a session's changed files, and the session of
+   another worktree shown on top. */
+.session[data-focused] {
+  background: var(--selected);
+}
+
+.session-edit {
+  font-size: var(--fs-meta);
+  color: var(--accent);
+}
+
+.session-files-toggle {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin: -4px 12px 8px;
+  padding: 0 4px;
+  border-radius: var(--radius-sm);
+  font-size: var(--fs-meta);
+  color: var(--text-2);
+}
+
+.session-files-toggle:hover,
+.session-files-toggle:focus-visible {
+  background: var(--selected-hover);
+  color: var(--text);
+  outline: none;
+}
+
+.session-files-toggle[aria-expanded="true"] .session-files-caret {
+  transform: rotate(90deg);
+}
+
+.session-files {
+  display: flex;
+  flex-direction: column;
+  padding: 0 8px 8px 24px;
+}
+
+.session-file {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 3px 6px;
+  text-align: left;
+  border-radius: var(--radius-sm);
+  min-width: 0;
+}
+
+.session-file:hover,
+.session-file:focus-visible {
+  background: var(--selected-hover);
+  outline: none;
+}
+
+.session-file[data-focused] {
+  box-shadow: inset 2px 0 0 var(--accent);
+  background: var(--selected-hover);
+}
+
+.session-file-path {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--fs-small);
+  color: var(--text);
+}
+
+.sessions-from {
+  flex: none;
+  border-bottom: 1px solid var(--border);
+}
+
+.sessions-from-title {
+  margin: 0;
+  padding: 6px 12px 0;
+  font-size: var(--fs-meta);
+  font-weight: 600;
+  color: var(--text-3);
+}
+
+.sessions-from ul {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+/* The answer's popover, by the line it is about. */
+.line-author {
+  position: fixed;
+  z-index: 20;
+  max-width: 360px;
+  padding: 8px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: var(--fs-small);
+  color: var(--text);
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+}
+
+.line-author p {
+  margin: 0;
+}
+
+.line-author-commit {
+  color: var(--text-3);
+  font-size: var(--fs-meta);
+}
+
+.line-author-actions {
+  display: flex;
+  justify-content: flex-end;
+}
+
 /* The side panels' draggable edges (shell/resize.tsx) */
 .resize-handle {
   position: absolute;

@@ -107,6 +107,18 @@ pub fn against(
     Ok(against)
 }
 
+/// The commit `asked` compares the worktree `path` of `projects` with: the merge-base or the
+/// commit picked; `None` for `HEAD`, for an agent's turn (its snapshot is a tree, no commit),
+/// and for a base that falls back to `HEAD`.
+pub fn base_commit(projects: &[Project], path: &str, asked: &DiffBase) -> Option<String> {
+    let (dir, branch) = projects::followed(projects, path).ok()?;
+    match asked {
+        DiffBase::Branch => merge_base(&dir, branch.as_deref()).ok(),
+        DiffBase::Commit { id } => verify(&dir, id).ok(),
+        DiffBase::Head | DiffBase::Turn { .. } => None,
+    }
+}
+
 /// The merge-base of `HEAD` in `dir` and the main worktree's `branch`, or why there is none.
 fn merge_base(dir: &Path, branch: Option<&str>) -> Result<String, String> {
     let name = branch.ok_or(NO_BRANCH)?;
@@ -1032,6 +1044,15 @@ garbage\0\
                 (None, DiffBase::Head, Some(why))
             );
         }
+        // The commit each base compares with (27.5's blame of the base side).
+        let commit_of = |base: &DiffBase| base_commit(&projects, &path, base);
+        assert_eq!(commit_of(&DiffBase::Branch), Some(fork.clone()));
+        assert_eq!(commit_of(&picked), Some(fork.clone()));
+        let turn = DiffBase::Turn {
+            session: "s".into(),
+        };
+        assert_eq!((commit_of(&DiffBase::Head), commit_of(&turn)), (None, None));
+        assert_eq!(base_commit(&projects, "/nope", &DiffBase::Branch), None);
         // A 64-digit id in a SHA-1 repository is not one of its commits either.
         let long = DiffBase::Commit { id: "a".repeat(64) };
         let used = against(&projects, snapshots, &path, &long).unwrap();

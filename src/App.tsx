@@ -4,6 +4,7 @@ import { CloseAppDialog, confirmClose } from "./shell/CloseAppDialog";
 import { ConfirmDialog } from "./shell/ConfirmDialog";
 import { ConnectionBlock } from "./shell/ConnectionBlock";
 import { FileMenu, FileNameDialog } from "./shell/FileMenu";
+import { LineMenu, LinePopover } from "./shell/LineAuthor";
 import { NewPullDialog } from "./shell/NewPullDialog";
 import { NewWorktreeDialog } from "./shell/NewWorktreeDialog";
 import { Palette } from "./shell/Palette";
@@ -86,6 +87,8 @@ export function App() {
         {!blocked && <ProjectMenu />}
         {!blocked && <SessionMenu />}
         {!blocked && <FileMenu />}
+        {!blocked && <LineMenu />}
+        {!blocked && <LinePopover />}
         <ConnectionBlock />
       </div>
       <Toasts />

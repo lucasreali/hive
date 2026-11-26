@@ -13,6 +13,7 @@ import {
 import { paneState } from "../tabs";
 import { type EditBuffer, isFor, resolve } from "./buffer";
 import { createEditor, type Editor, restoreView, revealLine, snapshot } from "./editor";
+import { lineMenu, trackView } from "./lineAuthor";
 import { saveOpenFile } from "./save";
 
 export { saveOpenFile };
@@ -43,12 +44,14 @@ export function EditView({ edit }: { edit: EditBuffer }) {
   useEffect(() => {
     const { openFiles } = useHive.getState();
     const file = latest.current;
-    const created = createEditor(parent.current as HTMLDivElement, path, file.doc, {
-      change: (doc) => changed(file, doc),
-      save: saveOpenFile,
-      select: selectIn(file),
-    });
+    const events = { change: (doc: EditBuffer["doc"]) => changed(file, doc), save: saveOpenFile };
+    // "View diff" compares with the disk's text, not the base: its removed lines are not asked
+    // about (27.5).
+    const menu = lineMenu(file, false);
+    const at = parent.current as HTMLDivElement;
+    const created = createEditor(at, path, file.doc, { ...events, select: selectIn(file) }, menu);
     editor.current = created;
+    const untrack = trackView(file, created.view);
     // Shown again in its tab (8.21): as it was left.
     restoreView(created.view, openFiles.find((f) => isFor(f, file))?.view, takePlace(file));
     return () => {
@@ -56,6 +59,7 @@ export function EditView({ edit }: { edit: EditBuffer }) {
       saveFileView(file, left);
       // Left for the rendered Markdown (21.3): it starts at the same line.
       leaveView(file, true, left.top);
+      untrack();
       created.destroy();
       setSelectedLines(null);
     };

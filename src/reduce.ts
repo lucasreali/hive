@@ -6,6 +6,7 @@ import type {
   ServiceMessage,
   WorktreeFiles,
 } from "./protocol";
+import { authorAnswered } from "./provenance";
 import {
   type FileTab,
   type HiveState,
@@ -451,6 +452,12 @@ function reduce(s: HiveState, m: HostMessage): Partial<HiveState> {
       return { sessions: s.sessions?.filter((x) => x.id !== m.id) ?? null };
     case "delete_session_failed":
       return withNotice(s, "error", `Cannot delete the session: ${m.message}`);
+    case "line_author":
+      return authorAnswered(s, m);
+    case "session_files":
+      return {
+        sessionFiles: { ...s.sessionFiles, [m.id]: { files: m.files, truncated: m.truncated } },
+      };
     case "search_results": {
       const { type: _, ...searchResults } = m;
       return { searchResults };
