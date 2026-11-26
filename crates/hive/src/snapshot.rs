@@ -253,12 +253,12 @@ impl Snapshots {
             return Vec::new();
         };
         let (store, _) = self.store(&repo);
+        let mut all = store.read().turns;
+        // Each session's highest first: the one kept.
+        all.sort_by_key(|t| Reverse(t.n));
         let mut last: HashMap<String, Turn> = HashMap::new();
-        for turn in store.read().turns {
-            let newer = last.get(&turn.session).is_none_or(|had| had.n < turn.n);
-            if newer {
-                last.insert(turn.session.clone(), turn);
-            }
+        for turn in all {
+            last.entry(turn.session.clone()).or_insert(turn);
         }
         let mut turns: Vec<Turn> = last.into_values().filter(|t| t.worktree == id).collect();
         turns.sort_by_key(|t| Reverse((t.started_ms, t.session.clone())));

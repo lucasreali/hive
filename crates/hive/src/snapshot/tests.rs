@@ -87,6 +87,11 @@ fn a_snapshot_holds_the_worktree_with_untracked_files_and_without_ignored_ones()
     assert_eq!(tree_files(&since), [".gitignore", "a", "new"]);
     assert_eq!(content(&since, "a").as_deref(), Some("a2"));
     assert_eq!(content(&since, "gone"), None);
+    // A file the turn did not change is read through the repository's objects (the alternate).
+    assert_eq!(
+        content(&since, ".gitignore").as_deref(),
+        Some("ignored/\n*.log\n")
+    );
     // The repository's own objects do not hold the tree.
     let cat = ["cat-file", "-e", turn.tree.as_str()];
     assert!(git::output(&root, &cat, &[0]).is_err());
@@ -619,6 +624,14 @@ fn a_record_that_cannot_be_opened_resets_the_store() {
     std::fs::remove_file(store.record()).unwrap();
     std::fs::create_dir(store.record()).unwrap();
     assert_eq!(take(&snapshots, &root, "s", 2).n, 1);
+    // One that cannot even be opened (a link to itself) too.
+    #[cfg(unix)]
+    {
+        take(&snapshots, &root, "s", 3);
+        std::fs::remove_file(store.record()).unwrap();
+        std::os::unix::fs::symlink(store.record(), store.record()).unwrap();
+        assert_eq!(take(&snapshots, &root, "s", 4).n, 1);
+    }
 }
 
 #[test]
