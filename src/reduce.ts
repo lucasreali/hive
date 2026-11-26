@@ -359,6 +359,41 @@ function reduce(s: HiveState, m: HostMessage): Partial<HiveState> {
       const { type: _, ...runError } = m;
       return { runBusy: null, runError };
     }
+    case "workflows": {
+      const { type: _, ...workflows } = m;
+      return { workflows };
+    }
+    case "workflow_started": {
+      // The dialog has done its job; the Actions view follows the new run, once found.
+      const run =
+        m.run === null
+          ? {}
+          : { openRun: { project: m.project, run: m.run, detail: null, error: null } };
+      return {
+        workflowBusy: false,
+        workflowError: null,
+        ...run,
+        ...withNotice(s, "info", m.message),
+        modal: s.modal === "run-workflow" ? null : s.modal,
+      };
+    }
+    case "workflow_failed":
+      return { workflowBusy: false, workflowError: m.message };
+    case "push_target": {
+      const { type: _, ...target } = m;
+      return { pushTargets: { ...s.pushTargets, [m.worktree]: target } };
+    }
+    case "git_done": {
+      const git = { ...s.git, [m.worktree]: { busy: null, error: null } };
+      // Staging shows in the list itself; a commit or a push says so.
+      if (m.action === "stage" || m.action === "unstage") return { git };
+      const pushed = m.action === "push" && s.modal === "push";
+      return { git, ...withNotice(s, "info", m.message), modal: pushed ? null : s.modal };
+    }
+    case "git_failed": {
+      const error = { action: m.action, message: m.message };
+      return { git: { ...s.git, [m.worktree]: { busy: null, error } } };
+    }
     case "claude_logins":
       return { claudeLogins: m.logins };
     case "gh_accounts": {

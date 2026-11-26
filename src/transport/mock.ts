@@ -27,6 +27,7 @@ import type {
 import { DEFAULT_SETTINGS, scriptsOf } from "../store";
 import type { Tray } from "../tray";
 import type { Transport } from ".";
+import { createMockGit } from "./mockGit";
 import { createMockPulls } from "./mockPulls";
 import { createMockRuns } from "./mockRuns";
 import { loadReplay, type ReplayEvent } from "./replay";
@@ -205,7 +206,15 @@ const change = (
   added: number | null,
   removed: number | null,
   old_path: string | null = null,
-): ChangedFile => ({ path, status, old_path, added, removed });
+): ChangedFile => ({
+  path,
+  status,
+  old_path,
+  added,
+  removed,
+  // What `git add` and `git mv` staged (27.6): new and renamed files.
+  staged: status === "added" || status === "renamed" ? "yes" : "no",
+});
 
 /** What differs from HEAD in the fake worktrees, by path (after the prototype's screen 1g). */
 export const MOCK_CHANGES: Record<string, ChangedFile[]> = {
@@ -625,8 +634,16 @@ const mockFiles = (worktree: Worktree) =>
 /** The service's reason a branch base falls back to HEAD without a branch to compare with. */
 const NO_BRANCH = "No branch to compare with: this is the main worktree, or it is detached";
 
-/** A stand-in for `hive::changes::answer`: the fake worktree's changes, or why not. */
-function changes(projects: Project[], path: string, asked: DiffBase): ServiceMessage {
+/**
+ * A stand-in for `hive::changes::answer`: the fake worktree's changes (`all`, as staging and
+ * commits left them), or why not.
+ */
+function changes(
+  projects: Project[],
+  path: string,
+  asked: DiffBase,
+  all: Record<string, ChangedFile[]> = MOCK_CHANGES,
+): ServiceMessage {
   const project = projects.find((p) => p.worktrees.some((w) => w.path === path));
   if (!project) {
     const error = `${path} is not a worktree of a followed project`;
@@ -637,7 +654,7 @@ function changes(projects: Project[], path: string, asked: DiffBase): ServiceMes
   const main = project.worktrees.find((w) => w.main);
   const branch = main && main.path !== path ? main.branch : null;
   const fallback = asked === "branch" && !branch;
-  const files = MOCK_CHANGES[path] ?? [];
+  const files = all[path] ?? [];
   return {
     type: "changes",
     path,
@@ -1076,6 +1093,12 @@ export function createMockTransport(
   const holder = (path: string) => projects.find((p) => p.worktrees.some((w) => w.path === path));
   const pulls = createMockPulls(later, (path) => holder(path)?.id ?? null);
   const runs = createMockRuns(later);
+  /** The fake worktrees' changes as staging and commits leave them (27.6), and each one's base. */
+  const changed = structuredClone(MOCK_CHANGES);
+  const bases = new Map<string, DiffBase>();
+  const resend = (path: string) =>
+    later(changes(projects, path, bases.get(path) ?? "head", changed));
+  const git = createMockGit(later, holder, changed, resend, runs);
   // As `Projects::linked`: only a linked worktree of a followed project.
   const linkedRefusal = (path: string) => {
     if (!holder(path)) return `${path} is not a worktree of a followed project`;
@@ -1675,8 +1698,15 @@ export function createMockTransport(
       later({ type: "worktree_renamed", project: updated, from: path, path: renamed.path });
     },
     async listChanges(path, base) {
-      later(changes(projects, path, base));
+      bases.set(path, base);
+      later(changes(projects, path, base, changed));
     },
+    stageFiles: git.stageFiles,
+    commit: git.commit,
+    getPushTarget: git.getPushTarget,
+    push: git.push,
+    listWorkflows: git.listWorkflows,
+    runWorkflow: git.runWorkflow,
     async listScripts(path) {
       scriptsAsked = holder(path) ? path : null;
       later(scriptsOfWorktree(path));

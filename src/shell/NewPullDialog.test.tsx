@@ -26,9 +26,9 @@ function open() {
 test("creates from the worktree's branch into the main worktree's by default", () => {
   const create = spyOn(transport, "createPull").mockResolvedValue();
   const dialog = open();
-  expect(dialog.textContent).toContain(
-    `From ${checkout.branch}, which must be pushed to GitHub first.`,
-  );
+  expect(dialog.textContent).toContain(`From ${checkout.branch}.`);
+  // Until the service says where it would go, nothing is offered.
+  expect(within(dialog).queryByLabelText(/first/)).toBeNull();
   const title = within(dialog).getByLabelText("Title") as HTMLInputElement;
   const submit = within(dialog).getByRole("button", { name: "Create" }) as HTMLButtonElement;
   expect(document.activeElement).toBe(title);
@@ -39,7 +39,7 @@ test("creates from the worktree's branch into the main worktree's by default", (
   fireEvent.change(within(dialog).getByLabelText("Description"), { target: { value: "Why" } });
   fireEvent.click(within(dialog).getByLabelText("Draft"));
   fireEvent.click(submit);
-  expect(create).toHaveBeenCalledWith(checkout.path, "Checkout", "Why", "develop", true);
+  expect(create).toHaveBeenCalledWith(checkout.path, "Checkout", "Why", "develop", true, false);
   expect(submit.textContent).toBe("Creating…");
   expect(submit.disabled).toBe(true);
 
@@ -78,4 +78,53 @@ test("Cancel closes; a worktree that is gone shows nothing", () => {
   expect((within(again).getByLabelText("Into") as HTMLInputElement).value).toBe("main");
   fireEvent.click(within(again).getByTitle("Close (Esc)"));
   expect(useHive.getState().modal).toBeNull();
+});
+
+test("a branch not on GitHub yet is pushed first, unless unticked (27.6)", () => {
+  const create = spyOn(transport, "createPull").mockResolvedValue();
+  const ask = spyOn(transport, "getPushTarget").mockResolvedValue();
+  const dialog = open();
+  expect(ask).toHaveBeenCalledWith(checkout.path);
+  const target = {
+    worktree: checkout.path,
+    branch: checkout.branch,
+    target: `origin/${checkout.branch}`,
+    set_upstream: true,
+    ahead: null,
+    error: null,
+  };
+  act(() => apply({ type: "push_target", ...target }));
+  const first = within(dialog).getByLabelText(
+    `Push ${checkout.branch} to origin/${checkout.branch} first: it is not on GitHub yet`,
+  ) as HTMLInputElement;
+  expect(first.checked).toBe(true);
+  fireEvent.change(within(dialog).getByLabelText("Title"), { target: { value: "T" } });
+  fireEvent.click(within(dialog).getByRole("button", { name: "Create" }));
+  expect(create).toHaveBeenLastCalledWith(checkout.path, "T", "", "main", false, true);
+  const pushFailed = "Could not push x: ! [rejected]";
+  act(() => apply({ type: "pull_failed", project: shop.id, number: null, message: pushFailed }));
+  expect(within(dialog).getByRole("alert").textContent).toBe(pushFailed);
+  // Commits not pushed: said, and the box unticked creates without pushing.
+  act(() => apply({ type: "push_target", ...target, set_upstream: false, ahead: 2 }));
+  const ahead = within(dialog).getByLabelText(
+    `Push ${checkout.branch} to origin/${checkout.branch} first (2 commits not pushed)`,
+  );
+  fireEvent.click(ahead);
+  fireEvent.click(within(dialog).getByRole("button", { name: "Create" }));
+  expect(create).toHaveBeenLastCalledWith(checkout.path, "T", "", "main", false, false);
+  act(() => apply({ type: "push_target", ...target, set_upstream: false, ahead: 1 }));
+  expect(within(dialog).getByLabelText(/first \(1 commit not pushed\)/)).toBeTruthy();
+  // Up to date, or not pushable (a detached HEAD): nothing to offer.
+  act(() => apply({ type: "push_target", ...target, set_upstream: false, ahead: 0 }));
+  expect(within(dialog).queryByLabelText(/first/)).toBeNull();
+  const detached = { ...target, branch: null, target: null, error: "no branch" };
+  act(() => apply({ type: "push_target", ...detached, set_upstream: false }));
+  expect(within(dialog).queryByLabelText(/first/)).toBeNull();
+  // Unknown (no remote-tracking branch): offered, without a count.
+  act(() => apply({ type: "push_target", ...target, set_upstream: false }));
+  expect(
+    within(dialog).getByLabelText(`Push ${checkout.branch} to origin/${checkout.branch} first`),
+  ).toBeTruthy();
+  create.mockRestore();
+  ask.mockRestore();
 });

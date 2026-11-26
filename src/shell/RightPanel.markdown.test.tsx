@@ -126,6 +126,7 @@ test("Edit shows the text again; Ctrl+S saves the edits shown rendered and shows
     path: "notes.md",
     status: "modified",
     old_path: null,
+    staged: null,
     added: 1,
     removed: 0,
   };
@@ -260,7 +261,16 @@ test("Diff from a preview being edited shows the diff", () => {
       base: "head",
       branch: null,
       base_error: null,
-      files: [{ path: "README.md", status: "modified", old_path: null, added: 1, removed: 0 }],
+      files: [
+        {
+          path: "README.md",
+          status: "modified",
+          old_path: null,
+          added: 1,
+          removed: 0,
+          staged: null,
+        },
+      ],
       added: 1,
       removed: 0,
       error: null,

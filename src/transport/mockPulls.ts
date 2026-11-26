@@ -147,7 +147,14 @@ export function createMockPulls(
       sendPull(project, number);
       sendList(project);
     },
-    async createPull(worktree: string, title: string, _body: string, base: string, draft: boolean) {
+    async createPull(
+      worktree: string,
+      title: string,
+      _body: string,
+      base: string,
+      draft: boolean,
+      _push: boolean,
+    ) {
       const project = holder(worktree) ?? "";
       const list = lists[project];
       if (!list || !title.trim()) {

@@ -59,8 +59,15 @@ export const tauriTransport: Transport = {
   listPulls: (project, force) => hosted("list_pulls", { project, force }),
   openPull: (project, number) => hosted("open_pull", { project, number }),
   actOnPull: (project, number, action) => hosted("act_on_pull", { project, number, action }),
-  createPull: (worktree, title, body, base, draft) =>
-    hosted("create_pull", { worktree, title, body, base, draft }),
+  createPull: (worktree, title, body, base, draft, push) =>
+    hosted("create_pull", { worktree, form: { title, body, base, draft, push } }),
+  listWorkflows: (project, worktree) => hosted("list_workflows", { project, worktree }),
+  runWorkflow: (project, workflow, branch, inputs) =>
+    hosted("run_workflow", { project, workflow, branch, inputs }),
+  stageFiles: (worktree, paths, staged) => hosted("stage_files", { worktree, paths, staged }),
+  commit: (worktree, message) => hosted("commit", { worktree, message }),
+  getPushTarget: (worktree) => hosted("get_push_target", { worktree }),
+  push: (worktree) => hosted("push", { worktree }),
   listRuns: (project, branch, force) => hosted("list_runs", { project, branch, force }),
   openRun: (project, run) => hosted("open_run", { project, run }),
   openJobLog: (project, job) => hosted("open_job_log", { project, job }),

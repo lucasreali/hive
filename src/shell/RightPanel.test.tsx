@@ -68,6 +68,7 @@ const fixLogin = shop.worktrees[1];
 const file = (path: string, status: ChangedFile["status"] = "modified"): ChangedFile => ({
   path,
   status,
+  staged: null,
   old_path: null,
   added: 1,
   removed: 0,
@@ -1501,4 +1502,47 @@ test("the tree's active row follows a renamed or moved entry once it is listed",
   // A moved file too.
   act(() => apply({ type: "file_renamed", worktree: fixLogin.path, path: "a", to: "README.md" }));
   expect(tree().getAttribute("aria-activedescendant")).toBe(treeRow(/^README/).id);
+});
+
+test("the Diff tree's boxes stage and unstage a file; Space too (27.6)", () => {
+  panel();
+  const stage = spyOn(transport, "stageFiles").mockResolvedValue();
+  act(() => select(refactor.id));
+  const listed = [
+    { ...file("a.ts"), staged: "no" as const },
+    { ...file("b.ts"), staged: "yes" as const },
+    { ...file("c.ts"), staged: "partly" as const },
+    // Only committed since the branch base: nothing left to stage.
+    { ...file("d.ts"), staged: null },
+  ];
+  act(() => apply({ type: "changes", ...changes(refactor.path, listed) }));
+  const box = (name: string) => screen.getByRole("checkbox", { name }) as HTMLInputElement;
+  expect(box("Stage a.ts").checked).toBe(false);
+  expect(box("Unstage b.ts").checked).toBe(true);
+  const partly = box("Stage c.ts");
+  expect([partly.checked, partly.indeterminate]).toEqual([false, true]);
+  expect(partly.title).toBe("Partly staged: stage all of it");
+  expect(box("Stage a.ts").title).toBe("Stage it for the next commit (Space)");
+  expect(box("Unstage b.ts").title).toBe("Staged: unstage it");
+  expect(screen.queryByRole("checkbox", { name: /d\.ts/ })).toBeNull();
+  // A click on the box stages, without opening the file; a click on the row opens it.
+  fireEvent.click(box("Stage a.ts"));
+  expect(stage).toHaveBeenLastCalledWith(refactor.path, ["a.ts"], true);
+  expect(useHive.getState().openFile).toBeNull();
+  fireEvent.click(box("Unstage b.ts"));
+  expect(stage).toHaveBeenLastCalledWith(refactor.path, ["b.ts"], false);
+  expect(useHive.getState().git[refactor.path]).toEqual({ busy: "unstage", error: null });
+  fireEvent.click(treeRow("c.ts"));
+  expect(useHive.getState().openFile?.path).toBe("c.ts");
+  // Space stages the active file; on a file with nothing to stage it opens it, as before.
+  const key = (k: string) => fireEvent.keyDown(tree(), { key: k });
+  key(" ");
+  expect(stage).toHaveBeenLastCalledWith(refactor.path, ["c.ts"], true);
+  key("ArrowDown");
+  key(" ");
+  expect(stage).toHaveBeenCalledTimes(3);
+  expect(useHive.getState().openFile?.path).toBe("d.ts");
+  // The Files tree has no boxes.
+  act(() => setPanelView("files"));
+  expect(screen.queryAllByRole("checkbox", { name: /^(Un)?[Ss]tage / })).toEqual([]);
 });

@@ -137,7 +137,9 @@ test("a changed file switches between its diff and editable text", () => {
     base: "head",
     branch: null,
     base_error: null,
-    files: [{ path: "a.ts", status: "modified", old_path: null, added: 1, removed: 1 }],
+    files: [
+      { path: "a.ts", status: "modified", old_path: null, added: 1, removed: 1, staged: null },
+    ],
     added: 1,
     removed: 1,
     error: null,

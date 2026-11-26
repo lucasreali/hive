@@ -268,3 +268,19 @@ test("the sidebar shows a worktree's latest run; a click shows it", () => {
   list.mockRestore();
   open.mockRestore();
 });
+
+test("Run workflow… opens its dialog for the shown worktree (27.6)", () => {
+  const list = spyOn(transport, "listRuns").mockResolvedValue();
+  const workflows = spyOn(transport, "listWorkflows").mockResolvedValue();
+  show();
+  fireEvent.click(within(view()).getByRole("button", { name: "Run workflow…" }));
+  expect(useHive.getState()).toMatchObject({
+    modal: "run-workflow",
+    modalProject: shop.id,
+    modalWorktree: login.id,
+  });
+  expect(workflows).toHaveBeenCalledWith(shop.id, login.path);
+  expect(screen.getByRole("dialog", { name: "Run workflow" })).toBeTruthy();
+  list.mockRestore();
+  workflows.mockRestore();
+});

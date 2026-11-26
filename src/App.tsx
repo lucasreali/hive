@@ -7,7 +7,9 @@ import { FileMenu, FileNameDialog } from "./shell/FileMenu";
 import { NewPullDialog } from "./shell/NewPullDialog";
 import { NewWorktreeDialog } from "./shell/NewWorktreeDialog";
 import { Palette } from "./shell/Palette";
+import { PushDialog } from "./shell/PushDialog";
 import { RightPanel } from "./shell/RightPanel";
+import { RunWorkflowDialog } from "./shell/RunWorkflowDialog";
 import { SessionMenu } from "./shell/SessionsView";
 import { SettingsDialog } from "./shell/SettingsDialog";
 import { Sidebar } from "./shell/Sidebar";
@@ -78,6 +80,8 @@ export function App() {
         {modal === "file-name" && !blocked && <FileNameDialog />}
         {modal === "confirm" && !blocked && <ConfirmDialog />}
         {modal === "new-pull" && !blocked && <NewPullDialog />}
+        {modal === "push" && !blocked && <PushDialog />}
+        {modal === "run-workflow" && !blocked && <RunWorkflowDialog />}
         {modal === "close-app" && <CloseAppDialog />}
         {modal === "update-app" && <CloseAppDialog updating />}
         {modal === "translocated" && <TranslocatedDialog />}

@@ -1,6 +1,7 @@
-import { ArrowLeftIcon } from "@phosphor-icons/react";
+import { ArrowLeftIcon, PlayIcon } from "@phosphor-icons/react";
 import { useEffect, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
+import { openRunWorkflow } from "../git";
 import type { Project, Worktree } from "../protocol";
 import { type CheckState, PULLS_INTERVAL_MS } from "../pulls";
 import { useRefresh } from "../refresh";
@@ -90,6 +91,15 @@ function RunList(props: {
           onClick={() => void transport.listRuns(project.id, branch, true)}
         >
           <RefreshIcon />
+        </button>
+        <button
+          type="button"
+          className="ghost icon"
+          aria-label="Run workflow…"
+          title="Run workflow… (one that can be run by hand: workflow_dispatch)"
+          onClick={() => openRunWorkflow(project.id, props.worktree)}
+        >
+          <PlayIcon size={14} aria-hidden="true" />
         </button>
       </div>
       {list?.error && (

@@ -203,12 +203,15 @@ test("pull request actions call their commands", async () => {
   await tauriTransport.listPulls("/r", true);
   await tauriTransport.openPull("/r", 7);
   await tauriTransport.actOnPull("/r", 7, { kind: "close" });
-  await tauriTransport.createPull("/r/w", "T", "B", "main", true);
+  await tauriTransport.createPull("/r/w", "T", "B", "main", true, false);
   expect(calls).toEqual([
     ["list_pulls", { project: "/r", force: true }],
     ["open_pull", { project: "/r", number: 7 }],
     ["act_on_pull", { project: "/r", number: 7, action: { kind: "close" } }],
-    ["create_pull", { worktree: "/r/w", title: "T", body: "B", base: "main", draft: true }],
+    [
+      "create_pull",
+      { worktree: "/r/w", form: { title: "T", body: "B", base: "main", draft: true, push: false } },
+    ],
   ]);
 });
 

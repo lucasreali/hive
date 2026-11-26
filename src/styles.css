@@ -4938,3 +4938,66 @@ button.link:hover {
   font-family: var(--font-sans);
   font-size: var(--fs-small);
 }
+
+/* The Changes panel's commit box and staging boxes (27.6). */
+.commit-box {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding-top: 4px;
+}
+
+.commit-box-bar {
+  display: flex;
+  align-items: center;
+  font-size: var(--fs-small);
+  color: var(--text-2);
+}
+
+.commit-box-bar .checkbox {
+  color: var(--text-2);
+}
+
+.files-info .commit-box textarea {
+  padding: 6px 8px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: var(--fs-mono);
+  outline: none;
+  resize: vertical;
+}
+
+.files-info .commit-box textarea:focus {
+  border-color: var(--focus);
+  box-shadow: 0 0 0 1px var(--focus);
+}
+
+.commit-box-actions {
+  display: flex;
+  gap: 6px;
+}
+
+.git-output {
+  margin: 0;
+  max-height: 160px;
+  overflow: auto;
+  font-family: var(--font-mono);
+  font-size: var(--fs-small);
+  white-space: pre-wrap;
+}
+
+.stage-box {
+  flex: none;
+  width: 12px;
+  height: 12px;
+  margin: 0 6px 0 0;
+  accent-color: var(--accent);
+}
+
+.stage-space {
+  flex: none;
+  width: 18px;
+}
