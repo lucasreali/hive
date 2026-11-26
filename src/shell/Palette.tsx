@@ -22,7 +22,7 @@ import { reviewTarget, sendReview } from "../viewer/review";
 import { composing, isMac, keyText } from "../window";
 import { askRemoveProject } from "./ConfirmDialog";
 import { ICON, SearchIcon, STATE_LABEL } from "./icons";
-import { leaveFile, panelViews, SEARCH_DELAY_MS } from "./RightPanel";
+import { leaveFile, markSeen, panelViews, SEARCH_DELAY_MS, unseenFiles } from "./RightPanel";
 
 // The command palette (Ctrl+Shift+P, 6.3): one filtered list of commands, agents and worktrees,
 // and the lines of the selected worktree's files holding the typed text.
@@ -99,6 +99,16 @@ export function paletteCommands(s: HiveState): PaletteItem[] {
         label: `Run: ${script.name}`,
         detail: worktree.name,
         run: () => showOpenFailure(runScript(worktree.path, script)),
+      });
+    }
+    // Its changes not seen yet (27.1), all marked at once.
+    const changes = s.changes[worktree.path];
+    if (changes && unseenFiles(changes).length > 0) {
+      const paths = changes.files.map((f) => f.path);
+      extra.push({
+        label: "Mark all as seen",
+        detail: worktree.name,
+        run: () => markSeen(changes, paths, true),
       });
     }
   }

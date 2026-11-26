@@ -444,3 +444,44 @@ test("Who wrote this line? asks about the cursor's line of the editor shown (27.
   untrack();
   viewer.destroy();
 });
+
+test("Mark all as seen marks the shown worktree's changed files while one is unseen (27.1)", () => {
+  const marked = spyOn(transport, "markSeen").mockResolvedValue();
+  render(<App />);
+  act(() => apply({ type: "projects", projects: [shop, api] }));
+  act(() => useHive.setState({ selection: fixLogin.id }));
+  const command = () =>
+    paletteCommands(useHive.getState()).find((c) => c.label === "Mark all as seen");
+  const file = (path: string, seen?: "seen" | "changed") => ({
+    path,
+    status: "modified" as const,
+    old_path: null,
+    added: 1,
+    removed: 0,
+    ...(seen ? { seen } : {}),
+  });
+  const listed = (files: ReturnType<typeof file>[]) =>
+    act(() =>
+      apply({
+        type: "changes",
+        path: fixLogin.path,
+        base: "branch",
+        branch: "main",
+        base_error: null,
+        files,
+        added: files.length,
+        removed: 0,
+        error: null,
+      }),
+    );
+  listed([]);
+  expect(command()).toBeUndefined();
+  listed([file("a", "seen"), file("b", "changed"), file("c")]);
+  expect(command()?.detail).toBe(fixLogin.name);
+  act(() => command()?.run());
+  expect(marked).toHaveBeenCalledWith(fixLogin.path, "branch", ["a", "b", "c"], true);
+  // Every file seen: nothing to mark.
+  listed([file("a", "seen")]);
+  expect(command()).toBeUndefined();
+  marked.mockRestore();
+});

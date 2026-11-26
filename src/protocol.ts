@@ -430,7 +430,12 @@ export type ChangedFile = {
   old_path: string | null;
   added: number | null;
   removed: number | null;
+  /** Its seen mark (27.1): "changed" when its diff changed since it was marked; absent: none. */
+  seen?: SeenMark;
 };
+
+/** Mirrors `hive_protocol::SeenMark`. */
+export type SeenMark = "seen" | "changed";
 
 /**
  * What a worktree's changes are compared with (9.11): its HEAD, or the merge-base with the main

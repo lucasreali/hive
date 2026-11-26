@@ -842,6 +842,31 @@ test("changes of a followed worktree with their totals, or why not", async () =>
   ]);
 });
 
+test("files marked seen stay seen until written again, per base (27.1)", async () => {
+  const { transport, messages } = await connected();
+  const refactor = (MOCK_REPOS[1] as Project).worktrees[1]?.path as string;
+  const seen = () => {
+    const last = messages.filter((m) => m.type === "changes").at(-1);
+    return last?.type === "changes" ? last.files.map((f) => [f.path, f.seen]) : [];
+  };
+  await transport.markSeen(refactor, "branch", ["package.json", "assets/logo.png", "nope"], true);
+  await tick();
+  expect(seen().filter(([, mark]) => mark)).toEqual([
+    ["assets/logo.png", "seen"],
+    ["package.json", "seen"],
+  ]);
+  // Another base has its own marks.
+  await transport.listChanges(refactor, "head");
+  await tick();
+  expect(seen().filter(([, mark]) => mark)).toEqual([]);
+  // Written since: changed since seen; unmarked: none.
+  const id = await transport.openTerminal(refactor, 80, 24, () => {});
+  await transport.writeTerminal(id, "write package.json edited\r");
+  await transport.markSeen(refactor, "branch", ["assets/logo.png"], false);
+  await tick();
+  expect(seen().filter(([, mark]) => mark)).toEqual([["package.json", "changed"]]);
+});
+
 test("files of a followed worktree as their status says, or why not", async () => {
   const { transport, messages } = await connected();
   const [shop, api, dotfiles] = MOCK_REPOS;

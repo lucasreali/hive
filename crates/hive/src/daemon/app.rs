@@ -628,6 +628,7 @@ async fn app_frame(
                         archiving
                             .provenance
                             .worktree_removed(&project.id, &path, now);
+                        archiving.forget_seen(std::slice::from_ref(&path));
                         Control::WorktreeRemoved { project, path }
                     }
                     Err(err) => Control::RemoveWorktreeFailed {
@@ -652,7 +653,22 @@ async fn app_frame(
             }
         }),
         Ok(Control::ListChanges { path, base }) => {
-            state.projects(move |projects| changes::answer(&projects.list(), path, base).0)
+            let seen = state.clone();
+            state.projects(move |projects| {
+                changes::answer(&projects.list(), path, base, &seen.seen).0
+            })
+        }
+        Ok(Control::MarkSeen {
+            path,
+            base,
+            files,
+            seen,
+        }) => {
+            let marking = state.clone();
+            state.projects(move |projects| {
+                let marks = (files.as_slice(), seen);
+                changes::mark(&projects.list(), path, base, &marking.seen, marks)
+            })
         }
         Ok(Control::ListScripts { path }) => state.list_scripts(path),
         Ok(Control::ListSessions) => {

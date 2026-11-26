@@ -539,8 +539,17 @@
     "base": "head",
     "branch": null,
     "base_error": null,
-    "files": [],
-    "added": 0,
+    "files": [
+      {
+        "path": "a",
+        "status": "modified",
+        "old_path": null,
+        "added": 1,
+        "removed": 0,
+        "seen": "seen"
+      }
+    ],
+    "added": 1,
     "removed": 0,
     "error": null
   },

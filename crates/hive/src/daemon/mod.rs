@@ -390,6 +390,8 @@ struct State {
     ports: Ports,
     /// The pull requests already offered for removing their worktree (17.27).
     offers: crate::offers::Offers,
+    /// The files marked seen in each worktree's diff (27.1).
+    seen: crate::seen::Seen,
     restore: Restore,
     /// The worktree statuses the app has, so only changes are sent.
     sent: std::sync::Mutex<health::Sent>,
@@ -493,6 +495,8 @@ impl State {
             settings,
             ports,
             offers,
+            // In Hive's folder, with the open sessions: `<data>/seen.json`.
+            seen: crate::seen::Seen::new(restore.file.with_file_name("seen.json")),
             restore,
             sent: Default::default(),
             listed: Default::default(),
@@ -1121,9 +1125,17 @@ impl State {
         }
     }
 
+    /// Drops the seen marks (27.1) of `worktrees`, removed.
+    fn forget_seen(&self, worktrees: &[String]) {
+        if let Err(err) = self.seen.forget(worktrees) {
+            eprintln!("hive: warning: cannot drop the seen marks of removed worktrees: {err}");
+        }
+    }
+
     /// Stops following the project `id` (9.28), a group with its repositories (14.1), unless a
     /// process of Hive's terminals (their `sessions`) works in it; their settings and their
-    /// worktrees' port blocks go with them. A group's repositories are removed before it.
+    /// worktrees' port blocks and seen marks (27.1) go with them. A group's repositories are
+    /// removed before it.
     async fn remove_project(&self, id: String, sessions: &HashSet<i32>) {
         let removed = tokio::task::block_in_place(|| {
             self.projects.remove(&id, procs::Source::System, sessions)
@@ -1143,6 +1155,7 @@ impl State {
         if let Err(err) = tokio::task::block_in_place(|| self.ports.forget(&worktrees)) {
             eprintln!("hive: warning: cannot free the ports of {id}: {err}");
         }
+        tokio::task::block_in_place(|| self.forget_seen(&worktrees));
         for id in inside.into_iter().chain([id]) {
             let reply = match tokio::task::block_in_place(|| self.settings.forget(&id)) {
                 Ok(settings) => settings.map(|settings| Control::Settings { settings }),
@@ -1273,7 +1286,7 @@ impl State {
         // `git status` both the changes and the status's count (9.14).
         let (changes, statuses) = tokio::task::block_in_place(|| {
             let projects = self.projects.list();
-            let (changes, totals) = changes::answer(&projects, path.to_owned(), base);
+            let (changes, totals) = changes::answer(&projects, path.to_owned(), base, &self.seen);
             (
                 changes,
                 self.health_changed(&projects, Some((path, totals))),
@@ -1486,6 +1499,23 @@ fn test_state_with(dir: &Path, power: Option<Box<dyn power::Power>>) -> Arc<Stat
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn seen_marks_that_cannot_be_dropped_are_only_a_warning() {
+        let tmp = tempfile::tempdir().unwrap();
+        let state = test_state(tmp.path());
+        let worktree = tmp.path().join("w").display().to_string();
+        let file = tmp.path().join("seen.json");
+        let marks = serde_json::json!({ &worktree: { "head": { "a": "x" } } }).to_string();
+        std::fs::write(&file, &marks).unwrap();
+        // The temporary file of the save is taken: nothing is saved.
+        std::fs::create_dir_all(tmp.path().join("seen.tmp/x")).unwrap();
+        state.forget_seen(std::slice::from_ref(&worktree));
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), marks);
+        std::fs::remove_dir_all(tmp.path().join("seen.tmp")).unwrap();
+        state.forget_seen(&[worktree]);
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), "{}");
+    }
 
     #[test]
     fn terminals_are_kept_for_at_most_seven_days() {
