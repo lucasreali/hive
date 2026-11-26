@@ -41,6 +41,7 @@ pub mod session_watch;
 pub mod sessions;
 pub mod settings;
 pub mod shared;
+pub mod snapshot;
 pub mod spaces;
 pub mod states;
 pub mod statusline;
