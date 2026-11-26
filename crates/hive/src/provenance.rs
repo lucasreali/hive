@@ -962,9 +962,7 @@ impl Provenance {
             LineSide::Worktree => None,
             // The worktree is followed (checked above): its base is known.
             LineSide::Base => Some(
-                crate::changes::against(projects, worktree, *base)
-                    .ok()
-                    .and_then(|against| against.commit)
+                crate::changes::base_commit(projects, worktree, base)
                     .unwrap_or_else(|| "HEAD".to_owned()),
             ),
         };

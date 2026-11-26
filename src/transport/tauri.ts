@@ -83,6 +83,7 @@ export const tauriTransport: Transport = {
   expandIgnored: (path, folders) => hosted("expand_ignored", { path, folders }),
   setView: (terminal, focused, visible) => hosted("set_view", { terminal, focused, visible }),
   listChanges: (path, base) => hosted("list_changes", { path, base }),
+  listCommits: (path) => hosted("list_commits", { path }),
   markSeen: (path, base, files, seen) => hosted("mark_seen", { path, base, files, seen }),
   listScripts: (path) => hosted("list_scripts", { path }),
   listSessions: () => hosted("list_sessions"),

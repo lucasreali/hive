@@ -74,6 +74,7 @@ sort! {
         | ExpandIgnored
         | View
         | ListChanges
+        | ListCommits
         | MarkSeen
         | ListScripts
         | ListSessions
@@ -165,6 +166,7 @@ sort! {
         | WorktreeStatus
         | Files
         | Changes
+        | Commits
         | Scripts
         | Sessions
         | RestoreSessions
@@ -551,6 +553,25 @@ fn samples() -> Vec<Control> {
             }],
             added: 1,
             removed: 0,
+            error: None,
+            turns: vec![TurnBase {
+                session: s("s1"),
+                title: s("claude"),
+                started_ms: 1,
+                late: false,
+            }],
+        },
+        Commits {
+            path: s("/r"),
+            commits: vec![CommitInfo {
+                id: s("0123456789012345678901234567890123456789"),
+                short: s("0123456"),
+                author: s("A"),
+                time_ms: 1_000,
+                subject: s("fix: x"),
+                on_branch: true,
+            }],
+            truncated: false,
             error: None,
         },
         Scripts {

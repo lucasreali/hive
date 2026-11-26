@@ -2122,6 +2122,11 @@ impl Host {
         self.link().send(0, &Control::ListChanges { path, base })
     }
 
+    /// The answer arrives as `commits` (27.2).
+    pub fn list_commits(&self, path: String) -> Result<(), String> {
+        self.link().send(0, &Control::ListCommits { path })
+    }
+
     /// Marks files seen in the diff, or not (27.1); the answer arrives as `changes`.
     pub fn mark_seen(
         &self,
@@ -2986,6 +2991,7 @@ const REMOTE_TO_UI: &[&str] = &[
     "session_files",
     "files",
     "changes",
+    "commits",
     "scripts",
     "search_results",
     "file",
@@ -3526,6 +3532,15 @@ pub mod commands {
         base: DiffBase,
     ) -> Result<(), String> {
         hive.on(host.as_deref())?.list_changes(path, base)
+    }
+
+    #[tauri::command]
+    pub fn list_commits(
+        hive: State<'_, Hive>,
+        host: Option<String>,
+        path: String,
+    ) -> Result<(), String> {
+        hive.on(host.as_deref())?.list_commits(path)
     }
 
     #[tauri::command]

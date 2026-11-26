@@ -46,6 +46,7 @@ pub mod sessions;
 pub mod settings;
 pub mod shared;
 pub mod slim;
+pub mod snapshot;
 pub mod spaces;
 pub mod states;
 pub mod statusline;

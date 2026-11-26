@@ -719,24 +719,16 @@ async fn app_frame(
                 }
             })
         }
-        Ok(Control::ListChanges { path, base }) => {
-            let seen = state.clone();
-            state.projects(move |projects| {
-                changes::answer(&projects.list(), path, base, &seen.seen).0
-            })
+        Ok(Control::ListChanges { path, base }) => state.list_changes(path, base),
+        Ok(Control::ListCommits { path }) => {
+            state.projects(move |projects| changes::commits(&projects.list(), path))
         }
         Ok(Control::MarkSeen {
             path,
             base,
             files,
             seen,
-        }) => {
-            let marking = state.clone();
-            state.projects(move |projects| {
-                let marks = (files.as_slice(), seen);
-                changes::mark(&projects.list(), path, base, &marking.seen, marks)
-            })
-        }
+        }) => state.mark_seen(path, base, (files, seen)),
         Ok(Control::ListScripts { path }) => state.list_scripts(path),
         Ok(Control::ListSessions) => {
             // The accounts' folders may have changed: watched again.
@@ -853,7 +845,12 @@ async fn app_frame(
             worktree,
             path,
             base,
-        }) => state.projects(move |projects| file::answer::open(projects, worktree, path, base)),
+        }) => {
+            let snapshots = state.snapshots.clone();
+            state.projects(move |projects| {
+                file::answer::open(projects, &snapshots, worktree, path, &base)
+            })
+        }
         Ok(Control::ReadFile {
             id,
             token,

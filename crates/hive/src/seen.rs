@@ -10,7 +10,7 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::time::UNIX_EPOCH;
 
-use hive_protocol::{ChangedFile, SeenMark};
+use hive_protocol::{ChangedFile, DiffBase, SeenMark};
 
 use crate::changes::{self, Against};
 use crate::git;
@@ -51,7 +51,7 @@ impl Seen {
     /// seen while its diff is the one it was marked on, else changed (also when git cannot
     /// tell: a seen file is never shown seen unchecked).
     pub fn apply(&self, worktree: &str, against: &Against, files: &mut [ChangedFile]) {
-        let Some(marks) = self.store.get(worktree).remove(key(against)) else {
+        let Some(marks) = self.store.get(worktree).remove(&key(against)) else {
             return;
         };
         let marked: Vec<&ChangedFile> = files
@@ -100,7 +100,7 @@ impl Seen {
         };
         let listed: HashSet<&str> = files.iter().map(|f| f.path.as_str()).collect();
         self.store.update(worktree, |all| {
-            let marks = all.entry(key(against).to_owned()).or_default();
+            let marks = all.entry(key(against)).or_default();
             marks.retain(|path, _| listed.contains(path.as_str()));
             for file in chosen {
                 match now.get(&file.path) {
@@ -109,37 +109,47 @@ impl Seen {
                 };
             }
             if marks.is_empty() {
-                all.remove(key(against));
+                all.remove(&key(against));
             }
         })
     }
 }
 
-/// The base the marks of a listing `against` are kept under.
-fn key(against: &Against) -> &'static str {
-    match against.commit {
-        Some(_) => "branch",
-        None => "head",
+/// The base the marks of a listing `against` are kept under: `head`, `branch`, and since 27.2
+/// `turn:<session>` and `commit:<id>`.
+fn key(against: &Against) -> String {
+    match &against.base {
+        DiffBase::Head => "head".to_owned(),
+        DiffBase::Branch => "branch".to_owned(),
+        DiffBase::Turn { session } => format!("turn:{session}"),
+        DiffBase::Commit { id } => format!("commit:{id}"),
     }
 }
 
 /// The diff identity of each of `files`: its base side's blob id and its side on disk.
 fn identities(against: &Against, files: &[&ChangedFile]) -> io::Result<HashMap<String, String>> {
     let dir = &against.dir;
-    let base = match &against.commit {
-        Some(commit) => commit.clone(),
-        None => changes::head(dir)?,
+    // At an agent's turn (27.2), the base side is the snapshot's.
+    let before = match &against.since {
+        Some(since) => since.raw()?,
+        None => {
+            let base = match &against.commit {
+                Some(commit) => commit.clone(),
+                None => changes::head(dir)?,
+            };
+            let args = [
+                "diff",
+                "--raw",
+                "-z",
+                "--no-abbrev",
+                "--find-renames",
+                &base,
+                "--",
+            ];
+            git::output(dir, &args, &[0])?
+        }
     };
-    let args = [
-        "diff",
-        "--raw",
-        "-z",
-        "--no-abbrev",
-        "--find-renames",
-        &base,
-        "--",
-    ];
-    let before = parse_ids(&git::output(dir, &args, &[0])?);
+    let before = parse_ids(&before);
     let mut after = HashMap::new();
     let mut hashed = Vec::new();
     for file in files {
@@ -351,6 +361,7 @@ mod tests {
         repo.write("a", "a2");
         let branch = Against {
             commit: Some(fork),
+            base: DiffBase::Branch,
             ..repo.head()
         };
         repo.mark(&branch, &["c"], true);
@@ -458,6 +469,7 @@ mod tests {
         // A base git cannot read: its marks are under `branch`, none yet; marking fails.
         let gone = Against {
             commit: Some("0".repeat(40)),
+            base: DiffBase::Branch,
             ..repo.head()
         };
         let mut files = listed.clone();

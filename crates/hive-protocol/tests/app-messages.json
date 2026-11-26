@@ -617,6 +617,30 @@
     ],
     "added": 1,
     "removed": 0,
+    "error": null,
+    "turns": [
+      {
+        "session": "s1",
+        "title": "claude",
+        "started_ms": 1,
+        "late": false
+      }
+    ]
+  },
+  {
+    "type": "commits",
+    "path": "/r",
+    "commits": [
+      {
+        "id": "0123456789012345678901234567890123456789",
+        "short": "0123456",
+        "author": "A",
+        "time_ms": 1000,
+        "subject": "fix: x",
+        "on_branch": true
+      }
+    ],
+    "truncated": false,
     "error": null
   },
   {

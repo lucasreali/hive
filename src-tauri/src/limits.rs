@@ -7,8 +7,8 @@
 //!   second; at most [`ALERTS`] that would show an OS notification in [`ALERT_WINDOW`]. One the
 //!   UI takes is read as its type ([`typed`]): a field of another type ends the link, an
 //!   unknown one is dropped.
-//! - **Lists:** at most [`PROJECTS`] projects, [`SESSIONS`] sessions, and [`LIST`] items in any
-//!   other list of a message.
+//! - **Lists:** at most [`PROJECTS`] projects, [`SESSIONS`] sessions, [`COMMITS`] commits, and
+//!   [`LIST`] items in any other list of a message.
 //! - **Terminal output:** at most [`UNACKED`] bytes of one terminal's output the UI has not
 //!   acknowledged (9.19), the service stopping at 512 KiB and a read, and [`LINK_UNACKED`] of
 //!   all of a link's terminals.
@@ -38,6 +38,8 @@ const ALERT_WINDOW: Duration = Duration::from_secs(10);
 pub(crate) const PROJECTS: usize = 1000;
 /// The most sessions a remote's `sessions` lists (its service sends at most 500).
 pub(crate) const SESSIONS: usize = 1000;
+/// The most commits a remote's `commits` lists (its service sends at most 500, 27.2).
+pub(crate) const COMMITS: usize = 1000;
 /// The most items of any other list in a remote's message (its service lists at most 50,000
 /// files).
 pub(crate) const LIST: usize = 50_000;
@@ -57,10 +59,11 @@ pub(crate) const TEXT: usize = 1024;
 /// The fields of a remote's messages that hold text shown as is (titles, badges, errors), at
 /// any depth.
 const CLIPPED: &[&str] = &[
-    "title", "text", "message", "error", "reason", "activity", "name", "account",
+    "title", "text", "message", "error", "reason", "activity", "name", "account", "subject",
+    "author",
 ];
 /// Fields clipped only in one type's messages: `body` is also a pull request's description.
-const CLIPPED_IN: &[(&str, &str)] = &[("terminal_notification", "body")];
+const CLIPPED_IN: &[(&str, &str)] = &[("terminal_notification", "body"), ("commits", "short")];
 
 /// Why the link was dropped once its remote stopped reading what the app sends.
 pub(crate) const QUEUE_FULL: &str = "stopped reading what the app sends";
@@ -190,7 +193,11 @@ pub(crate) fn unacked(unacked: u64, all: u64) -> Option<String> {
 /// Checks a remote's control `message` against the list caps, then clips its text.
 pub(crate) fn check(message: &mut Value) -> Result<(), String> {
     let kind = message["type"].as_str().unwrap_or_default().to_owned();
-    for (list, most) in [("projects", PROJECTS), ("sessions", SESSIONS)] {
+    for (list, most) in [
+        ("projects", PROJECTS),
+        ("sessions", SESSIONS),
+        ("commits", COMMITS),
+    ] {
         let len = message[list].as_array().map_or(0, Vec::len);
         if kind == list && len > most {
             return Err(format!("sent {len} {list}, over the {most} the app takes"));

@@ -967,18 +967,19 @@ label:has(> input[type="checkbox"]:disabled) {
   width: fit-content;
 }
 
-/* The Changes panel's HEAD / branch toggle, at the end of its summary line. */
-.diff-base {
-  flex: none;
+/* The Changes panel's base menu (9.11, 27.2), at the end of its summary line. */
+.select.diff-base {
+  flex: 0 1 auto;
+  min-width: 0;
   margin: 0 0 0 auto;
-  padding: 0;
-  max-width: 50%;
+  max-width: 55%;
 }
 
-.segmented.diff-base button {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+/* Why the base picked is not the one shown (27.2): a turn or a commit that is gone. */
+.files-base-error {
+  font-size: var(--fs-small);
+  color: var(--text-2);
+  overflow-wrap: anywhere;
 }
 
 .segmented button:focus-visible {
@@ -3343,6 +3344,13 @@ button.chevron:hover {
   background: var(--selected);
 }
 
+/* The commit picker's sections (27.2): the branch's commits, then the older ones. */
+.picker-heading {
+  padding: 6px 8px 2px;
+  font-size: var(--fs-meta);
+  color: var(--text-2);
+}
+
 .picker-name {
   font-family: var(--font-mono);
   font-size: var(--fs-mono);
@@ -3365,6 +3373,17 @@ button.chevron:hover {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.commit-short {
+  font-family: var(--font-mono);
+}
+
+.commit-row .picker-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-family: inherit;
 }
 
 .dialog footer.picker-hints {
@@ -5362,4 +5381,15 @@ button.link:hover {
   border-bottom: 1px solid var(--border);
   font-family: var(--font-sans);
   font-size: var(--fs-small);
+}
+
+/* The Changes panel's base menu (27.2): a long base is cut. */
+.diff-base .select-trigger {
+  max-width: 100%;
+}
+
+.diff-base .select-value {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
