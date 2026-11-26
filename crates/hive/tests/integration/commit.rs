@@ -29,7 +29,8 @@ async fn a_change_is_committed_as_the_space_and_pushed_never_forced() {
     let daemon = repo.env.daemon();
     let mut app = repo.env.connect(Role::App).await;
     let root = repo.root.display().to_string();
-    app.send(0, Control::AddProject { path: root.clone() }).await;
+    app.send(0, Control::AddProject { path: root.clone() })
+        .await;
     assert!(matches!(
         app.control().await.1,
         Control::ProjectAdded { .. }
@@ -119,7 +120,10 @@ async fn a_change_is_committed_as_the_space_and_pushed_never_forced() {
     };
     assert_eq!(answer(&mut app, push.clone()).await, pushed);
     assert_eq!(
-        repo.git_in(repo.env.path("github.git").as_path(), &["rev-parse", "main"]),
+        repo.git_in(
+            repo.env.path("github.git").as_path(),
+            &["rev-parse", "main"]
+        ),
         repo.git(&["rev-parse", "HEAD"])
     );
 
@@ -145,7 +149,10 @@ async fn a_change_is_committed_as_the_space_and_pushed_never_forced() {
     };
     assert!(message.contains("[rejected]"), "{message}");
     assert_eq!(
-        repo.git_in(repo.env.path("github.git").as_path(), &["rev-parse", "main"]),
+        repo.git_in(
+            repo.env.path("github.git").as_path(),
+            &["rev-parse", "main"]
+        ),
         theirs
     );
 

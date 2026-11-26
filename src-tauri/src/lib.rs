@@ -19,8 +19,7 @@ use futures_util::{FutureExt, SinkExt, Stream, StreamExt};
 use hive_protocol::{
     AccountDir, AgentState, Control, DiffBase, Frame, FrameCodec, FrameError, FrameType, GhAccount,
     PullAction, PullForm, Role, RunAction, SessionTarget, Settings, SpaceEnv, TableEdit,
-    WorkflowValue, MAX_PAYLOAD,
-    PROTOCOL_VERSION, READ_LIMIT,
+    WorkflowValue, MAX_PAYLOAD, PROTOCOL_VERSION, READ_LIMIT,
 };
 use serde_json::{json, Value};
 use tauri::http::Response;
@@ -3814,7 +3813,11 @@ pub mod commands {
     }
 
     #[tauri::command]
-    pub fn push(hive: State<'_, Hive>, host: Option<String>, worktree: String) -> Result<(), String> {
+    pub fn push(
+        hive: State<'_, Hive>,
+        host: Option<String>,
+        worktree: String,
+    ) -> Result<(), String> {
         hive.on(host.as_deref())?.push(worktree)
     }
 
