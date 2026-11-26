@@ -197,6 +197,11 @@ export interface Transport {
   setView(terminal: number | null, focused: boolean, visible: boolean): Promise<void>;
   /** What differs from `base` in the worktree at `path`; answered by `changes`. */
   listChanges(path: string, base: DiffBase): Promise<void>;
+  /**
+   * Marks `files` of the worktree at `path` as seen in its diff against `base`, or not (27.1);
+   * answered by `changes`, or `error` when the marks cannot be kept.
+   */
+  markSeen(path: string, base: DiffBase, files: string[], seen: boolean): Promise<void>;
   /** The scripts of the worktree at `path` (23.4); answered by `scripts`. */
   listScripts(path: string): Promise<void>;
   /** Claude sessions of the followed projects; answered by `sessions`. */
