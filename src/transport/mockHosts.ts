@@ -92,6 +92,8 @@ const HOSTED = [
   "listSessions",
   "locateSession",
   "deleteSession",
+  "whoWrote",
+  "listSessionFiles",
   "moveSession",
   "searchFiles",
   "openFile",

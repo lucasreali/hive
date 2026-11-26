@@ -632,6 +632,52 @@
     "message": "m"
   },
   {
+    "type": "line_author",
+    "worktree": "/r",
+    "path": "a.rs",
+    "line": 3,
+    "side": "worktree",
+    "origin": {
+      "kind": "session",
+      "edit": {
+        "session": "s",
+        "title": "t",
+        "deleted": false,
+        "project": "/r",
+        "worktree": "/r",
+        "agent": "a1",
+        "agent_type": "general-purpose",
+        "tool": "Edit",
+        "tool_use_id": "toolu_1",
+        "ms": 5,
+        "user_modified": true,
+        "start": 2,
+        "len": 3
+      },
+      "commit": {
+        "id": "abc",
+        "author": "A",
+        "ms": 6,
+        "summary": "fix"
+      }
+    }
+  },
+  {
+    "type": "session_files",
+    "id": "s",
+    "files": [
+      {
+        "worktree": "/r",
+        "path": "a.rs",
+        "edits": 2,
+        "lines_now": 3,
+        "first_line": 4,
+        "last_ms": 5
+      }
+    ],
+    "truncated": false
+  },
+  {
     "type": "search_results",
     "worktree": "/r",
     "query": "q",

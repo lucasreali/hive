@@ -9,6 +9,8 @@ import type {
   FileStatus,
   FileText,
   GhLogin,
+  LineOrigin,
+  LineSide,
   ProgressState,
   Project,
   ReviewComment,
@@ -16,6 +18,7 @@ import type {
   Script,
   ServiceMessage,
   Session,
+  SessionFile,
   Settings,
   Space,
   SpaceEnv,
@@ -466,6 +469,40 @@ export function mockDirs(
 }
 
 const MINUTE = 60_000;
+const HOUR = 60 * MINUTE;
+const SHOP = "/home/user/projects/shop";
+const FIX_LOGIN = `${SHOP}/.claude/worktrees/fix-login`;
+
+/** The files Hive recorded each fake session changing (27.5), the most recent first. */
+export function mockSessionFiles(id: string): SessionFile[] {
+  const file = (worktree: string, path: string, edits: number, lines: number, hours: number) => ({
+    worktree,
+    path,
+    edits,
+    lines_now: lines,
+    first_line: lines > 0 ? 39 : null,
+    last_ms: Date.now() - hours * HOUR,
+  });
+  if (id.endsWith("0001")) {
+    return [
+      file(FIX_LOGIN, "src/auth/session.ts", 3, 3, 3),
+      file(SHOP, "src/auth/login.ts", 1, 0, 4),
+    ];
+  }
+  if (id.endsWith("0004")) {
+    return [
+      file(
+        "/home/user/projects/api/.claude/worktrees/refactor-auth",
+        "src/auth/session.ts",
+        2,
+        3,
+        200,
+      ),
+    ];
+  }
+  return [];
+}
+
 const session = (
   id: string,
   cwd: string,
@@ -501,6 +538,7 @@ const session = (
     running,
     config_dir: null,
     resume_command: `cd '${cwd}' && claude --resume ${id}`,
+    files_changed: mockSessionFiles(id).length,
     log: `/home/user/.claude/projects/${cwd.replaceAll(/[^A-Za-z0-9]/g, "-")}/${id}.jsonl`,
   };
 };
@@ -545,6 +583,60 @@ export const MOCK_SESSIONS: Session[] = [
     "error",
   ),
 ];
+
+/** The commit `git blame` gives the fake service for a line it has no live record of. */
+export const MOCK_BLAME = {
+  id: "4f2a9c1e8b7d6a5f4e3d2c1b0a9f8e7d6c5b4a39",
+  author: "Ada Lovelace",
+  ms: Date.now() - 2 * 24 * HOUR,
+  summary: "Keep sessions in the store",
+};
+
+/**
+ * Who wrote a line, as the fake service recorded it (27.5), in `src/auth/session.ts` only: the
+ * `rememberMe` lines (39–41) by a session of the worktree (else the first session, in
+ * fix-login), line 2 in Hive's editor, line 1 probably by a subagent, the diff's old side
+ * probably by "Checkout totals"; any other line through its commit alone.
+ */
+export function mockAuthor(
+  sessions: Session[],
+  worktree: string,
+  path: string,
+  line: number,
+  side: LineSide,
+): LineOrigin {
+  if (path !== "src/auth/session.ts") return { kind: "unknown", commit: null };
+  const edit = (x: Session, ms: number, start: number, len: number) => ({
+    session: x.id,
+    title: x.title,
+    deleted: false,
+    project: x.project,
+    worktree,
+    agent: null,
+    agent_type: null,
+    tool: "Edit",
+    tool_use_id: "toolu_mock",
+    ms,
+    user_modified: false,
+    start,
+    len,
+  });
+  const [first, checkout, , auth] = MOCK_SESSIONS;
+  if (side === "base") {
+    return { kind: "session", edit: edit(checkout, MOCK_BLAME.ms, line, 1), commit: MOCK_BLAME };
+  }
+  if (line >= 39 && line <= 41) {
+    const own = sessions.find((x) => x.worktree === worktree) ?? first;
+    const live = { ...edit(own, Date.now() - 3 * HOUR, 39, 3), user_modified: true };
+    return { kind: "session", edit: live, commit: null };
+  }
+  if (line === 2) return { kind: "editor", ms: Date.now() - 10 * MINUTE };
+  if (line === 1) {
+    const sub = { ...edit(auth, MOCK_BLAME.ms, 1, 1), agent: "a1", agent_type: "general-purpose" };
+    return { kind: "session", edit: sub, commit: MOCK_BLAME };
+  }
+  return { kind: "unknown", commit: MOCK_BLAME };
+}
 
 /** The fake GitHub issues, by number: the worktree (and branch) the service names for each. */
 export const MOCK_ISSUES: Record<number, string> = {
@@ -1790,6 +1882,13 @@ export function createMockTransport(
       later({ type: "session_deleted", id });
       // As the service does when a log goes (D19.4).
       listSessions();
+    },
+    async whoWrote(worktree, path, line, side) {
+      const origin = mockAuthor(sessions, worktree, path, line, side);
+      later({ type: "line_author", worktree, path, line, side, origin });
+    },
+    async listSessionFiles(id) {
+      later({ type: "session_files", id, files: mockSessionFiles(id), truncated: false });
     },
     async moveSession(id, config_dir) {
       const found = sessions.find((x) => x.id === id);

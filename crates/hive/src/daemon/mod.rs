@@ -152,9 +152,11 @@ pub async fn run(paths: &Paths) -> io::Result<()> {
     let places = None;
     // What a service before 26.11 left, gone before this one's first terminal.
     crate::browser_cleanup::clean(&paths.bin_dir(), &paths.runtime);
+    let provenance = crate::provenance::Provenance::new(Some(paths.data.join("provenance")));
     let state = Arc::new(State {
         warning,
         places,
+        provenance,
         ..state
     });
     serve(listener, hold, terminated, state).await
@@ -244,6 +246,7 @@ async fn serve(
     let health = tokio::spawn(watch_health(state.clone(), every));
     let registry = tokio::spawn(watch_registry(state.clone(), Registry::new()));
     let logs = tokio::spawn(watch_sessions(state.clone(), session_watch::Watch::new()));
+    let provenance = tokio::spawn(keep_provenance(state.clone()));
     let mut check = tokio::time::interval(CLAIM_CHECK);
     tokio::pin!(terminated);
     // When the terminals kept after the app dropped end, unless an app is back by then.
@@ -288,8 +291,15 @@ async fn serve(
     drop(listener);
     hold.release();
     let files = state.watching.lock().await.take().map(|files| files.task);
-    for task in [watcher, health, registry, logs].into_iter().chain(files) {
+    for task in [watcher, health, registry, logs, provenance]
+        .into_iter()
+        .chain(files)
+    {
         stop(task).await;
+    }
+    // What changed since the last write; nothing when Hive is being uninstalled.
+    if state.uninstalling().is_none() {
+        tokio::task::block_in_place(|| state.provenance.flush());
     }
     let uninstall = state.uninstalling().clone();
     // Before the terminals end (and their sessions with them): what to resume next time;
@@ -314,6 +324,16 @@ async fn serve(
     }
     // The lock goes last, with `hold`.
     ended
+}
+
+/// Writes the line provenance store's changes every [`PROVENANCE_FLUSH`] (27.5).
+async fn keep_provenance(state: Arc<State>) {
+    let mut every = tokio::time::interval(PROVENANCE_FLUSH);
+    // Stopped before an uninstall removes Hive's folder, so nothing is written after it.
+    loop {
+        every.tick().await;
+        tokio::task::block_in_place(|| state.provenance.flush());
+    }
 }
 
 /// Stops a background task and waits until it has. One caught in blocking work
@@ -418,6 +438,8 @@ struct State {
     warning: Option<String>,
     /// Where Hive's things are, for uninstalling it (23.5); `None` without a `HOME`.
     places: Option<uninstall::Places>,
+    /// Which session wrote each line (27.5).
+    provenance: crate::provenance::Provenance,
     /// What to uninstall, once the app asked (`uninstall`): the service then ignores the app
     /// and ends ([`State::ending`]).
     uninstalling: std::sync::Mutex<Option<uninstall::Choice>>,
@@ -444,6 +466,9 @@ struct Restore {
     /// Read at start, sent to the first app that connects.
     pending: Mutex<Vec<OpenSession>>,
 }
+
+/// How often the line provenance store writes what changed (27.5).
+const PROVENANCE_FLUSH: Duration = Duration::from_secs(2);
 
 impl State {
     fn new(
@@ -494,6 +519,7 @@ impl State {
             tick: Default::default(),
             warning: None,
             places: None,
+            provenance: Default::default(),
             uninstalling: Default::default(),
             ending: Default::default(),
         }
@@ -816,14 +842,18 @@ impl State {
         let shell = Some(self.settings.get().0.terminal.shell);
         #[cfg(not(windows))]
         let shell = None;
+        let state = self.clone();
         // Hive's terminals: their hooks name their sessions.
         self.sessions(move |projects, sessions, mut running| {
+            let provenance = &state.provenance;
             // Claude keeps a record of each running `claude` beside its projects folder.
             let records = sessions.records();
             running.extend(procs::claude_sessions(procs::Source::System, &records));
             let (mut sessions, truncated, error) = sessions.list(projects, &running);
+            let changed = provenance.files_changed(projects, hook::now_ms());
             for session in &mut sessions {
                 session.resume_command = crate::sessions::resume_command(session, shell);
+                session.files_changed = changed.get(&session.id).copied().unwrap_or(0);
             }
             Control::Sessions {
                 sessions,
@@ -1140,6 +1170,7 @@ impl State {
         };
         self.refollow.notify_one();
         self.to_app(0, &self.projects.spaces_message()).await;
+        tokio::task::block_in_place(|| self.provenance.project_removed(&id));
         if let Err(err) = tokio::task::block_in_place(|| self.ports.forget(&worktrees)) {
             eprintln!("hive: warning: cannot free the ports of {id}: {err}");
         }

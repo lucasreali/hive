@@ -88,6 +88,9 @@ export const tauriTransport: Transport = {
   listSessions: () => hosted("list_sessions"),
   locateSession: (id, target) => hosted("locate_session", { id, target }),
   deleteSession: (id) => hosted("delete_session", { id }),
+  whoWrote: (worktree, path, line, side, base) =>
+    hosted("who_wrote", { worktree, path, line, side, base }),
+  listSessionFiles: (id) => hosted("list_session_files", { id }),
   moveSession: (id, configDir) => hosted("move_session", { id, configDir }),
   searchFiles: (worktree, query) => hosted("search_files", { worktree, query }),
   openFile: (worktree, path, base) => hosted("open_file", { worktree, path, base }),

@@ -4,6 +4,7 @@ import type {
   AppMode,
   DiffBase,
   GhAccount,
+  LineSide,
   ServiceMessage,
   SessionTarget,
   Settings,
@@ -221,6 +222,19 @@ export interface Transport {
   locateSession(id: string, target: SessionTarget): Promise<void>;
   /** Deletes a session's log; answered by `session_deleted` or `delete_session_failed`. */
   deleteSession(id: string): Promise<void>;
+  /**
+   * Who wrote `line` (1-based) of `path` in the worktree (27.5), on its `side`: the file as it
+   * is, or the diff's old side at `base`; answered by `line_author`.
+   */
+  whoWrote(
+    worktree: string,
+    path: string,
+    line: number,
+    side: LineSide,
+    base: DiffBase,
+  ): Promise<void>;
+  /** The files the session `id` changed, as Hive recorded (27.5); answered by `session_files`. */
+  listSessionFiles(id: string): Promise<void>;
   /**
    * Moves a session's log into the Claude account `configDir`'s folder (null: the default
    * one); answered by `session_moved` or `move_session_failed`.

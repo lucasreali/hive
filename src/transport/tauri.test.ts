@@ -100,6 +100,8 @@ test("terminal and project actions call their commands", async () => {
   await tauriTransport.listSessions();
   await tauriTransport.locateSession("s", "log");
   await tauriTransport.deleteSession("s");
+  await tauriTransport.whoWrote("/r", "a.ts", 3, "base", "branch");
+  await tauriTransport.listSessionFiles("s");
   await tauriTransport.searchFiles("/r", "q");
   await tauriTransport.openFile("/r", "a.ts", "head");
   await tauriTransport.openTable("/r", "a.csv");
@@ -171,6 +173,8 @@ test("terminal and project actions call their commands", async () => {
     ["list_sessions", {}],
     ["locate_session", { id: "s", target: "log" }],
     ["delete_session", { id: "s" }],
+    ["who_wrote", { worktree: "/r", path: "a.ts", line: 3, side: "base", base: "branch" }],
+    ["list_session_files", { id: "s" }],
     ["search_files", { worktree: "/r", query: "q" }],
     ["open_file", { worktree: "/r", path: "a.ts", base: "head" }],
     ["open_table", { worktree: "/r", path: "a.csv" }],

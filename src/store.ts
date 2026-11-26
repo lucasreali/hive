@@ -31,6 +31,9 @@ import type {
   GhAccounts,
   GhIdentity,
   HostLink,
+  LineEdit,
+  LineOrigin,
+  LineSide,
   NameCheck,
   NotificationPermission,
   ProgressState,
@@ -39,6 +42,7 @@ import type {
   ReviewComment,
   SearchResults,
   Session,
+  SessionFile,
   SessionWindow,
   Settings,
   Shared,
@@ -166,6 +170,18 @@ export type FileDialog = FileTarget & { kind: FileDialogKind; error: string | nu
 
 /** A 1-based, inclusive range of lines. */
 export type Lines = { from: number; to: number };
+
+/**
+ * "Who wrote this line?" (27.5): a line of a worktree's file on its `side`, and where on screen
+ * its answer shows (by the line, or the gutter menu's pointer).
+ */
+export type LineAsk = OpenFile & { line: number; side: LineSide; x: number; y: number };
+/** The last line asked about, with the service's answer once it came (null until then). */
+export type Provenance = LineAsk & { origin: LineOrigin | null };
+/** The edit the Sessions view shows (27.5): its session's row, with file `path` highlighted. */
+export type SessionFocus = { edit: LineEdit; path: string };
+/** A session's changed files, as the service last listed them (27.5). */
+export type SessionFiles = { files: SessionFile[]; truncated: boolean };
 
 /** Answers for the new-worktree dialog; reset whenever a dialog opens. */
 export type WorktreeDialog = {
@@ -330,6 +346,16 @@ export type HiveState = {
   projectMenu: ProjectMenu | null;
   sessionMenu: SessionMenu | null;
   fileMenu: (FileTarget & { x: number; y: number }) | null;
+  /** The editor's line number menu (27.5), at the pointer. */
+  lineMenu: LineAsk | null;
+  /** The last "Who wrote this line?" (27.5): its popover shows the answer that is not a row. */
+  provenance: Provenance | null;
+  /** The session edit the Sessions view shows (27.5), until another is asked. */
+  sessionFocus: SessionFocus | null;
+  /** The session rows whose "Files changed" list is open (27.5). */
+  openSessionFiles: string[];
+  /** Each session's changed files, by session id, once asked (27.5). */
+  sessionFiles: Record<string, SessionFiles>;
   fileDialog: FileDialog | null;
   /**
    * Folders created from the tree, by worktree: git lists no empty folder, so the tree shows
@@ -669,6 +695,11 @@ export const initialState: HiveState = {
   sessions: null,
   sessionsError: null,
   sessionsTruncated: false,
+  lineMenu: null,
+  provenance: null,
+  sessionFocus: null,
+  openSessionFiles: [],
+  sessionFiles: {},
   gotoLine: null,
   pulls: {},
   openPull: null,
@@ -699,6 +730,11 @@ export const HOST_FIELDS = [
   "sessions",
   "sessionsError",
   "sessionsTruncated",
+  "sessionFiles",
+  "sessionFocus",
+  "openSessionFiles",
+  "provenance",
+  "lineMenu",
   "sessionUsage",
   "weekUsage",
   "usageLimits",

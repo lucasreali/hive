@@ -161,6 +161,13 @@ async fn hook_connection<R: AsyncRead + Unpin>(
         }) => {
             // The payload stays here: the app gets only what the service makes of it.
             let event = ClaudeCode.translate(&event, terminal_id, payload);
+            // Its edit, and the files of its worktree changed since (27.5).
+            tokio::task::block_in_place(|| {
+                let projects = state.projects.list();
+                state
+                    .provenance
+                    .saw(&projects, &event, crate::hook::now_ms());
+            });
             state.saw(&event, sent_ns).await;
             // An agent detected or ended: whether its session runs changed.
             if let EventKind::SessionStarted | EventKind::SessionEnded { .. } = event.kind {
@@ -617,6 +624,10 @@ async fn app_frame(
                 let archive = |root: &str| archiving.archive(root, &path);
                 match projects.remove_worktree(&path, force, procs::Source::System, archive) {
                     Ok(project) => {
+                        let now = crate::hook::now_ms();
+                        archiving
+                            .provenance
+                            .worktree_removed(&project.id, &path, now);
                         archiving.forget_seen(std::slice::from_ref(&path));
                         archiving.forget_comments(std::slice::from_ref(&path));
                         Control::WorktreeRemoved { project, path }
@@ -688,6 +699,38 @@ async fn app_frame(
             // The accounts' folders may have changed: watched again.
             state.sessions_follow.notify_one();
             state.list_sessions();
+        }
+        Ok(Control::WhoWrote {
+            worktree,
+            path,
+            line,
+            side,
+            base,
+        }) => {
+            let asked = crate::provenance::Asked {
+                worktree,
+                path,
+                line,
+                side,
+                base,
+            };
+            let state2 = state.clone();
+            state.sessions(move |projects, sessions, _| {
+                let title = |id: &str, cwd: &str| {
+                    let title = sessions.title(id, cwd);
+                    let deleted = sessions.log(id, cwd).is_none();
+                    (title, deleted)
+                };
+                let now = crate::hook::now_ms();
+                state2.provenance.who_wrote(projects, &title, asked, now)
+            })
+        }
+        Ok(Control::ListSessionFiles { id }) => {
+            let state2 = state.clone();
+            state.projects(move |projects| {
+                let now = crate::hook::now_ms();
+                state2.provenance.session_files(&projects.list(), id, now)
+            })
         }
         Ok(Control::LocateSession { id, target }) => {
             state.sessions(move |projects, sessions, _| {
@@ -790,9 +833,21 @@ async fn app_frame(
             path,
             content,
             version,
-        }) => state.projects(move |projects| {
-            file::answer::save(projects, worktree, path, &content, version.as_deref())
-        }),
+        }) => {
+            let saving = state.clone();
+            state.projects(move |projects| {
+                let saved =
+                    file::answer::save(projects, worktree, path, &content, version.as_deref());
+                // The lines the user changed are the user's (27.5).
+                if let Control::FileSaved { worktree, path, .. } = &saved {
+                    let now = crate::hook::now_ms();
+                    saving
+                        .provenance
+                        .saved(&projects.list(), worktree, path, now);
+                }
+                saved
+            })
+        }
         Ok(Control::CreateFile {
             worktree,
             folder,

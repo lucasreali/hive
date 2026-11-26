@@ -1,6 +1,7 @@
 import { FileTextIcon, GitBranchIcon, type Icon, LightningIcon } from "@phosphor-icons/react";
 import { useEffect, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
+import { whoWrote } from "../provenance";
 import { runScript, worktreeScripts } from "../scripts";
 import { commandKeys, currentProject, goToAgent, platformCommands } from "../shortcuts";
 import {
@@ -16,6 +17,7 @@ import {
 } from "../store";
 import { showOpenFailure } from "../terminals";
 import { transport } from "../transport";
+import { cursorAsk } from "../viewer/lineAuthor";
 import { commentsTarget, openComments, sendOpenComments } from "../viewer/review";
 import { composing, isMac, keyText } from "../window";
 import { askRemoveProject } from "./ConfirmDialog";
@@ -123,6 +125,15 @@ export function paletteCommands(s: HiveState): PaletteItem[] {
   const open = openComments(s);
   if (!("why" in commentsTarget(s, open.worktree, open.comments))) {
     extra.push({ label: "Send open comments", run: sendOpenComments });
+  }
+  // The cursor's line of the editor shown (27.5); no shortcut (Q8).
+  const line = s.openFile && s.fileShown ? cursorAsk(s.openFile) : null;
+  if (line) {
+    extra.push({
+      label: "Who wrote this line?",
+      detail: `${line.path}:${line.line}`,
+      run: () => whoWrote(line),
+    });
   }
   // As the app menu's item (23.5): only macOS has an app to remove; Windows keeps its own
   // uninstaller.

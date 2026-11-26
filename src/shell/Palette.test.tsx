@@ -11,6 +11,8 @@ import { DEFAULT_SETTINGS, initialState, NO_SCRIPTS, openModal, useHive } from "
 import { closeTerminal } from "../terminals";
 import { transport } from "../transport";
 import { agentStatus, MOCK_FOLDER, MOCK_GROUP, MOCK_REPOS } from "../transport/mock";
+import { createViewer } from "../viewer/editor";
+import { trackView } from "../viewer/lineAuthor";
 import { FILE_LIMIT, fuzzy, Palette, type PaletteItem, paletteCommands, rank } from "./Palette";
 
 detachAfterAll();
@@ -431,6 +433,33 @@ test("files: the selected worktree's lines holding the text, once typing pauses"
     gotoLine: { line: 3 },
   });
   search.mockRestore();
+});
+
+test("Who wrote this line? asks about the cursor's line of the editor shown (27.5)", () => {
+  const file = { worktree: fixLogin.path, path: "a.ts" };
+  const label = "Who wrote this line?";
+  const find = () => paletteCommands(useHive.getState()).find((c) => c.label === label);
+  useHive.setState({ openFile: file, fileShown: true });
+  // No editor of it yet.
+  expect(find()).toBeUndefined();
+  const viewer = createViewer(document.body, "a.ts");
+  viewer.show({ content: "a\nb\n", original: null });
+  const untrack = trackView(file, viewer.view);
+  viewer.view.dispatch({ selection: { anchor: 2 } });
+  // A terminal shown over it: nothing to ask about.
+  useHive.setState({ fileShown: false });
+  expect(find()).toBeUndefined();
+  useHive.setState({ fileShown: true });
+  const item = find() as PaletteItem;
+  expect(item.detail).toBe("a.ts:2");
+  // No shortcut (Q8).
+  expect(item.keys).toBeUndefined();
+  const sent = spyOn(transport, "whoWrote").mockResolvedValue();
+  item.run();
+  expect(sent).toHaveBeenCalledWith(fixLogin.path, "a.ts", 2, "worktree", "head");
+  sent.mockRestore();
+  untrack();
+  viewer.destroy();
 });
 
 test("Mark all as seen marks the shown worktree's changed files while one is unseen (27.1)", () => {
