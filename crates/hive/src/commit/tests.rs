@@ -87,17 +87,22 @@ fn files_are_staged_and_unstaged_by_name_only() {
     // Git's own refusal, as is.
     let err = stage(&dir, &paths(&["nope.txt"]), true).unwrap_err();
     assert!(err.contains("nope.txt"), "{err}");
+    // Git's message only: the command is not named.
+    assert!(!err.starts_with("git"), "{err}");
 }
 
 #[test]
 fn a_staged_rename_is_unstaged_whole() {
     let (_tmp, dir) = repo(true);
+    std::fs::write(dir.join("c.txt"), "c\n").unwrap();
+    git(&dir, &["add", "c.txt"]);
+    git(&dir, &["commit", "-q", "-m", "c"]);
     git(&dir, &["mv", "a.txt", "b.txt"]);
-    assert_eq!(staged(&dir), [("b.txt".into(), Some(Staged::Yes))]);
+    git(&dir, &["mv", "c.txt", "d.txt"]);
     stage(&dir, &paths(&["b.txt"]), false).unwrap();
-    // The old name is back in the index; the new one is untracked.
+    // The old name is back in the index, the new one untracked; the other rename stays.
     let status = git(&dir, &["status", "--porcelain"]);
-    assert_eq!(status, " D a.txt\n?? b.txt\n");
+    assert_eq!(status, " D a.txt\nR  c.txt -> d.txt\n?? b.txt\n");
 }
 
 #[test]
@@ -152,6 +157,10 @@ fn a_commit_message_is_checked() {
         commit(&dir, " \n ", &env()).unwrap_err(),
         "A commit message is needed"
     );
+    // At the limit it is a message.
+    let most = "m".repeat(MESSAGE_LIMIT);
+    let err = commit(&dir, &most, &env()).unwrap_err();
+    assert!(err.contains("nothing to commit"), "{err}");
     let long = "m".repeat(MESSAGE_LIMIT + 1);
     assert_eq!(
         commit(&dir, &long, &env()).unwrap_err(),
@@ -341,6 +350,14 @@ fn a_push_is_refused_where_it_cannot_go() {
         target(&dir).unwrap_err(),
         "The upstream of main is not a branch of up"
     );
+    // An upstream half set (a remote, no branch): none, so origin's.
+    git(&dir, &["remote", "add", "origin", "/nowhere"]);
+    git(&dir, &["config", "branch.main.remote", "origin"]);
+    git(&dir, &["config", "--unset", "branch.main.merge"]);
+    assert!(target(&dir).unwrap().set_upstream);
+    git(&dir, &["config", "--unset", "branch.main.remote"]);
+    git(&dir, &["config", "branch.main.merge", "refs/heads/main"]);
+    assert!(target(&dir).unwrap().set_upstream);
     git(&dir, &["config", "branch.main.remote", "-x"]);
     git(&dir, &["config", "branch.main.merge", "refs/heads/main"]);
     assert_eq!(
@@ -357,4 +374,75 @@ fn gits_message_loses_only_the_command() {
     assert_eq!(why("push", &slow), "git push took longer than 300 s");
     let long = io::Error::other(format!("git add failed: {}", "x".repeat(ERROR_LIMIT + 9)));
     assert!(why("add", &long).ends_with('…'));
+}
+
+#[cfg(unix)]
+#[test]
+fn a_push_gets_the_spaces_identity_and_its_accounts_token() {
+    use std::os::unix::fs::PermissionsExt;
+    let tmp = tempfile::tempdir().unwrap();
+    // A fake gh answering `gh auth token` (never the real one).
+    let program = tmp.path().join("gh");
+    std::fs::write(&program, "#!/bin/sh\necho tok-123\n").unwrap();
+    std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let gh = Gh {
+        program: program.into(),
+        path: "/usr/bin:/bin".into(),
+    };
+    let account = hive_protocol::SpaceGhAccount {
+        account: hive_protocol::GhAccount {
+            host: "github.com".into(),
+            login: "me".into(),
+        },
+        config_dir: None,
+    };
+    let space = SpaceEnv {
+        git_name: Some("Me".into()),
+        gh_account: Some(account),
+        ..SpaceEnv::default()
+    };
+    let vars = remote_env(&gh, &space);
+    assert!(vars.contains(&("GIT_AUTHOR_NAME", "Me".into())), "{vars:?}");
+    assert!(vars.contains(&("GH_TOKEN", "tok-123".into())), "{vars:?}");
+    assert!(vars.contains(&("GH_HOST", "github.com".into())), "{vars:?}");
+    // No account: the identity only.
+    let plain = SpaceEnv {
+        git_name: Some("Me".into()),
+        ..SpaceEnv::default()
+    };
+    assert_eq!(
+        remote_env(&gh, &plain),
+        [
+            ("GIT_AUTHOR_NAME", "Me".to_owned()),
+            ("GIT_COMMITTER_NAME", "Me".to_owned())
+        ]
+    );
+}
+
+#[test]
+fn the_service_answers_only_its_git_requests_and_never_for_a_folder_project() {
+    let tmp = tempfile::tempdir().unwrap();
+    let folder = tmp.path().join("notes");
+    std::fs::create_dir(&folder).unwrap();
+    let data = tmp.path().join("data");
+    let projects = Projects::load(data.join("spaces.json"), &data.join("projects.json"));
+    let id = projects.add(&folder.display().to_string()).unwrap().id;
+    let gh = Gh {
+        program: "/nonexistent/gh".into(),
+        path: "/usr/bin:/bin".into(),
+    };
+    let unstage = Control::StageFiles {
+        worktree: id.clone(),
+        paths: vec!["a".into()],
+        staged: false,
+    };
+    assert_eq!(
+        answer(&gh, &projects, unstage),
+        [Control::GitFailed {
+            worktree: id.clone(),
+            action: GitAction::Unstage,
+            message: format!("{id} is not a worktree of a followed project"),
+        }]
+    );
+    assert_eq!(answer(&gh, &projects, Control::ListProjects), []);
 }

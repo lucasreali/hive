@@ -26,7 +26,8 @@ const FILE_LIMIT: u64 = 256 << 10;
 /// Most inputs of a workflow (GitHub's own limit is 25), and options of a choice.
 const INPUTS_LIMIT: usize = 50;
 const OPTIONS_LIMIT: usize = 100;
-/// Most bytes of an input's description, and of a value sent.
+/// Most bytes of an input's description, and of all the values sent (GitHub's own limit is
+/// 65,535 characters for the inputs; it also keeps `gh`'s arguments well within the OS's).
 const DESCRIPTION_LIMIT: usize = 1024;
 const VALUE_LIMIT: usize = 64 << 10;
 /// How many times, and how long apart, GitHub is asked for the new run after it was started:
@@ -227,11 +228,16 @@ fn start(
     if inputs.len() > INPUTS_LIMIT {
         return Err(format!("At most {INPUTS_LIMIT} inputs can be given"));
     }
+    let mut total = 0;
     for WorkflowValue { name, value } in inputs {
         check_name(name)?;
-        if value.len() > VALUE_LIMIT || value.contains('\0') {
-            return Err(format!("The value of {name} is over 64 KiB or holds a NUL"));
+        if value.contains('\0') {
+            return Err(format!("The value of {name} holds a NUL"));
         }
+        total += value.len();
+    }
+    if total > VALUE_LIMIT {
+        return Err("The inputs' values are over 64 KiB".to_owned());
     }
     let (project, env, repo) = located(projects, id)?;
     let root = Path::new(&project.path);

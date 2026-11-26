@@ -61,6 +61,20 @@ async fn a_change_is_committed_as_the_space_and_pushed_never_forced() {
         action: GitAction::Stage,
         message: "Staged a.txt".into(),
     };
+    assert_eq!(answer(&mut app, stage.clone()).await, staged);
+    // Unstaged and staged again.
+    let unstage = Control::StageFiles {
+        worktree: root.clone(),
+        paths: vec!["a.txt".into()],
+        staged: false,
+    };
+    let Control::GitDone {
+        action: GitAction::Unstage,
+        ..
+    } = answer(&mut app, unstage).await
+    else {
+        panic!("expected the unstage")
+    };
     assert_eq!(answer(&mut app, stage).await, staged);
     let commit = Control::Commit {
         worktree: root.clone(),
@@ -178,6 +192,21 @@ async fn a_change_is_committed_as_the_space_and_pushed_never_forced() {
         message: "/elsewhere is not a worktree of a followed project".into(),
     };
     assert_eq!(answer(&mut app, elsewhere).await, refused);
+    // The workflows run by hand are read off the frame loop: none in this repository.
+    let list = Control::ListWorkflows {
+        project: root.clone(),
+        worktree: root.clone(),
+    };
+    app.send(0, list).await;
+    loop {
+        if let Control::Workflows {
+            workflows, error, ..
+        } = app.control().await.1
+        {
+            assert_eq!((workflows, error), (vec![], None));
+            break;
+        }
+    }
     drop(app);
     stop(daemon);
 }

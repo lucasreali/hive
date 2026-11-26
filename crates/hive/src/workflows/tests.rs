@@ -23,6 +23,8 @@ on:
         type: number
         default: 3
       plain: {}
+      listed:
+        default: [a, b]
       "bad name": {}
   push:
 "#;
@@ -59,8 +61,10 @@ fn a_dispatchable_workflow_gives_its_inputs() {
         ),
         ("string", false, None)
     );
+    // A default that is no scalar is none.
+    assert_eq!(input("listed").default, None);
     // An input GitHub would not accept is left out.
-    assert_eq!(workflow.inputs.len(), 4);
+    assert_eq!(workflow.inputs.len(), 5);
 }
 
 #[test]
@@ -385,7 +389,11 @@ fn a_start_is_refused_with_ghs_message_or_before_it_runs() {
     let long = "v".repeat(VALUE_LIMIT + 1);
     assert_eq!(
         failed(setup.start("ci.yml", &[("a", &long)])),
-        "The value of a is over 64 KiB or holds a NUL"
+        "The inputs' values are over 64 KiB"
+    );
+    assert_eq!(
+        failed(setup.start("ci.yml", &[("a", "x\0y")])),
+        "The value of a holds a NUL"
     );
     let many: Vec<(&str, &str)> = vec![("a", "b"); INPUTS_LIMIT + 1];
     assert_eq!(
@@ -403,6 +411,16 @@ fn a_start_is_refused_with_ghs_message_or_before_it_runs() {
         "\"a..b\" is not a branch name git accepts"
     );
     assert_eq!(setup.calls().len(), calls);
+    // At the limits: sent.
+    let most = "v".repeat(VALUE_LIMIT / INPUTS_LIMIT);
+    let mut full: Vec<(&str, &str)> = vec![("a", most.as_str()); INPUTS_LIMIT - 1];
+    let rest = "v".repeat(VALUE_LIMIT - most.len() * (INPUTS_LIMIT - 1));
+    full.push(("b", rest.as_str()));
+    assert!(matches!(
+        &setup.start("ci.yml", &full)[0],
+        Control::WorkflowStarted { .. }
+    ));
+    assert_eq!(setup.answer(Control::ListProjects), []);
     // The runs before cannot be listed: started all the same, not looked for.
     std::fs::write(setup.tmp.path().join("nolist"), "").unwrap();
     let calls = setup.calls().len();

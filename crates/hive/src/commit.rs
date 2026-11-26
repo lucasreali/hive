@@ -94,13 +94,10 @@ fn reply(worktree: String, action: GitAction, done: Result<String, String>) -> C
     }
 }
 
-/// The folder of `path`, a worktree of a followed git project (never a folder project's
-/// folder, 23.1), and its space's environment.
+/// The folder of `path`, a worktree of a followed git project (a folder project's folder,
+/// 23.1, is none), and its space's environment.
 fn located(projects: &Projects, path: &str) -> Result<(PathBuf, SpaceEnv), String> {
-    let (project, worktree) = projects.holding(path).map_err(|err| err.to_string())?;
-    if project.folder {
-        return Err("This folder is in no git repository".to_owned());
-    }
+    let (_, worktree) = projects.holding(path).map_err(|err| err.to_string())?;
     Ok((PathBuf::from(worktree.path), projects.space_env(path)))
 }
 
@@ -153,8 +150,7 @@ fn check_paths(paths: &[String]) -> Result<(), String> {
         path.is_empty()
             || path.len() > PATH_LIMIT
             || path.contains('\0')
-            || Path::new(path).is_absolute()
-            || path.starts_with('/')
+            || Path::new(path).has_root()
             || path.split(['/', '\\']).any(|part| part == "..")
     };
     match paths.iter().find(|path| bad(path)) {
@@ -163,8 +159,8 @@ fn check_paths(paths: &[String]) -> Result<(), String> {
     }
 }
 
-/// Stages (`git add`) or unstages (`git restore --staged`, or `git reset` before the first
-/// commit) `paths` of the worktree at `dir`; unstaging a staged rename unstages its old path
+/// Stages (`git add`) or unstages (`git reset`, which also works before the first commit)
+/// `paths` of the worktree at `dir`; unstaging a staged rename unstages its old path
 /// too. The paths go on stdin as literal pathspecs: a `*` in a name is that file only.
 pub fn stage(dir: &Path, paths: &[String], staged: bool) -> Result<String, String> {
     check_paths(paths)?;
@@ -186,7 +182,6 @@ pub fn stage(dir: &Path, paths: &[String], staged: bool) -> Result<String, Strin
     let from_stdin = ["--pathspec-from-file=-", "--pathspec-file-nul"];
     let verb: &[&str] = match staged {
         true => &["add"],
-        false if has_head(dir) => &["restore", "--staged"],
         false => &["reset", "--quiet"],
     };
     let args = [&["--literal-pathspecs"][..], verb, &from_stdin].concat();
@@ -200,12 +195,6 @@ pub fn stage(dir: &Path, paths: &[String], staged: bool) -> Result<String, Strin
         true => format!("Staged {files}"),
         false => format!("Unstaged {files}"),
     })
-}
-
-/// Whether the repository at `dir` has a commit (`HEAD` resolves).
-fn has_head(dir: &Path) -> bool {
-    let args = ["rev-parse", "--verify", "--quiet", "HEAD"];
-    git::output(dir, &args, &[0, 1]).is_ok_and(|out| !out.is_empty())
 }
 
 /// Commits what is staged in the worktree at `dir` with `message` and `env` (the space's
