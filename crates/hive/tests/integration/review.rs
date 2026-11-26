@@ -72,6 +72,38 @@ async fn a_review_is_made_brought_back_on_request_and_discarded() {
     };
     assert_eq!((project.as_str(), name.as_str()), ("", "/no"));
     assert_eq!(message, "/no is not a worktree of a followed project");
+    // A detached worktree of the project: refused, named with its project.
+    let detached = repo.env.path("home/detached");
+    repo.git(&[
+        "worktree",
+        "add",
+        "-q",
+        "--detach",
+        detached.to_str().unwrap(),
+    ]);
+    let detached = detached.canonicalize().unwrap().display().to_string();
+    conn.send(0, Control::ListProjects).await;
+    while !matches!(conn.control().await.1, Control::Projects { projects } if projects[0].worktrees.iter().any(|w| w.path == detached))
+    {
+    }
+    let refused = request(
+        &mut conn,
+        Control::CreateReview {
+            path: detached.clone(),
+        },
+    )
+    .await;
+    let Control::CreateWorktreeFailed {
+        project, message, ..
+    } = refused
+    else {
+        panic!("expected a failure: {refused:?}")
+    };
+    assert_eq!(project, root);
+    assert_eq!(
+        message,
+        "detached is detached: there is no branch to review"
+    );
 
     // The plan lists the review's commits; nothing changes until asked.
     repo.git_in(

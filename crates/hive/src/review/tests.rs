@@ -198,10 +198,29 @@ fn links_are_saved_privately_marked_pruned_and_renamed() {
 fn a_links_file_that_cannot_be_read_or_saved_is_no_failure() {
     let tmp = tempfile::tempdir().unwrap();
     let file = tmp.path().join("reviews.json");
+    let aside = tmp.path().join("reviews.json.corrupt");
+    // Missing: nothing is moved.
+    assert!(Reviews::load(file.clone()).links().is_empty());
+    assert!(!aside.exists());
     std::fs::write(&file, "not json").unwrap();
     assert!(Reviews::load(file.clone()).links().is_empty());
-    std::fs::write(&file, vec![b' '; FILE_LIMIT as usize + 1]).unwrap();
-    assert!(Reviews::load(file).links().is_empty());
+    assert_eq!(std::fs::read_to_string(&aside).unwrap(), "not json");
+    assert!(!file.exists());
+    // Read up to its limit, not a byte more.
+    let link = r#"[{"project":"/r","review":"/r/v","reviewed":"/r/w"}]"#;
+    let padded = |size: usize| format!("{link}{}", " ".repeat(size - link.len()));
+    std::fs::write(&file, padded(FILE_LIMIT as usize)).unwrap();
+    assert_eq!(Reviews::load(file.clone()).links().len(), 1);
+    std::fs::write(&file, padded(FILE_LIMIT as usize + 1)).unwrap();
+    assert!(Reviews::load(file.clone()).links().is_empty());
+    // Its folder cannot take the file aside: it stays, ignored.
+    std::fs::create_dir_all(tmp.path().join("ro")).unwrap();
+    let locked = tmp.path().join("ro/reviews.json");
+    std::fs::write(&locked, "x").unwrap();
+    std::fs::create_dir(tmp.path().join("ro/reviews.json.corrupt")).unwrap();
+    std::fs::write(tmp.path().join("ro/reviews.json.corrupt/keep"), "").unwrap();
+    assert!(Reviews::load(locked.clone()).links().is_empty());
+    assert!(locked.exists());
 
     // Its folder is a file: nothing saves, the links are kept all the same.
     std::fs::write(tmp.path().join("plain"), "").unwrap();

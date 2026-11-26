@@ -25,7 +25,7 @@ use crate::wrapper::write_atomic;
 /// What a review's worktree and branch are named: `review-<name>`.
 pub const PREFIX: &str = "review-";
 /// Largest links file read or written.
-const FILE_LIMIT: u64 = 1024 * 1024;
+const FILE_LIMIT: u64 = 1_048_576;
 /// Most review links kept: one more is refused.
 pub const LINKS_LIMIT: usize = 256;
 /// Most bytes of the reviewed worktree's name in a review's name.
@@ -37,9 +37,9 @@ const SUMMARY_LIMIT: usize = 200;
 /// The longest a merge (with the repository's hooks) may take.
 const MERGE_TIME: Duration = Duration::from_secs(120);
 /// Most bytes read from one git command's stdout.
-const OUTPUT_LIMIT: u64 = 16 * 1024 * 1024;
+const OUTPUT_LIMIT: u64 = 16_777_216;
 /// Most bytes of what git said kept in an error: its end, where git says why it stopped.
-const SAID_LIMIT: usize = 64 * 1024;
+const SAID_LIMIT: usize = 65_536;
 
 /// A review worktree and the worktree it reviews, both of the repository `project`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -57,7 +57,7 @@ pub struct Reviews {
 
 impl Reviews {
     /// The links saved in `file`; none when it is missing, and none (with a warning) when it
-    /// cannot be read: the next save replaces it.
+    /// cannot be read, which is moved aside to `<file>.corrupt`.
     pub fn load(file: PathBuf) -> Self {
         let read = std::fs::File::open(&file)
             .and_then(|mut f| git::read_limited(&mut f, FILE_LIMIT))
@@ -66,7 +66,13 @@ impl Reviews {
             Ok(links) => links,
             Err(err) if err.kind() == io::ErrorKind::NotFound => Vec::new(),
             Err(err) => {
-                eprintln!("hive: warning: {} is ignored: {err}", file.display());
+                let aside = file.with_extension("json.corrupt");
+                let moved = std::fs::rename(&file, &aside).map(|()| aside.display().to_string());
+                let moved = moved.unwrap_or_else(|err| format!("nowhere ({err})"));
+                eprintln!(
+                    "hive: warning: {} is ignored, moved to {moved}: {err}",
+                    file.display()
+                );
                 Vec::new()
             }
         };
@@ -288,10 +294,12 @@ fn parse_log(out: &[u8]) -> Vec<ReviewCommit> {
         .split('\0')
         .filter_map(|entry| {
             let (id, summary) = entry.split_once('\x1f')?;
-            let mut end = summary.len().min(SUMMARY_LIMIT);
-            while !summary.is_char_boundary(end) {
-                end -= 1;
-            }
+            // The end of the last character that fits.
+            let ends = summary.char_indices().map(|(i, c)| i + c.len_utf8());
+            let end = ends
+                .take_while(|&end| end <= SUMMARY_LIMIT)
+                .last()
+                .unwrap_or(0);
             Some(ReviewCommit {
                 id: id.to_owned(),
                 summary: summary[..end].to_owned(),
@@ -407,11 +415,9 @@ fn merge(dir: &Path, plan: &ReviewPlan, env: &[(&str, String)], time: Duration) 
 
 /// The last `limit` bytes of `text` at most, from a character's start.
 fn tail(text: &str, limit: usize) -> &str {
-    let mut start = text.len().saturating_sub(limit);
-    while !text.is_char_boundary(start) {
-        start += 1;
-    }
-    &text[start..]
+    let from = text.len().saturating_sub(limit);
+    let start = text.char_indices().map(|(i, _)| i).find(|&i| i >= from);
+    &text[start.unwrap_or(text.len())..]
 }
 
 /// Removes the review `path` as [`Projects::remove_worktree`] does (`force`, `proc`, `before`),
