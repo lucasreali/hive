@@ -749,6 +749,15 @@ Created 2026-11-26 at the human's request: "quero conseguir fixar um chat para e
 - [ ] **32.2 Pinned tabs.** `task/32.2-pinned-tabs` — Needs 32.1's approval. Build the approved design. Tests: bun (pin/unpin, the close paths refused or confirmed, the order, the persistence and its fallback when storage is empty or throws); Playwright on the mock transport (pin a chat, try every close path, reload, the pin and the order are kept), in One Dark and One Light.
 - [ ] **32.3 Stage 32 hand check.** `main` — The human pins a chat in the real app, tries to close it every way (button, menu, palette, closing other tabs, closing the worktree), quits and reopens Hive. ⏸ Checkpoint.
 
+## Stage 33 — The plan usage stopped showing
+
+Created 2026-11-26 at the human's request: "o painel para mostrar o uso de plano não está mais funcionando, preciso que isso seja ajustado". In v0.30.0 the status bar shows the space's account ("Gmail - Visus") and the version, but no usage ring (12.1, 21.8, 22.5); the menu bar icon's usage lines (17.22) and the usage alerts (17.23) depend on the same reports. A bug fix: it restores the existing rules and changes no decision.
+
+Facts seen on the human's Mac on 2026-11-26, to start from (not a diagnosis): `~/.hive/usage.json` holds only the `gmail-visus` account, its 5-hour window past its reset (`resets_at` 10:33 -03 that day), so no report seems to have arrived since that morning; both accounts' `settings.json` (`~/.hive/accounts/*/settings.json`) set their own `statusLine` (`~/.claude/statusline.sh`), while `~/.hive/hive-hooks.json` sets `hive statusline`; which one Claude Code runs, and whether the current Claude Code still sends `rate_limits` in the statusline input, is unchecked.
+
+- [ ] **33.1 Find why the usage no longer reaches the status bar.** `task/33.1-usage-ring` — Follow the path end to end with the fake `claude` and a temp `HOME` (never the real one): the `statusLine` Claude Code runs under the wrapper (`~/.hive/bin/claude`, `hive-hooks.json`, an account's own `statusLine`), the JSON it pipes to `hive statusline` (compare with the current Claude Code's statusline input), the report to the service keyed by `CLAUDE_CONFIG_DIR` (12.1), `usage.json` (21.8), the current space's account (22.5) and the ring. Name the broken link with evidence (a log line, a recorded input, a failing test), write the failing test that reproduces it first, then fix it. If the fix needs a decision (e.g. a user's own `statusLine` must keep running beside Hive's), stop and ask. Tests: Rust, the case that broke and `hive statusline` with the current input shape; bun, the ring rendering from a fresh report; integration, a terminal under a non-default account whose report shows in the status bar.
+- [ ] **33.2 Stage 33 hand check.** `main` — The human opens a chat in each account's space in the real app: the ring shows and follows the space switch, its tooltip has the 5-hour and weekly windows, the menu bar icon lists the same lines. ⏸ Checkpoint.
+
 ---
 
 ## Not now (Fase 2)
