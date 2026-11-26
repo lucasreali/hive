@@ -107,6 +107,43 @@ test("one section per host, this Mac first, with its link; one New space… (27.
   select.mockRestore();
 });
 
+test("a host's space shows its projects; while its link is down it stays, dimmed (26.18)", () => {
+  const select = spyOn(transport, "selectSpace").mockResolvedValue();
+  show();
+  act(() => {
+    apply({ type: "host_link", host: "gpu-box", state: "connected" } as ServiceMessage);
+    apply({
+      type: "spaces",
+      spaces: [home, work],
+      current: "w",
+      host: "gpu-box",
+    } as ServiceMessage);
+    apply({ type: "projects", projects: [api], host: "gpu-box" } as ServiceMessage);
+  });
+  const projectRows = () =>
+    [...document.querySelectorAll(".tree-row.project .label")].map((r) => r.textContent);
+  expect(projectRows()).toEqual(["shop"]);
+  // Its current space shows at once, with its projects; no request.
+  open();
+  fireEvent.click(option("Work · gpu-box"));
+  expect(picker().textContent).toBe("Work · gpu-box");
+  expect(projectRows()).toEqual(["api"]);
+  expect(select).not.toHaveBeenCalled();
+  // Its link down: the space stays shown, its tree dimmed.
+  act(() =>
+    apply({
+      type: "host_link",
+      host: "gpu-box",
+      state: "reconnecting",
+      reason: "x",
+      retry_secs: 1,
+    } as ServiceMessage),
+  );
+  expect(picker().textContent).toBe("Work · gpu-box");
+  expect(document.querySelector(".sidebar-tree")?.hasAttribute("data-dimmed")).toBe(true);
+  select.mockRestore();
+});
+
 test("the keyboard opens, moves through and picks; Esc, Tab and a click outside close", () => {
   const select = spyOn(transport, "selectSpace").mockResolvedValue();
   show();
