@@ -203,7 +203,8 @@ fn a_remote_s_titles_badges_and_errors_are_clipped() {
     check(&mut exact).unwrap();
     assert_eq!(exact["body"], "a".repeat(LONG_TEXT));
     assert_eq!(LONG_TEXT, 4096);
-    let untouched = json!({"type": "pull", "body": long, "path": long, "title": 3, "text": null});
+    let longer = "é".repeat(LONG_TEXT + 5);
+    let untouched = json!({"type": "pull", "body": long, "path": longer, "title": 3, "text": null});
     let mut message = untouched.clone();
     check(&mut message).unwrap();
     assert_eq!(message, untouched);

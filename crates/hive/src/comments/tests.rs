@@ -203,9 +203,12 @@ fn a_comment_whose_code_is_gone_is_outdated_and_comes_back_with_it() {
     changed[2] = "let line_3 = 33;".into();
     fx.files.set("a.rs", &text(&changed));
     let list = fx.list();
-    // Listed still, at its last place, with its last text.
+    // Listed still, at its last place, with its last text; no hashes kept for its file.
     assert_eq!((list[0].from, list[0].to, list[0].outdated), (3, 3, true));
     assert_eq!(list[0].code, strings(&["let line_3 = 3;"]));
+    let store: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(fx.store()).unwrap()).unwrap();
+    assert_eq!(store[&fx.worktree]["files"], serde_json::json!({}));
     // Still outdated while the file changes elsewhere.
     changed.insert(0, "// new".into());
     fx.files.set("a.rs", &text(&changed));
@@ -244,6 +247,22 @@ fn a_file_that_cannot_be_read_keeps_its_comments_where_they_were() {
 }
 
 #[test]
+fn an_outdated_comment_is_found_by_its_text_only() {
+    let fx = Fixture::new();
+    let mut lines = numbered(10);
+    fx.files.set("a.rs", &text(&lines));
+    fx.add("a.rs", 2, 2, "placed").unwrap();
+    fx.add("a.rs", 5, 5, "gone").unwrap();
+    lines[4] = "let line_5 = 55;".into();
+    fx.files.set("a.rs", &text(&lines));
+    assert_eq!(fx.places(), [(2, 2, false), (5, 5, true)]);
+    // Its old place stays together in the kept hashes, but its text is not there.
+    lines.insert(0, "// top".into());
+    fx.files.set("a.rs", &text(&lines));
+    assert_eq!(fx.places(), [(3, 3, false), (5, 5, true)]);
+}
+
+#[test]
 fn a_long_file_is_followed_by_text_alone() {
     let fx = Fixture::new();
     let mut lines = numbered(SNAPSHOT_LINES + 1);
@@ -257,7 +276,10 @@ fn a_long_file_is_followed_by_text_alone() {
             .unwrap()
             .contains("big.rs\":\"")
     );
-    // Unchanged: both stay.
+    // Unchanged: both stay; changed below them, too (the lone `}` where it was).
+    assert_eq!(fx.places(), [(50, 51, false), (100, 100, false)]);
+    lines[500] = "changed();".into();
+    fx.files.set("big.rs", &text(&lines));
     assert_eq!(fx.places(), [(50, 51, false), (100, 100, false)]);
     lines.insert(0, "// top".into());
     fx.files.set("big.rs", &text(&lines));
@@ -325,7 +347,7 @@ fn resolved_comments_stay_listed_and_deleted_ones_go() {
 #[test]
 fn comments_have_limits() {
     let fx = Fixture::new();
-    fx.files.set("a.rs", &text(&numbered(LINES_MOST + 1)));
+    fx.files.set("a.rs", &text(&numbered(LINES_MOST + 2)));
     let refused = |from, to, body: &str| fx.add("a.rs", from, to, body).unwrap_err().to_string();
     assert_eq!(refused(1, 1, " \n"), "a comment needs some text");
     let long = "é".repeat(BODY_MOST + 1);
@@ -333,9 +355,10 @@ fn comments_have_limits() {
     assert_eq!(refused(0, 1, "x"), "a comment is on 1 to 1000 lines");
     assert_eq!(refused(2, 1, "x"), "a comment is on 1 to 1000 lines");
     assert_eq!(refused(1, 1001, "x"), "a comment is on 1 to 1000 lines");
+    assert_eq!(refused(2, 1002, "x"), "a comment is on 1 to 1000 lines");
     assert_eq!(
         refused(1003, 1003, "x"),
-        "a.rs has no line 1003 (it has 1001)"
+        "a.rs has no line 1003 (it has 1002)"
     );
     assert_eq!(
         fx.add("gone.rs", 1, 1, "x").unwrap_err().to_string(),
@@ -432,7 +455,8 @@ fn the_author_is_the_user_without_control_characters() {
     assert_eq!(author_from(Some("\n".into())), "you");
     assert_eq!(author_from(None), "you");
     assert_eq!(author_from(Some("z".repeat(100))).len(), AUTHOR_CHARS);
-    assert!(!author().is_empty());
+    let user = std::env::var("USER").or_else(|_| std::env::var("USERNAME"));
+    assert_eq!(author(), author_from(user.ok()));
 }
 
 #[test]
