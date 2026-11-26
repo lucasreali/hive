@@ -17,6 +17,7 @@ import {
   LOAD_STAGGER_MS,
   LOAD_START_MS,
   MOCK_ACCOUNTS_DIR,
+  MOCK_BLAME,
   MOCK_BRANCHES,
   MOCK_CHANGES,
   MOCK_CLAUDE_DIR,
@@ -37,6 +38,7 @@ import {
   MOCK_STATES,
   MOCK_TEXTS,
   mockDirs,
+  mockSessionFiles,
   mockUninstall,
   mockVersion,
 } from "./mock";
@@ -1914,4 +1916,86 @@ test("the fake service links to no host: Reconnect, restart and goodbye do nothi
   await mock.reconnectHost("gpu-box");
   await mock.restartRemote("gpu-box");
   expect(await mock.byeHosts([["gpu-box", true]])).toBeUndefined();
+});
+
+test("who wrote a line (27.5): a session, Hive's editor, a probable session, or a commit only", async () => {
+  const { transport, messages } = await connected();
+  const [fix, checkout, , auth] = MOCK_SESSIONS;
+  const shop = "/home/user/projects/shop";
+  const fixLogin = `${shop}/.claude/worktrees/fix-login`;
+  const checkoutTree = `${shop}/.claude/worktrees/feat-checkout`;
+  const path = "src/auth/session.ts";
+  const origin = async (worktree: string, line: number, side: "worktree" | "base", at = path) => {
+    messages.length = 0;
+    await transport.whoWrote(worktree, at, line, side, "head");
+    await tick();
+    const [answer] = messages as Extract<ServiceMessage, { type: "line_author" }>[];
+    expect(answer).toMatchObject({ type: "line_author", worktree, path: at, line, side });
+    return answer.origin;
+  };
+  // The rememberMe lines: the worktree's own session, followed live.
+  const live = await origin(fixLogin, 40, "worktree");
+  expect(live).toMatchObject({ kind: "session", commit: null });
+  expect(live.kind === "session" && live.edit).toMatchObject({
+    session: fix.id,
+    title: fix.title,
+    worktree: fixLogin,
+    tool: "Edit",
+    user_modified: true,
+    start: 39,
+    len: 3,
+  });
+  // In the main worktree its own; in one with no session, the first (fix-login's).
+  const main = await origin(shop, 39, "worktree");
+  expect(main.kind === "session" && main.edit.session).toBe(checkout.id);
+  const other = await origin(checkoutTree, 41, "worktree");
+  expect(other.kind === "session" && other.edit.session).toBe(fix.id);
+  expect(await origin(fixLogin, 2, "worktree")).toMatchObject({ kind: "editor" });
+  const sub = await origin(fixLogin, 1, "worktree");
+  expect(sub).toMatchObject({ kind: "session", commit: MOCK_BLAME });
+  expect(sub.kind === "session" && sub.edit).toMatchObject({
+    session: auth.id,
+    agent_type: "general-purpose",
+  });
+  const base = await origin(fixLogin, 39, "base");
+  expect(base).toMatchObject({ kind: "session", commit: MOCK_BLAME });
+  expect(base.kind === "session" && base.edit.session).toBe(checkout.id);
+  expect(await origin(fixLogin, 10, "worktree")).toEqual({ kind: "unknown", commit: MOCK_BLAME });
+  expect(await origin(fixLogin, 3, "worktree", "src/server.ts")).toEqual({
+    kind: "unknown",
+    commit: null,
+  });
+});
+
+test("a session's changed files (27.5): counted in its listing, listed when asked", async () => {
+  const { transport, messages } = await connected();
+  const counts = MOCK_SESSIONS.map((x) => x.files_changed);
+  expect(counts).toEqual([2, 0, 0, 1]);
+  const [fix] = MOCK_SESSIONS;
+  messages.length = 0;
+  await transport.listSessionFiles(fix.id);
+  await tick();
+  // Their times are set when asked.
+  const timeless = (files: { last_ms: number }[]) => files.map((f) => ({ ...f, last_ms: 0 }));
+  const [sent] = messages as Extract<ServiceMessage, { type: "session_files" }>[];
+  expect(messages).toHaveLength(1);
+  expect({ ...sent, files: timeless(sent.files) }).toEqual({
+    type: "session_files",
+    id: fix.id,
+    files: timeless(mockSessionFiles(fix.id)),
+    truncated: false,
+  });
+  const [first, second] = mockSessionFiles(fix.id);
+  expect(first).toMatchObject({
+    path: "src/auth/session.ts",
+    edits: 3,
+    lines_now: 3,
+    first_line: 39,
+  });
+  expect(second).toMatchObject({
+    worktree: "/home/user/projects/shop",
+    lines_now: 0,
+    first_line: null,
+  });
+  expect(mockSessionFiles("nope")).toEqual([]);
 });

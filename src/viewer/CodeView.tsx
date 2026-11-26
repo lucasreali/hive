@@ -11,6 +11,7 @@ import {
 } from "../store";
 import { isFor } from "./buffer";
 import { createViewer, restoreView, revealLine, snapshot, type Viewer } from "./editor";
+import { lineMenu, trackView } from "./lineAuthor";
 
 /** Why the service sent no text to show, or null. */
 export function notice(text: FileText): string | null {
@@ -35,14 +36,18 @@ export function CodeView({ text, diff }: { text: FileText; diff: boolean }) {
   const { path, worktree } = text;
   useEffect(() => {
     const file = { worktree, path };
-    const created = createViewer(parent.current as HTMLDivElement, path, selectIn(file));
+    // Its diff's removed lines are the base's (27.5).
+    const menu = lineMenu(file, true);
+    const created = createViewer(parent.current as HTMLDivElement, path, selectIn(file), menu);
     viewer.current = created;
+    const untrack = trackView(file, created.view);
     saved.current = useHive.getState().openFiles.find((f) => isFor(f, file))?.view;
     place.current = takePlace(file);
     return () => {
       const left = snapshot(created.view);
       saveFileView(file, left);
       leaveView(file, true, left.top);
+      untrack();
       created.destroy();
       setSelectedLines(null);
     };

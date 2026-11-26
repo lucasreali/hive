@@ -1266,6 +1266,25 @@ async fn project_requests_go_to_the_service_and_answers_to_the_ui() {
     hive.delete_session("s".into()).unwrap();
     let delete = Control::DeleteSession { id: "s".into() };
     assert_eq!(service.control().await, (0, delete));
+    hive.who_wrote(
+        "/r".into(),
+        "a.rs".into(),
+        3,
+        LineSide::Base,
+        DiffBase::Branch,
+    )
+    .unwrap();
+    let who = Control::WhoWrote {
+        worktree: "/r".into(),
+        path: "a.rs".into(),
+        line: 3,
+        side: LineSide::Base,
+        base: DiffBase::Branch,
+    };
+    assert_eq!(service.control().await, (0, who));
+    hive.list_session_files("s".into()).unwrap();
+    let files = Control::ListSessionFiles { id: "s".into() };
+    assert_eq!(service.control().await, (0, files));
     hive.move_session("s".into(), Some("/w".into())).unwrap();
     let moved = Control::MoveSession {
         id: "s".into(),
@@ -2089,6 +2108,15 @@ async fn bridge_exit_ends_terminals_then_disconnects() {
         not_connected
     );
     assert_eq!(hive.delete_session("s".into()), not_connected);
+    let who = hive.who_wrote(
+        "/r".into(),
+        "a".into(),
+        1,
+        LineSide::Worktree,
+        DiffBase::Head,
+    );
+    assert_eq!(who, not_connected);
+    assert_eq!(hive.list_session_files("s".into()), not_connected);
     assert_eq!(hive.move_session("s".into(), None), not_connected);
     assert_eq!(hive.remove_worktree("/r/w".into(), false), not_connected);
     assert_eq!(
@@ -2349,6 +2377,8 @@ fn commands_reach_the_managed_hive() {
             list_sessions,
             locate_session,
             delete_session,
+            who_wrote,
+            list_session_files,
             move_session,
             save_file,
             create_file,
@@ -2456,6 +2486,7 @@ fn commands_reach_the_managed_hive() {
     let dirs = json!({"path": "", "windows": false, "hidden": false});
     let locate = json!({"id": "s", "target": "log"});
     let delete = json!({"id": "s"});
+    let who = json!({"worktree": "/r", "path": "a", "line": 2, "side": "base", "base": "head"});
     let move_session = json!({"id": "s", "configDir": "/w"});
     let save = json!({"worktree": "/r", "path": "a", "content": "x", "version": null});
     let create_file = json!({"worktree": "/r", "folder": "", "name": "a"});
@@ -2500,6 +2531,8 @@ fn commands_reach_the_managed_hive() {
         ("list_sessions", &json!({})),
         ("locate_session", &locate),
         ("delete_session", &delete),
+        ("who_wrote", &who),
+        ("list_session_files", &delete),
         ("move_session", &move_session),
         ("save_file", &save),
         ("create_file", &create_file),
@@ -2603,7 +2636,9 @@ fn commands_reach_the_managed_hive() {
         ("list_dirs", dirs),
         ("list_sessions", json!({})),
         ("locate_session", locate),
-        ("delete_session", delete),
+        ("delete_session", delete.clone()),
+        ("who_wrote", who),
+        ("list_session_files", delete),
         ("move_session", move_session),
         ("save_file", save),
         ("create_file", create_file),
