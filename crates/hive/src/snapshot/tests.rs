@@ -160,6 +160,40 @@ fn a_linked_worktree_has_its_own_index_and_shares_the_store() {
 }
 
 #[test]
+fn no_filter_of_a_nested_repository_runs() {
+    let (tmp, root, snapshots) = repo();
+    let spy = tmp.path().join("spy");
+    // A repository inside the worktree (a submodule's checkout is one too), with one inside it.
+    let inner = root.join("inner");
+    let deeper = inner.join("deeper");
+    for dir in [&deeper, &inner] {
+        std::fs::create_dir_all(dir).unwrap();
+        run(dir, &["init", "-q"]);
+        commit(dir, "f");
+    }
+    // `deeper` is a gitlink of `inner`, and so is `gone`, not checked out.
+    run(&inner, &["add", "deeper"]);
+    let sha = git::output(&deeper, &["rev-parse", "HEAD"], &[0]).unwrap();
+    let link = format!("160000,{},gone", String::from_utf8_lossy(sha.trim_ascii()));
+    run(&inner, &["update-index", "--add", "--cacheinfo", &link]);
+    take(&snapshots, &root, "s", 1);
+    let filter = format!("echo ran >> '{}'; cat", spy.display());
+    for (dir, name) in [(&inner, "spy"), (&deeper, "deep")] {
+        run(dir, &["config", &format!("filter.{name}.clean"), &filter]);
+        std::fs::write(dir.join(".gitattributes"), format!("* filter={name}\n")).unwrap();
+        // The same size: only its content, read through the filter, tells.
+        std::fs::write(dir.join("f"), "g").unwrap();
+    }
+    take(&snapshots, &root, "s", 2);
+    snapshots
+        .since(&root, &id(&root), "s")
+        .unwrap()
+        .list()
+        .unwrap();
+    assert!(!spy.exists(), "a nested repository's filter ran");
+}
+
+#[test]
 fn no_hook_or_filter_of_the_repository_runs() {
     let (tmp, root, snapshots) = repo();
     let spy = tmp.path().join("spy");
@@ -422,6 +456,49 @@ fn a_broken_snapshot_index_is_seeded_again() {
 }
 
 #[test]
+fn a_record_hive_could_not_have_written_is_not_trusted() {
+    let (_tmp, root, snapshots) = repo();
+    let first = take(&snapshots, &root, "s", 1);
+    let (store, _) = snapshots.store(&Repo::of(&root).unwrap());
+    // Turns edited by hand: a session that fits no ref, a tree that is no id.
+    let mut record = store.read();
+    let odd = |session: &str, tree: &str| Turn {
+        session: session.into(),
+        tree: tree.into(),
+        ..first.clone()
+    };
+    record.turns.push(odd("a/b", &first.tree));
+    record.turns.push(odd("t", "--output=x"));
+    record.turns.push(odd("u", &"0".repeat(39)));
+    store.write(&record).unwrap();
+    assert_eq!(store.read().turns, std::slice::from_ref(&first));
+    // A record that cannot be read at all: the store starts again, its old refs gone.
+    std::fs::write(store.record(), "not json").unwrap();
+    let again = take(&snapshots, &root, "s", 2);
+    assert_eq!((again.n, store.read().turns.len()), (1, 1));
+    let refs = store.git(&args(&["for-each-ref", "--format=%(refname)"]), &[]);
+    assert_eq!(
+        String::from_utf8(refs.unwrap()).unwrap(),
+        "refs/turns/s/1\n"
+    );
+}
+
+#[test]
+fn a_listing_past_the_size_cap_prunes_what_it_hashed() {
+    let (_tmp, root, snapshots) = repo();
+    take(&snapshots, &root, "s", 1);
+    let (store, _) = snapshots.store(&Repo::of(&root).unwrap());
+    let kept = store.size();
+    std::fs::write(root.join("a"), "x".repeat(10_000)).unwrap();
+    let roomy = Snapshots::new(snapshots.root.clone()).with_limits(SIZE_CAP, Duration::MAX);
+    roomy.since(&root, &id(&root), "s").unwrap().list().unwrap();
+    assert!(store.size() > kept);
+    let tight = Snapshots::new(snapshots.root.clone()).with_limits(kept, Duration::MAX);
+    tight.since(&root, &id(&root), "s").unwrap().list().unwrap();
+    assert_eq!(store.size(), kept);
+}
+
+#[test]
 fn a_snapshot_whose_objects_are_gone_cannot_be_listed() {
     let (_tmp, root, snapshots) = repo();
     std::fs::write(root.join("a"), "only here").unwrap();
@@ -463,6 +540,13 @@ fn turns_are_kept_per_session_and_by_age() {
         n(&dropped),
         [("c".into(), 1), ("a".into(), 2), ("a".into(), 1)]
     );
+}
+
+#[test]
+fn a_snapshot_looks_into_a_bounded_number_of_nested_repositories() {
+    assert!(nested(NESTED).is_ok());
+    let err = nested(NESTED + 1).unwrap_err();
+    assert_eq!(err.to_string(), "too many nested repositories to snapshot");
 }
 
 #[test]

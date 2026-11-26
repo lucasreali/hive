@@ -63,7 +63,7 @@ const CLIPPED: &[&str] = &[
     "author",
 ];
 /// Fields clipped only in one type's messages: `body` is also a pull request's description.
-const CLIPPED_IN: &[(&str, &str)] = &[("terminal_notification", "body")];
+const CLIPPED_IN: &[(&str, &str)] = &[("terminal_notification", "body"), ("commits", "short")];
 
 /// Why the link was dropped once its remote stopped reading what the app sends.
 pub(crate) const QUEUE_FULL: &str = "stopped reading what the app sends";

@@ -41,6 +41,10 @@ const TIME_LIMIT: Duration = Duration::from_secs(60);
 const OUTPUT_LIMIT: u64 = 16 << 20;
 /// Most bytes of a store's `turns.json`.
 const RECORD_LIMIT: u64 = 1 << 20;
+/// Most bytes of an index's listing (`git ls-files --stage`), read to find its gitlinks.
+const LISTING_LIMIT: u64 = 256 << 20;
+/// The most nested repositories (submodules, embedded repositories) a snapshot looks into.
+const NESTED: usize = 256;
 /// A store is pruned at most this often, unless snapshots were dropped.
 const PRUNE_EVERY: Duration = Duration::from_secs(60);
 /// The tools whose `PostToolUse` is an edit: one before the snapshot is done makes it late.
@@ -106,6 +110,8 @@ pub struct Since {
     store: Store,
     repo: Repo,
     lock: Arc<Mutex<Instant>>,
+    /// The store's size cap ([`SIZE_CAP`]).
+    size_cap: u64,
 }
 
 impl PartialEq for Since {
@@ -169,6 +175,11 @@ impl Snapshots {
         let repo = Repo::of(worktree)?;
         let (store, held) = self.store(&repo);
         let mut pruned = lock(&held);
+        // A record that cannot be read would leave refs no turn names, keeping their objects
+        // forever: the store starts again.
+        if store.read_whole().is_none() {
+            std::fs::remove_dir_all(&store.dir)?;
+        }
         store.create(&repo)?;
         let tree = store.snapshot(worktree, &repo, &store.index(id))?;
         // An edit after this point is not in the tree.
@@ -182,7 +193,7 @@ impl Snapshots {
             .map(|t| t.n)
             .max()
             .unwrap_or(0)
-            + 1;
+            .saturating_add(1);
         let turn = Turn {
             session: session.to_owned(),
             n,
@@ -272,6 +283,7 @@ impl Snapshots {
             store,
             repo,
             lock,
+            size_cap: self.size_cap,
         })
     }
 
@@ -340,12 +352,17 @@ impl Since {
         let run = |options: &[&str]| {
             let mut diff = vec!["diff-index", "--cached", "-z", "--find-renames"];
             diff.extend_from_slice(options);
-            diff.push(&self.turn.tree);
+            diff.extend(["--end-of-options", &self.turn.tree]);
             self.store.work(&self.worktree, &index, &args(&diff))
         };
         let raw = run(&["--raw"])?;
         let counts = ["--numstat", "--no-ext-diff", "--no-textconv"];
         let numstat = if numstat { run(&counts)? } else { Vec::new() };
+        // A listing hashes what changed into the store: past its cap, what no snapshot keeps
+        // goes now rather than at the next snapshot.
+        if self.store.size() > self.size_cap {
+            self.store.prune()?;
+        }
         Ok((raw, numstat))
     }
 
@@ -483,12 +500,63 @@ impl Store {
     /// `git <args>` in the worktree at `worktree` with `index` as its index and the store as
     /// its object folder, its filters turned off.
     fn work(&self, worktree: &Path, index: &Path, args: &[&OsStr]) -> io::Result<Vec<u8>> {
+        self.work_with(worktree, index, &filters(worktree)?, args)
+    }
+
+    /// [`Store::work`] with the `-c` options `filters`.
+    fn work_with(
+        &self,
+        worktree: &Path,
+        index: &Path,
+        filters: &[String],
+        args: &[&OsStr],
+    ) -> io::Result<Vec<u8>> {
         let mut command = self.command(worktree)?;
-        command.args(filters(worktree)?);
+        command.args(filters);
         command
             .env("GIT_INDEX_FILE", index)
             .env("GIT_OBJECT_DIRECTORY", self.objects());
         self.run(command, args, &[])
+    }
+
+    /// The `-c` options turning off the filter drivers of the worktree at `worktree` and of
+    /// every repository nested in it that git looks into: `git add -A` runs `git status` in each
+    /// checked-out gitlink of `index` (a submodule, an embedded repository), which runs that
+    /// repository's own filters, and so on down. The options reach those through
+    /// `GIT_CONFIG_PARAMETERS`. At most [`NESTED`] nested repositories.
+    fn nested_filters(&self, worktree: &Path, index: &Path) -> io::Result<Vec<String>> {
+        let mut options = filters(worktree)?;
+        let mut queue = self.gitlinks(worktree, Some(index))?;
+        let mut seen = 0;
+        while let Some(dir) = queue.pop() {
+            seen += 1;
+            nested(seen)?;
+            // Not checked out: git looks into nothing there.
+            if dir.join(".git").exists() {
+                options.extend(filters(&dir)?);
+                queue.extend(self.gitlinks(&dir, None)?);
+            }
+        }
+        Ok(options)
+    }
+
+    /// The gitlinks of the repository at `dir`, through `index` (Hive's) or its own index.
+    fn gitlinks(&self, dir: &Path, index: Option<&Path>) -> io::Result<Vec<PathBuf>> {
+        let mut command = self.command(dir)?;
+        if let Some(index) = index {
+            command.env("GIT_INDEX_FILE", index);
+        }
+        command.args(["ls-files", "--stage", "-z"]);
+        let keep = Stdout::Max(LISTING_LIMIT);
+        let ls = args(&["ls-files", "--stage", "-z"]);
+        let out = git::limited(command, "git", &ls, &[], &[0], keep, Some(TIME_LIMIT))?;
+        let links = out.split(|&b| b == 0).filter_map(|entry| {
+            let (meta, path) = entry.split_at(entry.iter().position(|&b| b == b'\t')?);
+            let path = path.get(1..).filter(|p| !p.is_empty())?;
+            meta.starts_with(b"160000 ")
+                .then(|| dir.join(git::os_string(path)))
+        });
+        Ok(links.collect())
     }
 
     /// Brings `index` up to the worktree at `worktree` (`git add -A`): seeded from a copy of
@@ -500,7 +568,9 @@ impl Store {
             if !index.exists() && repo.index.exists() {
                 std::fs::copy(&repo.index, index)?;
             }
-            self.work(worktree, index, &args(&["add", "-A"])).map(drop)
+            let filters = self.nested_filters(worktree, index)?;
+            self.work_with(worktree, index, &filters, &args(&["add", "-A"]))
+                .map(drop)
         })();
         if refreshed.is_err() {
             let mut lock = index.as_os_str().to_owned();
@@ -573,13 +643,27 @@ impl Store {
         size
     }
 
-    /// The store's `turns.json`; an unreadable one holds none.
+    /// The store's `turns.json`; an unreadable one holds none. A turn whose session or tree
+    /// could not have been written by Hive (the file edited by hand) is left out.
     fn read(&self) -> Record {
-        let read = std::fs::File::open(self.record())
-            .and_then(|mut file| read_limited(&mut file, RECORD_LIMIT))
-            .ok();
-        read.and_then(|bytes| serde_json::from_slice(&bytes).ok())
-            .unwrap_or_default()
+        let mut record = self.read_whole().unwrap_or_default();
+        record.turns.retain(|t| {
+            let tree =
+                matches!(t.tree.len(), 40 | 64) && t.tree.bytes().all(|b| b.is_ascii_hexdigit());
+            valid(&t.session).is_ok() && tree
+        });
+        record
+    }
+
+    /// The store's `turns.json`: `None` when it is there but cannot be read (too large,
+    /// corrupt), empty when it is not there.
+    fn read_whole(&self) -> Option<Record> {
+        let file = match std::fs::File::open(self.record()) {
+            Err(err) if err.kind() == io::ErrorKind::NotFound => return Some(Record::default()),
+            file => file,
+        };
+        let bytes = file.and_then(|mut file| read_limited(&mut file, RECORD_LIMIT));
+        serde_json::from_slice(&bytes.ok()?).ok()
     }
 
     fn write(&self, record: &Record) -> io::Result<()> {
@@ -634,6 +718,14 @@ fn filters(dir: &Path) -> io::Result<Vec<String>> {
         }
     }
     Ok(options)
+}
+
+/// An error once `seen` nested repositories are more than [`NESTED`].
+fn nested(seen: usize) -> io::Result<()> {
+    if seen > NESTED {
+        return Err(io::Error::other("too many nested repositories to snapshot"));
+    }
+    Ok(())
 }
 
 /// A session id from a hook payload (untrusted) is used in a ref and a file name only when it

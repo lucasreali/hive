@@ -186,6 +186,10 @@ fn a_remote_s_titles_badges_and_errors_are_clipped() {
     let mut notification = json!({"type": "terminal_notification", "body": long});
     check(&mut notification).unwrap();
     assert_eq!(notification["body"], clipped);
+    // A commit's short id (27.2), at any depth of a `commits`.
+    let mut commits = json!({"type": "commits", "commits": [{"short": long}]});
+    check(&mut commits).unwrap();
+    assert_eq!(commits["commits"][0]["short"], clipped);
     let untouched = json!({"type": "pull", "body": long, "path": long, "title": 3, "text": null});
     let mut message = untouched.clone();
     check(&mut message).unwrap();
