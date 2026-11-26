@@ -1956,6 +1956,18 @@ pub struct RunStep {
     pub status: String,
 }
 
+/// What the app's "Create pull request" dialog gives its own command (9.31; `push`, 27.6),
+/// which sends it as `CreatePull`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PullForm {
+    pub title: String,
+    pub body: String,
+    pub base: String,
+    pub draft: bool,
+    #[serde(default)]
+    pub push: bool,
+}
+
 /// Which git action of the Changes panel (27.6) a `GitDone` or `GitFailed` answers.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
