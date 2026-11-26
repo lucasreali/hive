@@ -90,7 +90,10 @@ fn a_snapshot_holds_the_worktree_with_untracked_files_and_without_ignored_ones()
     let second = take(&snapshots, &root, "s-1", 2000);
     assert_eq!(second.n, 2);
     assert_ne!(second.tree, turn.tree);
-    assert_eq!(snapshots.turns(&root, &id(&root)), std::slice::from_ref(&second));
+    assert_eq!(
+        snapshots.turns(&root, &id(&root)),
+        std::slice::from_ref(&second)
+    );
     // Since the second turn: the new file `c`, `b` changed, `a` gone.
     std::fs::write(root.join("c"), "c").unwrap();
     std::fs::write(root.join("b"), "b2\n").unwrap();
@@ -330,7 +333,10 @@ fn a_sweep_drops_old_turns_gone_worktrees_and_gone_repositories() {
     take(&snapshots, &linked, "linked", AGE_MS + 1);
     run(&root, &["worktree", "remove", linked.to_str().unwrap()]);
     snapshots.sweep(AGE_MS + 2);
-    assert_eq!(snapshots.turns(&root, &id(&root)), std::slice::from_ref(&new));
+    assert_eq!(
+        snapshots.turns(&root, &id(&root)),
+        std::slice::from_ref(&new)
+    );
     let (store, _) = snapshots.store(&Repo::of(&root).unwrap());
     assert!(!store.read().turns.contains(&old));
     // Nothing more to drop: the store stays as it is.

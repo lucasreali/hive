@@ -2,8 +2,9 @@
 //! through their events and their terminal's output, named from their session logs.
 
 use std::collections::HashMap;
-use std::sync::PoisonError;
+use std::io;
 use std::sync::atomic::Ordering;
+use std::sync::{Arc, PoisonError};
 use std::time::Instant;
 
 use hive_protocol::{AgentEvent, Control, EventKind, OpenSession};
@@ -12,6 +13,7 @@ use super::State;
 use crate::power;
 use crate::projects;
 use crate::sessions;
+use crate::snapshot;
 use crate::states::{self, Agent};
 use crate::transcript;
 
@@ -61,7 +63,7 @@ impl State {
     /// and detects the agent; any other event of a detected agent (or of its subagents)
     /// updates its state; its own `SessionEnd` removes it. The `SessionStart` that follows a
     /// compaction leaves a known agent as it is (state, subagents, tokens).
-    pub(super) async fn saw(&self, event: &AgentEvent, sent_ns: u64) {
+    pub(super) async fn saw(self: &Arc<Self>, event: &AgentEvent, sent_ns: u64) {
         if event.kind == EventKind::SessionStarted {
             let compacted =
                 event.raw.get("source").and_then(serde_json::Value::as_str) == Some("compact");
@@ -92,6 +94,9 @@ impl State {
         if let Some(state) = agent.apply(id, event, sent_ns, now, &place) {
             self.to_app(channel, &state).await;
         }
+        if event.subagent.is_none() {
+            self.turn_snapshot(id, agent.worktree.as_deref(), &event.kind);
+        }
         // The transcript got a message: its usage is read on the next tick (at most once a
         // second).
         agent.usage.due |= matches!(
@@ -112,6 +117,46 @@ impl State {
             self.to_app(channel, &Control::AgentRemoved { id }).await;
         }
         self.owned_changed(&agents).await;
+    }
+
+    /// The agent `id`'s own `kind` of event for its turn snapshots (27.2): a prompt takes one of
+    /// `worktree` (a repository's, not a folder project's), an edit before it is done makes it
+    /// late, its end drops its snapshots. Git runs on a blocking thread, never on the hook's path;
+    /// the watched worktree's changes are sent again once it is done.
+    fn turn_snapshot(self: &Arc<Self>, id: &str, worktree: Option<&str>, kind: &EventKind) {
+        let (state, snapshots, id) = (self.clone(), self.snapshots.clone(), id.to_owned());
+        match (kind, worktree) {
+            (EventKind::PromptSubmitted, Some(worktree)) => {
+                snapshots.started(&id);
+                let (worktree, started) = (worktree.to_owned(), crate::hook::now_ms());
+                tokio::spawn(async move {
+                    let blocking = state.clone();
+                    let taken = tokio::task::spawn_blocking(move || {
+                        // A folder project's folder (23.1) is in no repository: git refuses it.
+                        let dir = blocking.projects.worktree(&worktree)?;
+                        snapshots
+                            .take(&dir, &worktree, &id, started)
+                            .map(|_| worktree)
+                    });
+                    match taken.await.unwrap_or_else(|err| Err(io::Error::other(err))) {
+                        Ok(worktree) => state.rewatch(Some(&worktree)).await,
+                        Err(err) => eprintln!("hive: warning: no snapshot of this turn: {err}"),
+                    }
+                });
+            }
+            (EventKind::ToolFinished { tool: Some(tool) }, _)
+                if snapshot::EDITS.contains(&tool.as_str()) =>
+            {
+                snapshots.edited(&id);
+            }
+            (EventKind::SessionEnded { .. }, _) => {
+                tokio::spawn(async move {
+                    let _ = tokio::task::spawn_blocking(move || snapshots.end(&id)).await;
+                    state.rewatch(None).await;
+                });
+            }
+            _ => {}
+        }
     }
 
     /// Places and announces the agent while holding the agents lock, so a `SessionEnd` or the

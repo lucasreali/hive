@@ -825,12 +825,31 @@ pub enum Control {
         /// The main worktree's branch this worktree can be compared with; `None` for the
         /// main worktree itself, or when that one is detached.
         branch: Option<String>,
-        /// Why `branch` was asked but `HEAD` is shown.
+        /// Why the base asked is not shown but `HEAD` is.
         base_error: Option<String>,
         files: Vec<ChangedFile>,
         added: u64,
         removed: u64,
         /// Why nothing could be listed, or why the list was cut short.
+        error: Option<String>,
+        /// The agents whose last turn can be compared with ([`DiffBase::Turn`]), the latest
+        /// first.
+        #[serde(default)]
+        turns: Vec<TurnBase>,
+    },
+    /// App → service: the commits of a worktree of a followed project to compare with (27.2),
+    /// answered by `Commits`.
+    ListCommits {
+        path: String,
+    },
+    /// The last commits of the worktree `path`'s `HEAD` (at most 500), those of its branch
+    /// first (`on_branch`), then the older ones, each newest first.
+    Commits {
+        path: String,
+        commits: Vec<CommitInfo>,
+        /// More commits were left out.
+        truncated: bool,
+        /// Why they could not be listed.
         error: Option<String>,
     },
     /// App → service: the scripts of a worktree of a followed project (23.4), answered by
@@ -2160,15 +2179,53 @@ pub struct SearchMatch {
     pub text: String,
 }
 
-/// What a worktree's changes are compared with (9.11); the app keeps the choice.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+/// What a worktree's changes are compared with (9.11, 27.2); the app keeps the choice.
+/// `"head"` and `"branch"` in JSON; the others as `{"turn":{"session":…}}` and
+/// `{"commit":{"id":…}}`.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum DiffBase {
     /// Its `HEAD`: what is not committed yet.
+    #[default]
     Head,
     /// The merge-base of its `HEAD` and the main worktree's branch (the branch 6.6 counts
     /// ahead/behind against): all the work of its branch, committed or not.
     Branch,
+    /// The worktree as it was when the agent `session` started its last turn (27.2): the
+    /// service's snapshot at its `UserPromptSubmit`.
+    Turn { session: String },
+    /// A commit the user picked (27.2), by its full id (40 or 64 hex digits).
+    Commit { id: String },
+}
+
+/// An agent with a usable snapshot of its last turn in a worktree (27.2): what
+/// [`DiffBase::Turn`] can compare with.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TurnBase {
+    pub session: String,
+    /// The agent's title, or the start of its session id.
+    pub title: String,
+    /// When the turn started (the snapshot's `UserPromptSubmit`).
+    pub started_ms: u64,
+    /// The snapshot finished after the agent's first edit of the turn: that edit may be
+    /// missing from the diff.
+    pub late: bool,
+}
+
+/// A commit of a worktree's history the user can compare with (27.2).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CommitInfo {
+    /// The full id.
+    pub id: String,
+    pub short: String,
+    /// Clipped by the service (100 characters).
+    pub author: String,
+    /// The commit time.
+    pub time_ms: u64,
+    /// Its first line, clipped by the service (200 characters).
+    pub subject: String,
+    /// Made on the worktree's branch since it left the main worktree's branch.
+    pub on_branch: bool,
 }
 
 /// A file that differs from the base in a worktree.
@@ -3202,16 +3259,68 @@ mod tests {
             added: 1,
             removed: 0,
             error: None,
+            turns: vec![TurnBase {
+                session: "s".into(),
+                title: "t".into(),
+                started_ms: 5,
+                late: true,
+            }],
         };
         assert_eq!(
             &Frame::control(0, &changes).payload[..],
-            br#"{"type":"changes","path":"/r","base":"head","branch":"main","base_error":"e","files":[{"path":"b","status":"renamed","old_path":"a","added":1,"removed":null}],"added":1,"removed":0,"error":null}"#
+            br#"{"type":"changes","path":"/r","base":"head","branch":"main","base_error":"e","files":[{"path":"b","status":"renamed","old_path":"a","added":1,"removed":null}],"added":1,"removed":0,"error":null,"turns":[{"session":"s","title":"t","started_ms":5,"late":true}]}"#
         );
+        // A service before 27.2 sends no turns.
+        let old = br#"{"type":"changes","path":"/r","base":"branch","branch":null,"base_error":null,"files":[],"added":0,"removed":0,"error":null}"#;
+        let old = serde_json::from_slice::<Control>(old).unwrap();
+        assert!(matches!(old, Control::Changes { turns, .. } if turns.is_empty()));
         let list = Control::ListChanges {
             path: "/r".into(),
             base: DiffBase::Branch,
         };
         assert_eq!(Frame::control(0, &list).to_control().unwrap(), list);
+        for (base, json) in [
+            (
+                DiffBase::Turn {
+                    session: "s".into(),
+                },
+                r#"{"turn":{"session":"s"}}"#,
+            ),
+            (
+                DiffBase::Commit { id: "ab".into() },
+                r#"{"commit":{"id":"ab"}}"#,
+            ),
+        ] {
+            assert_eq!(serde_json::to_string(&base).unwrap(), json);
+            let list = Control::OpenFile {
+                worktree: "/r".into(),
+                path: "a".into(),
+                base,
+            };
+            assert_eq!(Frame::control(0, &list).to_control().unwrap(), list);
+        }
+        let commits = Control::Commits {
+            path: "/r".into(),
+            commits: vec![CommitInfo {
+                id: "abc".into(),
+                short: "ab".into(),
+                author: "A".into(),
+                time_ms: 1000,
+                subject: "s".into(),
+                on_branch: true,
+            }],
+            truncated: false,
+            error: None,
+        };
+        assert_eq!(
+            &Frame::control(0, &commits).payload[..],
+            br#"{"type":"commits","path":"/r","commits":[{"id":"abc","short":"ab","author":"A","time_ms":1000,"subject":"s","on_branch":true}],"truncated":false,"error":null}"#
+        );
+        let list = Control::ListCommits { path: "/r".into() };
+        assert_eq!(
+            &Frame::control(0, &list).payload[..],
+            br#"{"type":"list_commits","path":"/r"}"#
+        );
     }
 
     #[test]

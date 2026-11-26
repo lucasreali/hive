@@ -638,8 +638,9 @@ async fn app_frame(
                 },
             }
         }),
-        Ok(Control::ListChanges { path, base }) => {
-            state.projects(move |projects| changes::answer(&projects.list(), path, base).0)
+        Ok(Control::ListChanges { path, base }) => state.list_changes(path, base),
+        Ok(Control::ListCommits { path }) => {
+            state.projects(move |projects| changes::commits(&projects.list(), path))
         }
         Ok(Control::ListScripts { path }) => state.list_scripts(path),
         Ok(Control::ListSessions) => {
@@ -725,7 +726,12 @@ async fn app_frame(
             worktree,
             path,
             base,
-        }) => state.projects(move |projects| file::answer::open(projects, worktree, path, base)),
+        }) => {
+            let snapshots = state.snapshots.clone();
+            state.projects(move |projects| {
+                file::answer::open(projects, &snapshots, worktree, path, &base)
+            })
+        }
         Ok(Control::ReadFile {
             id,
             token,

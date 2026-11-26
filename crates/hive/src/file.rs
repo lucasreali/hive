@@ -16,6 +16,7 @@ use hive_protocol::{
 
 use crate::changes::{self, BINARY_PROBE};
 use crate::paths::canonical;
+use crate::snapshot::Since;
 use crate::{git, mode};
 
 /// Most bytes of each side (on disk, at the base) sent to the app.
@@ -41,6 +42,7 @@ pub mod answer {
     use hive_protocol::{Control, DiffBase, Media, SaveError};
 
     use crate::projects::{self, Projects};
+    use crate::snapshot::Snapshots;
     use crate::{changes, procs, search};
 
     /// `search_files`: `query` in the files of `worktree`.
@@ -64,12 +66,20 @@ pub mod answer {
     /// `open_file`: `path` of `worktree`, on disk and at `base`.
     /// A folder project's file (23.1) has no base: its folder is in no repository.
     /// An image or a PDF on disk (24.2, 24.3) also gets its `media`, with the worktree's token.
-    pub fn open(projects: &Projects, worktree: String, path: String, base: DiffBase) -> Control {
+    /// At an agent's turn (27.2), the base side is read from its snapshot; one that cannot be
+    /// read (no longer whole) falls back to `HEAD`, as the list does.
+    pub fn open(
+        projects: &Projects,
+        snapshots: &Snapshots,
+        worktree: String,
+        path: String,
+        base: &DiffBase,
+    ) -> Control {
         let tree = projects.tree(&worktree);
         let read = match &tree {
             Ok((dir, Some(_))) => super::read_plain(dir, &path),
-            _ => changes::against(&projects.list(), &worktree, base)
-                .and_then(|against| super::read(&against.dir, &path, against.commit.as_deref())),
+            _ => changes::against(&projects.list(), snapshots, &worktree, base)
+                .and_then(|against| super::read_at(&against, &path)),
         };
         let media = tree.ok().and_then(|(dir, _)| super::media(&dir, &path));
         let media = media.map(|(mime, version)| Media {
@@ -235,6 +245,41 @@ pub mod answer {
 /// relative, without `..`, and must not resolve (through symlinks) outside `dir`.
 pub fn read(dir: &Path, path: &str, commit: Option<&str>) -> io::Result<(Side, Side)> {
     Ok((on_disk(dir, relative(path)?)?, at_base(dir, path, commit)?))
+}
+
+/// [`read`] at `against`'s base: an agent's turn from its snapshot (27.2; one that cannot be
+/// read, no longer whole, falls back to `HEAD`, as the list does), else its commit or `HEAD`.
+pub fn read_at(against: &changes::Against, path: &str) -> io::Result<(Side, Side)> {
+    let since = (against.since.as_ref()).map(|since| read_since(&against.dir, path, since));
+    match since {
+        Some(Ok(read)) => Ok(read),
+        Some(Err(_)) => read(&against.dir, path, None),
+        None => read(&against.dir, path, against.commit.as_deref()),
+    }
+}
+
+/// [`read`] with the base side at an agent's turn `since` (27.2): from its snapshot, under the
+/// old path for a rename since then. An object the snapshot no longer has is an error.
+pub fn read_since(dir: &Path, path: &str, since: &Since) -> io::Result<(Side, Side)> {
+    let disk = on_disk(dir, relative(path)?)?;
+    let blob = match parse_ls_tree(&since.ls_tree(path)?) {
+        Some(blob) => Some(blob),
+        None => {
+            let renamed = changes::parse_raw(&since.raw()?)
+                .into_iter()
+                .find(|entry| entry.0 == path.as_bytes() && entry.1 == FileStatus::Renamed);
+            match renamed.and_then(|(_, _, from)| from) {
+                Some(from) => parse_ls_tree(&since.ls_tree(&String::from_utf8_lossy(&from))?),
+                None => None,
+            }
+        }
+    };
+    let base = match blob {
+        None => Side::Missing,
+        Some((_, size)) if size > TEXT_LIMIT => Side::TooLarge,
+        Some((oid, _)) => Side::Bytes(since.blob(&oid)?),
+    };
+    Ok((disk, base))
 }
 
 /// [`read`] in a folder in no repository (a folder project's, 23.1): no base.
@@ -2621,6 +2666,47 @@ mod tests {
         let over = read(root, "big", base).unwrap();
         assert_eq!(over, (Side::TooLarge, Side::Missing));
         assert_eq!(read(root, "big", None).unwrap().1, Side::TooLarge);
+    }
+
+    #[test]
+    fn a_file_is_read_at_an_agents_turn() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = &tmp.path().join("r");
+        std::fs::create_dir(root).unwrap();
+        run(root, &["init", "-q", "-b", "main"]);
+        commit(root, "a");
+        commit(root, "r");
+        std::fs::write(root.join("u"), "untracked").unwrap();
+        let big = "x".repeat(TEXT_LIMIT as usize + 1);
+        std::fs::write(root.join("big"), &big).unwrap();
+        let snapshots = crate::snapshot::Snapshots::new(tmp.path().join("snapshots"));
+        let id = root.display().to_string();
+        snapshots.take(root, &id, "s", 1).unwrap();
+        // The turn: an edit, a rename, a new file.
+        std::fs::write(root.join("a"), "a2").unwrap();
+        std::fs::write(root.join("u"), "u2").unwrap();
+        std::fs::rename(root.join("r"), root.join("s")).unwrap();
+        std::fs::write(root.join("n"), "n").unwrap();
+        let against = || changes::Against {
+            dir: root.clone(),
+            since: Some(snapshots.since(root, &id, "s").unwrap()),
+            ..changes::Against::default()
+        };
+        let at = |path| read_at(&against(), path).unwrap();
+        assert_eq!(at("a"), (bytes("a2"), bytes("a")));
+        assert_eq!(at("u"), (bytes("u2"), bytes("untracked")));
+        assert_eq!(at("s"), (bytes("r"), bytes("r")));
+        assert_eq!(at("n"), (bytes("n"), Side::Missing));
+        assert_eq!(at("big"), (Side::TooLarge, Side::TooLarge));
+        // A path from the app is checked as ever.
+        assert!(read_at(&against(), "../x").is_err());
+        // A snapshot no longer whole: the base side at HEAD.
+        let since = against();
+        let store = std::fs::read_dir(tmp.path().join("snapshots")).unwrap();
+        let objects = store.into_iter().next().unwrap().unwrap().path();
+        std::fs::remove_dir_all(objects.join("store.git/objects")).unwrap();
+        assert_eq!(read_at(&since, "a").unwrap(), (bytes("a2"), bytes("a")));
+        assert_eq!(read_at(&since, "u").unwrap(), (bytes("u2"), Side::Missing));
     }
 
     /// The changed files' paths and states.

@@ -8,10 +8,11 @@ use std::collections::HashMap;
 use std::io;
 use std::path::{Path, PathBuf};
 
-use hive_protocol::{ChangedFile, Control, DiffBase, FileStatus, Project};
+use hive_protocol::{ChangedFile, CommitInfo, Control, DiffBase, FileStatus, Project, TurnBase};
 
 use crate::git::{self, read_limited};
 use crate::projects;
+use crate::snapshot::{Since, Snapshots};
 
 /// Untracked files larger than this are not counted (their lines show as unknown).
 const UNTRACKED_LIMIT: u64 = 8_388_608; // 8 MiB
@@ -53,62 +54,216 @@ pub struct Totals {
     pub removed: u64,
 }
 
-/// What a followed worktree's changes are compared with (9.11).
+/// What a followed worktree's changes are compared with (9.11, 27.2).
 #[derive(Debug, Default, PartialEq, Eq)]
 pub struct Against {
     pub dir: PathBuf,
-    /// The merge-base with `branch`; `None`: `HEAD`.
+    /// The merge-base with `branch`, or the commit picked; `None`: `HEAD` (or `since`).
     pub commit: Option<String>,
+    /// The agent's last turn, when that is the base.
+    pub since: Option<Since>,
+    /// The base used: the one asked, or `head` when `error` says why not.
+    pub base: DiffBase,
     /// The main worktree's branch the worktree can be compared with.
     pub branch: Option<String>,
-    /// Why `branch` was asked but `HEAD` is used.
+    /// Why the base asked is not used but `HEAD` is.
     pub error: Option<String>,
 }
 
 /// The base `asked` for the worktree `path` of `projects`: for `branch`, the merge-base of its
-/// `HEAD` and the main worktree's branch (the one 6.6 counts against), else `HEAD` and why.
-pub fn against(projects: &[Project], path: &str, asked: DiffBase) -> io::Result<Against> {
+/// `HEAD` and the main worktree's branch (the one 6.6 counts against); for a commit, that
+/// commit; for a turn, its snapshot in `snapshots`; else `HEAD` and why.
+pub fn against(
+    projects: &[Project],
+    snapshots: &Snapshots,
+    path: &str,
+    asked: &DiffBase,
+) -> io::Result<Against> {
     let (dir, branch) = projects::followed(projects, path)?;
-    let (commit, error) = match (asked, &branch) {
-        (DiffBase::Head, _) => (None, None),
-        (DiffBase::Branch, None) => (None, Some(NO_BRANCH.to_owned())),
-        (DiffBase::Branch, Some(name)) => {
-            // A full ref name: a branch can never be read as an option.
-            let theirs = format!("refs/heads/{name}");
-            match git::output(&dir, &["merge-base", "HEAD", &theirs], &[0, 1]) {
-                Ok(out) if !out.is_empty() => (Some(lossy(out.trim_ascii())), None),
-                Ok(_) => (None, Some(format!("No commit in common with {name}"))),
-                Err(err) => (None, Some(err.to_string())),
-            }
-        }
-    };
-    Ok(Against {
+    let mut against = Against {
         dir,
-        commit,
         branch,
-        error,
-    })
+        ..Against::default()
+    };
+    let found = match asked {
+        DiffBase::Head => return Ok(against),
+        DiffBase::Branch => merge_base(&against.dir, against.branch.as_deref()).map(Some),
+        DiffBase::Commit { id } => verify(&against.dir, id).map(Some),
+        DiffBase::Turn { session } => match snapshots.since(&against.dir, path, session) {
+            Ok(since) => {
+                against.since = Some(since);
+                Ok(None)
+            }
+            Err(err) => Err(err.to_string()),
+        },
+    };
+    match found {
+        Ok(commit) => (against.commit, against.base) = (commit, asked.clone()),
+        Err(error) => against.error = Some(error),
+    }
+    Ok(against)
+}
+
+/// The merge-base of `HEAD` in `dir` and the main worktree's `branch`, or why there is none.
+fn merge_base(dir: &Path, branch: Option<&str>) -> Result<String, String> {
+    let name = branch.ok_or(NO_BRANCH)?;
+    // A full ref name: a branch can never be read as an option.
+    let theirs = format!("refs/heads/{name}");
+    match git::output(dir, &["merge-base", "HEAD", &theirs], &[0, 1]) {
+        Ok(out) if !out.is_empty() => Ok(lossy(out.trim_ascii())),
+        Ok(_) => Err(format!("No commit in common with {name}")),
+        Err(err) => Err(err.to_string()),
+    }
+}
+
+/// The commit `id` from the app: only a full id (40 or 64 hex digits), checked to be a commit
+/// of the repository at `dir`.
+fn verify(dir: &Path, id: &str) -> Result<String, String> {
+    let hex = matches!(id.len(), 40 | 64) && id.bytes().all(|b| b.is_ascii_hexdigit());
+    if !hex {
+        return Err("Not a commit id".to_owned());
+    }
+    let rev = format!("{id}^{{commit}}");
+    let args = ["rev-parse", "--verify", "--quiet", "--end-of-options", &rev];
+    match git::output(dir, &args, &[0, 1]) {
+        Ok(out) if !out.is_empty() => Ok(lossy(out.trim_ascii())),
+        Ok(_) => Err(GONE.to_owned()),
+        Err(err) => Err(err.to_string()),
+    }
 }
 
 /// Why the main worktree, or a worktree of a detached main worktree, has no branch base.
 const NO_BRANCH: &str = "No branch to compare with: this is the main worktree, or it is detached";
+/// Why a commit picked is not the base (e.g. after a rebase).
+const GONE: &str = "This commit is not in the repository";
 
 /// The `changes` answer for the worktree `path` of `projects` against `asked`, and, when it
-/// was listed against `HEAD`, its [`Totals`].
-pub fn answer(projects: &[Project], path: String, asked: DiffBase) -> (Control, Option<Totals>) {
-    match against(projects, &path, asked) {
-        Ok(against) => {
-            let listed = list(&against.dir, against.commit.as_deref());
+/// was listed against `HEAD`, its [`Totals`]. Its `turns` are the agents' of the worktree with a
+/// snapshot in `snapshots`, named by `titles` (by session).
+pub fn answer(
+    projects: &[Project],
+    snapshots: &Snapshots,
+    path: String,
+    asked: &DiffBase,
+    titles: &HashMap<String, String>,
+) -> (Control, Option<Totals>) {
+    match against(projects, snapshots, &path, asked) {
+        Ok(mut against) => {
+            let listed = match against
+                .since
+                .as_ref()
+                .map(|since| since_turn(&against.dir, since))
+            {
+                Some(Ok(changes)) => Ok(changes),
+                // A blob the user's `git gc` removed: the snapshot is no longer whole.
+                Some(Err(err)) => {
+                    against.since = None;
+                    against.base = DiffBase::Head;
+                    against.error = Some(format!(
+                        "The snapshot of this turn is no longer complete: {err}"
+                    ));
+                    list(&against.dir, None)
+                }
+                None => list(&against.dir, against.commit.as_deref()),
+            };
             let totals = listed.as_ref().ok().map(|c| Totals {
                 files: c.changed,
                 added: c.added,
                 removed: c.removed,
             });
-            let totals = totals.filter(|_| against.commit.is_none());
-            (message(path, Some(against), listed), totals)
+            let totals = totals.filter(|_| against.base == DiffBase::Head);
+            let turns = turns(snapshots, &against.dir, &path, titles);
+            (message(path, Some(against), listed, turns), totals)
         }
-        Err(err) => (message(path, None, Err(err)), None),
+        Err(err) => (message(path, None, Err(err), Vec::new()), None),
     }
+}
+
+/// The agents whose last turn's snapshot is of the worktree at `dir` (id `path`), each named by
+/// its title in `titles`, else by the start of its session id.
+fn turns(
+    snapshots: &Snapshots,
+    dir: &Path,
+    path: &str,
+    titles: &HashMap<String, String>,
+) -> Vec<TurnBase> {
+    let turns = snapshots.turns(dir, path).into_iter();
+    turns
+        .map(|turn| TurnBase {
+            title: titles
+                .get(&turn.session)
+                .cloned()
+                .unwrap_or_else(|| turn.session.chars().take(8).collect()),
+            session: turn.session,
+            started_ms: turn.started_ms,
+            late: turn.late,
+        })
+        .collect()
+}
+
+/// The changes of the worktree at `dir` since the turn `since`: every file that differs from
+/// its snapshot, with its lines from numstat.
+pub fn since_turn(dir: &Path, since: &Since) -> io::Result<Changes> {
+    let (raw, numstat) = since.list()?;
+    let counts = parse_numstat(&numstat);
+    Ok(collect(dir, parse_raw(&raw), &counts, UNTRACKED_BUDGET))
+}
+
+/// The most commits `commits` lists (the human, 2026-11-26).
+pub const COMMITS: usize = 500;
+/// The most characters of a commit's author and subject sent.
+const AUTHOR_LIMIT: usize = 100;
+const SUBJECT_LIMIT: usize = 200;
+
+/// The `commits` answer for the worktree `path` of `projects` (27.2): the last [`COMMITS`] of
+/// its `HEAD`, those of its branch first.
+pub fn commits(projects: &[Project], path: String) -> Control {
+    let listed =
+        projects::followed(projects, &path).and_then(|(dir, branch)| log(&dir, branch, COMMITS));
+    let (commits, truncated, error) = match listed {
+        Ok((commits, truncated)) => (commits, truncated, None),
+        Err(err) => (Vec::new(), false, Some(err.to_string())),
+    };
+    Control::Commits {
+        path,
+        commits,
+        truncated,
+        error,
+    }
+}
+
+/// The last [`COMMITS`] commits of `HEAD` in `dir`, those made since it left the main
+/// worktree's `branch` first, and whether more were left out.
+fn log(dir: &Path, branch: Option<String>, most: usize) -> io::Result<(Vec<CommitInfo>, bool)> {
+    let head = git::output(dir, &["rev-parse", "--verify", "--quiet", "HEAD"], &[0, 1])?;
+    if head.is_empty() {
+        return Ok((Vec::new(), false));
+    }
+    let fetched = format!("--max-count={}", most + 1);
+    let format = "--format=%H%x00%h%x00%an%x00%ct%x00%s";
+    let out = git(dir, &["log", "-z", format, &fetched, "HEAD", "--"])?;
+    let mine = match merge_base(dir, branch.as_deref()) {
+        Ok(base) => git(dir, &["rev-list", &fetched, &format!("{base}..HEAD"), "--"])?,
+        Err(_) => Vec::new(),
+    };
+    let mine = String::from_utf8_lossy(&mine);
+    let mine: Vec<&str> = mine.lines().collect();
+    let fields: Vec<String> = out.split(|&b| b == 0).map(lossy).collect();
+    let mut commits: Vec<CommitInfo> = fields
+        .chunks_exact(5)
+        .map(|c| CommitInfo {
+            on_branch: mine.contains(&c[0].as_str()),
+            id: c[0].clone(),
+            short: c[1].clone(),
+            author: c[2].chars().take(AUTHOR_LIMIT).collect(),
+            time_ms: c[3].parse::<u64>().unwrap_or(0).saturating_mul(1000),
+            subject: c[4].chars().take(SUBJECT_LIMIT).collect(),
+        })
+        .collect();
+    commits.sort_by_key(|c| !c.on_branch);
+    let truncated = commits.len() > most;
+    commits.truncate(most);
+    Ok((commits, truncated))
 }
 
 /// The changes of the worktree at `dir` against `commit`, else `HEAD` (the empty tree before
@@ -191,8 +346,14 @@ pub fn parse_raw(out: &[u8]) -> Vec<Entry> {
     entries
 }
 
-/// The `changes` answer for `path`, listed against `against` when the worktree was found.
-pub fn message(path: String, against: Option<Against>, listed: io::Result<Changes>) -> Control {
+/// The `changes` answer for `path`, listed against `against` when the worktree was found, with
+/// the `turns` it can be compared with.
+pub fn message(
+    path: String,
+    against: Option<Against>,
+    listed: io::Result<Changes>,
+    turns: Vec<TurnBase>,
+) -> Control {
     let (changes, error) = match listed {
         Ok(changes) => {
             let error = (changes.truncated > 0)
@@ -204,16 +365,14 @@ pub fn message(path: String, against: Option<Against>, listed: io::Result<Change
     let against = against.unwrap_or_default();
     Control::Changes {
         path,
-        base: match against.commit {
-            Some(_) => DiffBase::Branch,
-            None => DiffBase::Head,
-        },
+        base: against.base,
         branch: against.branch,
         base_error: against.error,
         files: changes.files,
         added: changes.added,
         removed: changes.removed,
         error,
+        turns,
     }
 }
 
@@ -699,7 +858,13 @@ garbage\0\
             removed: files.iter().filter_map(|f| f.removed).sum(),
             files,
             error: None,
+            turns: vec![],
         }
+    }
+
+    /// Snapshots kept in `dir`, never used by the test.
+    fn no_snapshots(dir: &Path) -> Snapshots {
+        Snapshots::new(dir.join("snapshots"))
     }
 
     #[test]
@@ -707,6 +872,8 @@ garbage\0\
         let tmp = tempfile::tempdir().unwrap();
         let top = crate::paths::canonical(tmp.path()).unwrap();
         let (root, w, lone) = (top.join("r"), top.join("w"), top.join("lone"));
+        let snapshots = &no_snapshots(&top);
+        let titles = &HashMap::new();
         std::fs::create_dir(&root).unwrap();
         run(&root, &["init", "-q", "-b", "main"]);
         commit(&root, "a");
@@ -738,10 +905,12 @@ garbage\0\
         let path = w.display().to_string();
 
         assert_eq!(
-            against(&projects, &path, DiffBase::Branch).unwrap(),
+            against(&projects, snapshots, &path, &DiffBase::Branch).unwrap(),
             Against {
                 dir: w.clone(),
                 commit: Some(fork.clone()),
+                since: None,
+                base: DiffBase::Branch,
                 branch: Some("main".into()),
                 error: None,
             }
@@ -750,27 +919,29 @@ garbage\0\
         renamed.old_path = Some("r".into());
         let modified = file("a", FileStatus::Modified, (Some(2), Some(1)));
         let untracked = file("u", FileStatus::Untracked, (Some(1), Some(0)));
+        let branch_files = vec![
+            modified.clone(),
+            file("b", FileStatus::Added, (Some(1), Some(0))),
+            renamed,
+            untracked.clone(),
+        ];
         // The status counts only against HEAD: not the branch's commits.
         assert_eq!(
-            answer(&projects, path.clone(), DiffBase::Branch),
+            answer(
+                &projects,
+                snapshots,
+                path.clone(),
+                &DiffBase::Branch,
+                titles
+            ),
             (
-                changes(
-                    &path,
-                    DiffBase::Branch,
-                    None,
-                    vec![
-                        modified.clone(),
-                        file("b", FileStatus::Added, (Some(1), Some(0))),
-                        renamed,
-                        untracked.clone(),
-                    ]
-                ),
+                changes(&path, DiffBase::Branch, None, branch_files.clone()),
                 None
             )
         );
         // Against HEAD, only what is not committed.
         assert_eq!(
-            answer(&projects, path.clone(), DiffBase::Head),
+            answer(&projects, snapshots, path.clone(), &DiffBase::Head, titles),
             (
                 changes(&path, DiffBase::Head, None, vec![modified, untracked]),
                 Some(Totals {
@@ -780,37 +951,84 @@ garbage\0\
                 })
             )
         );
+        // A commit picked: listed as the branch base is, from that commit.
+        let picked = DiffBase::Commit { id: fork.clone() };
+        assert_eq!(
+            answer(&projects, snapshots, path.clone(), &picked, titles),
+            (changes(&path, picked.clone(), None, branch_files), None)
+        );
+        // An id that is not a full one, or no commit of the repository: HEAD, and why.
+        let short = DiffBase::Commit {
+            id: fork[..7].into(),
+        };
+        let gone = DiffBase::Commit { id: "0".repeat(40) };
+        let tree = git(&w, &["rev-parse", "HEAD^{tree}"]).unwrap();
+        let tree = DiffBase::Commit {
+            id: lossy(tree.trim_ascii()),
+        };
+        let option = DiffBase::Commit {
+            id: format!("--{}", "0".repeat(38)),
+        };
+        for (base, why) in [
+            (short, "Not a commit id"),
+            (gone, GONE),
+            (tree, GONE),
+            (option, "Not a commit id"),
+        ] {
+            let used = against(&projects, snapshots, &path, &base).unwrap();
+            assert_eq!(
+                (used.commit, used.base, used.error.as_deref()),
+                (None, DiffBase::Head, Some(why))
+            );
+        }
+        // A 64-digit id in a SHA-1 repository is not one of its commits either.
+        let long = DiffBase::Commit { id: "a".repeat(64) };
+        let used = against(&projects, snapshots, &path, &long).unwrap();
+        assert_eq!(used.error.as_deref(), Some(GONE));
 
         // A detached HEAD still has a merge-base with main.
         run(&w, &["switch", "-q", "--detach"]);
-        let detached = against(&projects, &path, DiffBase::Branch).unwrap();
+        let detached = against(&projects, snapshots, &path, &DiffBase::Branch).unwrap();
         assert_eq!(detached.commit, Some(fork));
 
         // No commit in common: HEAD, and why.
         let lone = lone.display().to_string();
         let why = "No commit in common with main";
         assert_eq!(
-            answer(&projects, lone.clone(), DiffBase::Branch).0,
+            answer(
+                &projects,
+                snapshots,
+                lone.clone(),
+                &DiffBase::Branch,
+                titles
+            )
+            .0,
             changes(&lone, DiffBase::Head, Some(why), vec![])
         );
 
         // The main worktree has no branch to compare with.
         let main = root.display().to_string();
-        let against_main = against(&projects, &main, DiffBase::Branch).unwrap();
+        let against_main = against(&projects, snapshots, &main, &DiffBase::Branch).unwrap();
         let expected = (None, None, Some(NO_BRANCH.to_owned()));
         let got = (against_main.commit, against_main.branch, against_main.error);
         assert_eq!(got, expected);
 
         // A branch git cannot read: HEAD, and git's error.
         projects[0].worktrees[0].branch = Some("gone".into());
-        let gone = against(&projects, &path, DiffBase::Branch).unwrap();
+        let gone = against(&projects, snapshots, &path, &DiffBase::Branch).unwrap();
         assert_eq!(gone.commit, None);
         let error = gone.error.unwrap_or_default();
         assert!(error.starts_with("git merge-base"), "{error}");
 
         // Only a followed worktree.
         assert_eq!(
-            answer(&projects, "/nope".into(), DiffBase::Branch),
+            answer(
+                &projects,
+                snapshots,
+                "/nope".into(),
+                &DiffBase::Branch,
+                titles
+            ),
             (
                 Control::Changes {
                     path: "/nope".into(),
@@ -821,9 +1039,239 @@ garbage\0\
                     added: 0,
                     removed: 0,
                     error: Some("/nope is not a worktree of a followed project".into()),
+                    turns: vec![],
                 },
                 None
             )
+        );
+    }
+
+    #[test]
+    fn a_turn_base_lists_what_changed_since_the_agents_last_turn() {
+        let tmp = tempfile::tempdir().unwrap();
+        let top = crate::paths::canonical(tmp.path()).unwrap();
+        let root = top.join("r");
+        let snapshots = no_snapshots(&top);
+        std::fs::create_dir(&root).unwrap();
+        run(&root, &["init", "-q", "-b", "main"]);
+        commit(&root, "a");
+        commit(&root, "r");
+        std::fs::write(root.join("old-untracked"), "o\n").unwrap();
+        std::fs::write(root.join("gone"), "g\n").unwrap();
+        // Before the turn: what the user or another agent did is not the turn's.
+        std::fs::write(root.join("a"), "before\n").unwrap();
+        let projects = [project(vec![worktree(&root, None, true)])];
+        let path = root.display().to_string();
+        let turn = snapshots.take(&root, &path, "s1", 7).unwrap();
+        snapshots.started("session-two-long");
+        snapshots.edited("session-two-long");
+        snapshots.take(&root, &path, "session-two-long", 9).unwrap();
+        // The turn: an edit, a delete, a rename, an untracked file changed and a new one.
+        std::fs::write(root.join("a"), "before\nafter\n").unwrap();
+        std::fs::remove_file(root.join("gone")).unwrap();
+        std::fs::rename(root.join("r"), root.join("s")).unwrap();
+        std::fs::write(root.join("old-untracked"), "o\nmore\n").unwrap();
+        std::fs::write(root.join("new"), "n\n").unwrap();
+        let base = DiffBase::Turn {
+            session: "s1".into(),
+        };
+        let titles = HashMap::from([("s1".to_owned(), "claude-3".to_owned())]);
+        let (listed, totals) = answer(&projects, &snapshots, path.clone(), &base, &titles);
+        let mut renamed = file("s", FileStatus::Renamed, (Some(0), Some(0)));
+        renamed.old_path = Some("r".into());
+        let files = vec![
+            file("a", FileStatus::Modified, (Some(1), Some(0))),
+            file("gone", FileStatus::Deleted, (Some(0), Some(1))),
+            file("new", FileStatus::Added, (Some(1), Some(0))),
+            file("old-untracked", FileStatus::Modified, (Some(1), Some(0))),
+            renamed,
+        ];
+        let turns = vec![
+            TurnBase {
+                session: "session-two-long".into(),
+                title: "session-".into(),
+                started_ms: 9,
+                late: true,
+            },
+            TurnBase {
+                session: "s1".into(),
+                title: "claude-3".into(),
+                started_ms: 7,
+                late: false,
+            },
+        ];
+        let mut expected = changes(&path, base.clone(), None, files);
+        if let Control::Changes {
+            branch, turns: t, ..
+        } = &mut expected
+        {
+            (*branch, *t) = (None, turns);
+        }
+        assert_eq!((listed, totals), (expected, None));
+        // The same as git's diff of the turn's tree and a snapshot taken now.
+        let now = snapshots.take(&root, &path, "s3", 10).unwrap();
+        let since = snapshots.since(&root, &path, "s3").unwrap();
+        let tree = |args: &[&str]| -> Vec<u8> {
+            let mut command = crate::git::command(&root).unwrap();
+            let objects = top.join("snapshots");
+            let store = std::fs::read_dir(&objects)
+                .unwrap()
+                .next()
+                .unwrap()
+                .unwrap();
+            command.env(
+                "GIT_OBJECT_DIRECTORY",
+                store.path().join("store.git/objects"),
+            );
+            command.args(args);
+            command.output().unwrap().stdout
+        };
+        let diff = tree(&[
+            "diff-tree",
+            "-r",
+            "-z",
+            "--find-renames",
+            &turn.tree,
+            &now.tree,
+        ]);
+        let mut entries = parse_raw(&diff);
+        entries.sort_by(|a, b| a.0.cmp(&b.0));
+        let listed = parse_raw(&since.raw().unwrap());
+        assert!(listed.is_empty(), "nothing changed since s3");
+        let (raw, _) = snapshots.since(&root, &path, "s1").unwrap().list().unwrap();
+        let mut since_s1 = parse_raw(&raw);
+        since_s1.sort_by(|a, b| a.0.cmp(&b.0));
+        assert_eq!(since_s1, entries);
+
+        // No snapshot of that session: HEAD, and why.
+        let none = DiffBase::Turn {
+            session: "other".into(),
+        };
+        let used = against(&projects, &snapshots, &path, &none).unwrap();
+        assert_eq!(
+            (used.base, used.error.as_deref()),
+            (
+                DiffBase::Head,
+                Some("No snapshot of this agent's last turn in this worktree")
+            )
+        );
+        // A snapshot no longer whole (its objects pruned by hand): HEAD, and why.
+        let store = std::fs::read_dir(top.join("snapshots"))
+            .unwrap()
+            .next()
+            .unwrap();
+        let objects = store.unwrap().path().join("store.git/objects");
+        std::fs::remove_dir_all(&objects).unwrap();
+        std::fs::create_dir_all(objects.join("info")).unwrap();
+        let (listed, totals) = answer(&projects, &snapshots, path.clone(), &base, &titles);
+        let Control::Changes {
+            base: used,
+            base_error,
+            ..
+        } = listed
+        else {
+            unreachable!()
+        };
+        assert_eq!(used, DiffBase::Head);
+        let error = base_error.unwrap_or_default();
+        assert!(
+            error.starts_with("The snapshot of this turn is no longer complete: "),
+            "{error}"
+        );
+        assert!(totals.is_some());
+    }
+
+    #[test]
+    fn the_commits_are_those_of_head_the_branchs_first() {
+        let tmp = tempfile::tempdir().unwrap();
+        let top = crate::paths::canonical(tmp.path()).unwrap();
+        let (root, w) = (top.join("r"), top.join("w"));
+        std::fs::create_dir(&root).unwrap();
+        run(&root, &["init", "-q", "-b", "main"]);
+        let mut projects = [project(vec![
+            worktree(&root, Some("main"), true),
+            worktree(&w, Some("w"), false),
+        ])];
+        let main = root.display().to_string();
+        // Before the first commit: none.
+        assert_eq!(
+            commits(&projects, main.clone()),
+            Control::Commits {
+                path: main.clone(),
+                commits: vec![],
+                truncated: false,
+                error: None,
+            }
+        );
+        commit(&root, "a");
+        let long = "s".repeat(300);
+        run(&root, &["commit", "-q", "--allow-empty", "-m", &long]);
+        run(
+            &root,
+            &["worktree", "add", "-q", "-b", "w", w.to_str().unwrap()],
+        );
+        commit(&w, "b");
+        let path = w.display().to_string();
+        let Control::Commits {
+            commits: listed,
+            truncated: false,
+            error: None,
+            ..
+        } = commits(&projects, path.clone())
+        else {
+            unreachable!()
+        };
+        let got: Vec<_> = listed
+            .iter()
+            .map(|c| {
+                (
+                    c.subject.len(),
+                    c.on_branch,
+                    !c.author.is_empty(),
+                    c.time_ms,
+                )
+            })
+            .collect();
+        assert_eq!(
+            got,
+            [
+                (1, true, true, 1_700_000_000_000),
+                (200, false, true, 1_700_000_000_000),
+                (1, false, true, 1_700_000_000_000)
+            ]
+        );
+        assert_eq!(listed[0].id, rev(&w));
+        assert_eq!(listed[0].short, &listed[0].id[..listed[0].short.len()]);
+        // The main worktree has no branch: none is its own.
+        let Control::Commits {
+            commits: listed, ..
+        } = commits(&projects, main.clone())
+        else {
+            unreachable!()
+        };
+        assert!(listed.iter().all(|c| !c.on_branch) && listed.len() == 2);
+        // Over the cap: cut, and said; the branch's first.
+        let (listed, truncated) = log(&w, Some("main".into()), 1).unwrap();
+        assert_eq!((listed.len(), truncated), (1, true));
+        assert!(listed[0].on_branch);
+        let (listed, truncated) = log(&w, Some("main".into()), 3).unwrap();
+        assert_eq!((listed.len(), truncated), (3, false));
+        // A main branch git cannot read: no commit is the branch's.
+        projects[0].worktrees[0].branch = Some("gone".into());
+        let Control::Commits {
+            commits: listed, ..
+        } = commits(&projects, path)
+        else {
+            unreachable!()
+        };
+        assert!(listed.iter().all(|c| !c.on_branch));
+        // Only a followed worktree.
+        let Control::Commits { error, .. } = commits(&projects, "/nope".into()) else {
+            unreachable!()
+        };
+        assert_eq!(
+            error.as_deref(),
+            Some("/nope is not a worktree of a followed project")
         );
     }
 
@@ -839,11 +1287,19 @@ garbage\0\
         let against = Against {
             dir: PathBuf::from("/w"),
             commit: Some("c".into()),
+            since: None,
+            base: DiffBase::Branch,
             branch: Some("main".into()),
             error: None,
         };
+        let turns = vec![TurnBase {
+            session: "s".into(),
+            title: "t".into(),
+            started_ms: 1,
+            late: true,
+        }];
         assert_eq!(
-            message("/w".into(), Some(against), Ok(changes)),
+            message("/w".into(), Some(against), Ok(changes), turns.clone()),
             Control::Changes {
                 path: "/w".into(),
                 base: DiffBase::Branch,
@@ -853,6 +1309,7 @@ garbage\0\
                 added: 1,
                 removed: 0,
                 error: None,
+                turns,
             }
         );
         let cut = Changes {
@@ -865,7 +1322,7 @@ garbage\0\
             ..Against::default()
         };
         assert_eq!(
-            message("/w".into(), Some(head), Ok(cut)),
+            message("/w".into(), Some(head), Ok(cut), vec![]),
             Control::Changes {
                 path: "/w".into(),
                 base: DiffBase::Head,
@@ -875,10 +1332,11 @@ garbage\0\
                 added: 5,
                 removed: 0,
                 error: Some("too many changes: 7 files not shown".into()),
+                turns: vec![],
             }
         );
         assert_eq!(
-            message("/w".into(), None, Err(io::Error::other("nope"))),
+            message("/w".into(), None, Err(io::Error::other("nope")), vec![]),
             Control::Changes {
                 path: "/w".into(),
                 base: DiffBase::Head,
@@ -888,6 +1346,7 @@ garbage\0\
                 added: 0,
                 removed: 0,
                 error: Some("nope".into()),
+                turns: vec![],
             }
         );
     }

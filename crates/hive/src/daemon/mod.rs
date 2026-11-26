@@ -145,7 +145,12 @@ pub async fn run(paths: &Paths) -> io::Result<()> {
         restore,
     )
     .with_power(power)
-    .with_usage(usage::Usage::load(paths.usage()));
+    .with_usage(usage::Usage::load(paths.usage()))
+    .with_snapshots(crate::snapshot::Snapshots::new(paths.snapshots()));
+    // Snapshots past their age, or of a worktree or repository that is gone (27.2), go now, in
+    // the background.
+    let snapshots = state.snapshots.clone();
+    std::thread::spawn(move || snapshots.sweep(crate::hook::now_ms()));
     #[cfg(unix)]
     let places = crate::uninstall::Places::from_env(paths);
     #[cfg(windows)]
@@ -419,6 +424,8 @@ struct State {
     uninstalling: std::sync::Mutex<Option<uninstall::Choice>>,
     /// Woken to end the service (an `uninstall`).
     ending: tokio::sync::Notify,
+    /// The worktrees' snapshots at each agent turn (27.2).
+    snapshots: Arc<crate::snapshot::Snapshots>,
 }
 
 /// The connected app's link (26.15): what its `hello` asked for.
@@ -451,6 +458,8 @@ impl State {
         offers: crate::offers::Offers,
         restore: Restore,
     ) -> Self {
+        // Hive's folder in production (`with_snapshots`), the test's folder in tests.
+        let bin_dir_snapshots = bin_dir.join("snapshots");
         Self {
             app: Mutex::new(None),
             link: Default::default(),
@@ -489,6 +498,7 @@ impl State {
             places: None,
             uninstalling: Default::default(),
             ending: Default::default(),
+            snapshots: Arc::new(crate::snapshot::Snapshots::new(bin_dir_snapshots)),
         }
     }
 
@@ -510,6 +520,12 @@ impl State {
         (self.places.as_ref()).map_or_else(Vec::new, |places| {
             uninstall::remove(&plan, &places.paths, &uninstall::System)
         })
+    }
+
+    /// Keeps the turn snapshots in `snapshots` (27.2).
+    fn with_snapshots(mut self, snapshots: crate::snapshot::Snapshots) -> Self {
+        self.snapshots = Arc::new(snapshots);
+        self
     }
 
     /// Holds `power`'s assertion while agents work (17.17); none without it.
@@ -1139,6 +1155,41 @@ impl State {
         });
     }
 
+    /// Lists the watched worktree's files and changes again when it is `worktree` (any one when
+    /// `None`), e.g. once a turn's snapshot is taken (27.2).
+    pub(super) async fn rewatch(&self, worktree: Option<&str>) {
+        if let Some(watching) = self.watching.lock().await.as_ref()
+            && worktree.is_none_or(|w| w == watching.path)
+        {
+            watching.open.send_modify(|_| {});
+        }
+    }
+
+    /// Each agent's title by session, for the turns its worktree's changes can be compared with
+    /// (27.2).
+    async fn titles(&self) -> HashMap<String, String> {
+        let agents = self.agents.lock().await;
+        let titled = agents
+            .iter()
+            .filter_map(|(id, agent)| Some((id, agent.title.as_ref()?)));
+        titled
+            .map(|(id, title)| (id.clone(), title.clone()))
+            .collect()
+    }
+
+    /// Answers `list_changes` off the frame loop.
+    fn list_changes(self: &Arc<Self>, path: String, base: DiffBase) {
+        let state = self.clone();
+        tokio::spawn(async move {
+            let titles = state.titles().await;
+            let reply = tokio::task::block_in_place(|| {
+                let projects = state.projects.list();
+                changes::answer(&projects, &state.snapshots, path, &base, &titles).0
+            });
+            state.to_app(0, &reply).await;
+        });
+    }
+
     /// The scripts of the worktree `path` (23.4): its project's run scripts from the settings,
     /// then its repository's. Refused, as `watch_worktree` is, for a path that is no worktree
     /// of a followed project.
@@ -1225,7 +1276,7 @@ impl State {
     async fn worktree_changed(
         &self,
         path: &str,
-        base: Option<DiffBase>,
+        base: Option<&DiffBase>,
         listing: Option<&Listing>,
     ) {
         if let Some(listing) = listing {
@@ -1238,11 +1289,14 @@ impl State {
             self.to_app(0, &files).await;
         }
         let Some(base) = base else { return };
+        let titles = self.titles().await;
         // One listing of the projects gives both the changes' base and the status, and one
         // `git status` both the changes and the status's count (9.14).
         let (changes, statuses) = tokio::task::block_in_place(|| {
             let projects = self.projects.list();
-            let (changes, totals) = changes::answer(&projects, path.to_owned(), base);
+            let snapshots = &self.snapshots;
+            let (changes, totals) =
+                changes::answer(&projects, snapshots, path.to_owned(), base, &titles);
             (
                 changes,
                 self.health_changed(&projects, Some((path, totals))),
@@ -1302,7 +1356,7 @@ async fn watch_files(
                 // app reads its open file again.
                 let changed = last.as_ref() != Some(&listing) || base.is_none();
                 state
-                    .worktree_changed(&path, base, changed.then_some(&listing))
+                    .worktree_changed(&path, base.as_ref(), changed.then_some(&listing))
                     .await;
                 last = Some(listing);
             }

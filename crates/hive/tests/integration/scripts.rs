@@ -310,7 +310,7 @@ async fn a_worktrees_scripts_come_from_the_settings_then_its_repository_and_foll
         0,
         Control::WatchWorktree {
             path: root.clone(),
-            base,
+            base: base.clone(),
         },
     )
     .await;

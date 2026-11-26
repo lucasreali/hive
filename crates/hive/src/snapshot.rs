@@ -323,30 +323,29 @@ impl Since {
     /// What changed in the worktree since the turn, through the worktree's snapshot index
     /// refreshed now: `git diff-index --cached --raw` and `--numstat` output, in that order.
     pub fn list(&self) -> io::Result<(Vec<u8>, Vec<u8>)> {
+        self.diff(true)
+    }
+
+    /// [`Since::list`]'s `--raw` output only (where a file renamed since the turn came from).
+    pub fn raw(&self) -> io::Result<Vec<u8>> {
+        self.diff(false).map(|(raw, _)| raw)
+    }
+
+    /// Refreshes the worktree's snapshot index, then `git diff-index --cached` against the
+    /// turn's tree: `--raw`, and `--numstat` when asked (else empty).
+    fn diff(&self, numstat: bool) -> io::Result<(Vec<u8>, Vec<u8>)> {
         let _held = lock(&self.lock);
         let index = self.store.index(&self.turn.worktree);
         self.store.refresh(&self.worktree, &self.repo, &index)?;
-        let tree = self.turn.tree.as_str();
-        let raw = [
-            "diff-index",
-            "--cached",
-            "-z",
-            "--raw",
-            "--find-renames",
-            tree,
-        ];
-        let raw = self.store.work(&self.worktree, &index, &args(&raw))?;
-        let numstat = [
-            "diff-index",
-            "--cached",
-            "-z",
-            "--numstat",
-            "--find-renames",
-            "--no-ext-diff",
-            "--no-textconv",
-            tree,
-        ];
-        let numstat = self.store.work(&self.worktree, &index, &args(&numstat))?;
+        let run = |options: &[&str]| {
+            let mut diff = vec!["diff-index", "--cached", "-z", "--find-renames"];
+            diff.extend_from_slice(options);
+            diff.push(&self.turn.tree);
+            self.store.work(&self.worktree, &index, &args(&diff))
+        };
+        let raw = run(&["--raw"])?;
+        let counts = ["--numstat", "--no-ext-diff", "--no-textconv"];
+        let numstat = if numstat { run(&counts)? } else { Vec::new() };
         Ok((raw, numstat))
     }
 
