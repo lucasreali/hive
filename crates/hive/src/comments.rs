@@ -423,7 +423,7 @@ fn snapshot(kept: &mut Kept, file: &str, now: &Lines) {
 /// Who writes comments here: the service's user (`USER`, `USERNAME` on Windows), "you"
 /// without one. Stage 28 shares comments between people.
 pub fn author() -> String {
-    let user = std::env::var("USER").or_else(|_| std::env::var("USERNAME"));
+    let user = std::env::var("USER").or(std::env::var("USERNAME"));
     author_from(user.ok())
 }
 

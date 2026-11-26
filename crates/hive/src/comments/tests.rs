@@ -455,7 +455,7 @@ fn the_author_is_the_user_without_control_characters() {
     assert_eq!(author_from(Some("\n".into())), "you");
     assert_eq!(author_from(None), "you");
     assert_eq!(author_from(Some("z".repeat(100))).len(), AUTHOR_CHARS);
-    let user = std::env::var("USER").or_else(|_| std::env::var("USERNAME"));
+    let user = std::env::var("USER").or(std::env::var("USERNAME"));
     assert_eq!(author(), author_from(user.ok()));
 }
 
