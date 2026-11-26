@@ -1353,3 +1353,63 @@ fn a_file_too_large_at_its_commit_is_matched_on_the_line_alone() {
         (line, Some("big".into()))
     );
 }
+
+/// The caps the human approved (Q6, 2026-11-26) and the commit window.
+#[test]
+fn the_caps_are_the_approved_ones() {
+    assert_eq!(FILE_BYTES, 2_097_152);
+    assert_eq!(FILE_LINES, 50_000);
+    assert_eq!(MAX_RECORDS, 20_000);
+    assert_eq!(MAX_AGE_MS, 7_776_000_000);
+    assert_eq!(REPO_BYTES, 8_388_608);
+    assert_eq!(TOTAL_BYTES, 67_108_864);
+    assert_eq!(COMMIT_SLACK_MS, 300_000);
+}
+
+#[test]
+fn a_hook_edit_path_may_be_as_long_as_the_limit() {
+    let at = format!("/{}", "a".repeat(PATH_LIMIT - 1));
+    let over = format!("/{}", "a".repeat(PATH_LIMIT));
+    let edit = |file: &str| json!({"file": file, "kind": "edit", "added": []});
+    assert!(claimed(&edit(&at)).is_some());
+    assert!(claimed(&edit(&over)).is_none());
+}
+
+#[test]
+fn a_file_rewritten_to_the_same_size_is_seen_by_its_time() {
+    let repo = Repo_::new();
+    let store = Provenance::default();
+    let file = repo.root.join("a.txt");
+    repo.write("a.txt", &[LONG_A, LONG_B]);
+    store.saw(
+        &repo.projects,
+        &created("s1", &file, &format!("{LONG_A}\n{LONG_B}\n")),
+        T0,
+    );
+    // Same length, other text, a later time.
+    let other = LONG_B.replace("beta", "BETA");
+    repo.write("a.txt", &[LONG_A, &other]);
+    let later = std::time::SystemTime::now() + Duration::from_secs(5);
+    std::fs::File::options()
+        .write(true)
+        .open(&file)
+        .unwrap()
+        .set_modified(later)
+        .unwrap();
+    assert_eq!(LONG_B.len(), other.len());
+    let mut stop = created("s1", &file, "");
+    stop.kind = EventKind::TurnFinished;
+    stop.cwd = Some(repo.worktree());
+    store.saw(&repo.projects, &stop, T0 + 2000);
+    assert_eq!(origins(&store, &repo, "a.txt"), [E(0), Unknown]);
+    // Neither changed: not read again (a change of text alone is not seen).
+    repo.write("a.txt", &[LONG_A, LONG_B]);
+    std::fs::File::options()
+        .write(true)
+        .open(&file)
+        .unwrap()
+        .set_modified(later)
+        .unwrap();
+    store.saw(&repo.projects, &stop, T0 + 4000);
+    assert_eq!(origins(&store, &repo, "a.txt"), [E(0), Unknown]);
+}
