@@ -398,11 +398,14 @@ fn a_full_store_refuses_a_change_but_still_lists() {
     fx.add("a.rs", 2, 2, "fits").unwrap();
     let err = fx.add("a.rs", 3, 3, &"y".repeat(1000)).unwrap_err();
     assert_eq!(err.to_string(), "comments.json would be over 1500 bytes");
-    // Moves that cannot be saved are still answered.
+    // Moves that cannot be saved (here the save's temporary file is taken) are still answered.
+    let saved = std::fs::read_to_string(fx.store()).unwrap();
+    std::fs::create_dir_all(fx.tmp.path().join("hive/comments.tmp/x")).unwrap();
     let mut lines = numbered(10);
-    lines.splice(0..0, (0..40).map(|i| format!("let more_{i} = {i};")));
+    lines.splice(0..0, (0..2).map(|i| format!("let more_{i} = {i};")));
     fx.files.set("a.rs", &text(&lines));
-    assert_eq!(fx.places(), [(42, 42, false)]);
+    assert_eq!(fx.places(), [(4, 4, false)]);
+    assert_eq!(std::fs::read_to_string(fx.store()).unwrap(), saved);
 }
 
 #[test]

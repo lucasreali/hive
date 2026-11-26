@@ -89,6 +89,14 @@ async fn comments_follow_their_code_are_kept_and_go_with_the_worktree() {
         resolved: true,
     };
     assert!(comments(ask(&mut conn, resolve).await, &wt)[0].resolved);
+    // A second one, deleted.
+    let second = comments(ask(&mut conn, add(&wt, "main.rs", 1, 1, "x")).await, &wt);
+    assert_eq!(second.len(), 2);
+    let delete = Control::DeleteComment {
+        path: wt.clone(),
+        id: 2,
+    };
+    assert_eq!(comments(ask(&mut conn, delete).await, &wt).len(), 1);
     let file = repo.env.path("data/hive/comments.json");
     assert!(std::fs::read_to_string(&file).unwrap().contains(&wt));
     drop(conn);
