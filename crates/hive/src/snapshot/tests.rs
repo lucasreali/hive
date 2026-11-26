@@ -631,6 +631,12 @@ fn a_record_that_cannot_be_opened_resets_the_store() {
         std::fs::remove_file(store.record()).unwrap();
         std::os::unix::fs::symlink(store.record(), store.record()).unwrap();
         assert_eq!(take(&snapshots, &root, "s", 4).n, 1);
+        // The old refs went with the old store.
+        let refs = store.git(&args(&["for-each-ref", "--format=%(refname)"]), &[]);
+        assert_eq!(
+            String::from_utf8(refs.unwrap()).unwrap(),
+            "refs/turns/s/1\n"
+        );
     }
 }
 
