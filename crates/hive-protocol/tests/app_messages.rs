@@ -71,6 +71,10 @@ sort! {
         | View
         | ListChanges
         | MarkSeen
+        | ListComments
+        | AddComment
+        | ResolveComment
+        | DeleteComment
         | ListScripts
         | ListSessions
         | LocateSession
@@ -156,6 +160,7 @@ sort! {
         | WorktreeStatus
         | Files
         | Changes
+        | Comments
         | Scripts
         | Sessions
         | RestoreSessions
@@ -513,6 +518,23 @@ fn samples() -> Vec<Control> {
             added: 1,
             removed: 0,
             error: None,
+        },
+        Comments {
+            path: s("/r"),
+            comments: vec![ReviewComment {
+                id: 1,
+                file: s("src/a.rs"),
+                from: 2,
+                to: 3,
+                body: s("Why this?"),
+                code: vec![s("let a = 1;"), s("let b = 2;")],
+                before: vec![s("fn f() {")],
+                after: vec![s("}")],
+                author: s("me"),
+                ms: 1_700_000_000_000,
+                resolved: false,
+                outdated: false,
+            }],
         },
         Scripts {
             path: s("/r"),

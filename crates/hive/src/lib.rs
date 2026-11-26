@@ -2,11 +2,13 @@
 
 pub mod actions;
 pub mod adapter;
+pub mod anchor;
 pub mod bridge;
 pub mod browser_cleanup;
 pub mod changes;
 pub mod checkout;
 pub mod cli;
+pub mod comments;
 pub mod daemon;
 pub mod dirs;
 #[cfg(unix)]

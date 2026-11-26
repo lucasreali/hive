@@ -1261,6 +1261,32 @@ async fn project_requests_go_to_the_service_and_answers_to_the_ui() {
         seen: false,
     };
     assert_eq!(service.control().await, (0, mark));
+    hive.list_comments("/r".into()).unwrap();
+    let comments = Control::ListComments { path: "/r".into() };
+    assert_eq!(service.control().await, (0, comments));
+    hive.add_comment("/r".into(), "a".into(), (2, 3), "why?".into())
+        .unwrap();
+    let add = Control::AddComment {
+        path: "/r".into(),
+        file: "a".into(),
+        from: 2,
+        to: 3,
+        body: "why?".into(),
+    };
+    assert_eq!(service.control().await, (0, add));
+    hive.resolve_comment("/r".into(), 4, true).unwrap();
+    let resolve = Control::ResolveComment {
+        path: "/r".into(),
+        id: 4,
+        resolved: true,
+    };
+    assert_eq!(service.control().await, (0, resolve));
+    hive.delete_comment("/r".into(), 4).unwrap();
+    let delete = Control::DeleteComment {
+        path: "/r".into(),
+        id: 4,
+    };
+    assert_eq!(service.control().await, (0, delete));
     hive.list_scripts("/r".into()).unwrap();
     let scripts = Control::ListScripts { path: "/r".into() };
     assert_eq!(service.control().await, (0, scripts));
@@ -2015,6 +2041,13 @@ async fn bridge_exit_ends_terminals_then_disconnects() {
         hive.mark_seen("/r".into(), DiffBase::Head, vec![], true),
         not_connected
     );
+    assert_eq!(hive.list_comments("/r".into()), not_connected);
+    assert_eq!(
+        hive.add_comment("/r".into(), "a".into(), (1, 1), "b".into()),
+        not_connected
+    );
+    assert_eq!(hive.resolve_comment("/r".into(), 1, false), not_connected);
+    assert_eq!(hive.delete_comment("/r".into(), 1), not_connected);
     assert_eq!(hive.list_scripts("/r".into()), not_connected);
     assert_eq!(
         hive.open_file("/r".into(), "a".into(), DiffBase::Head),
@@ -2354,6 +2387,10 @@ fn commands_reach_the_managed_hive() {
             set_view,
             list_changes,
             mark_seen,
+            list_comments,
+            add_comment,
+            resolve_comment,
+            delete_comment,
             list_scripts,
             open_file,
             open_table,
@@ -2457,6 +2494,10 @@ fn commands_reach_the_managed_hive() {
     let view = json!({"terminal": 1, "focused": true, "visible": true});
     let changes = json!({"path": "/r", "base": "head"});
     let mark_seen = json!({"path": "/r", "base": "head", "files": ["a"], "seen": true});
+    let list_comments = json!({"path": "/r"});
+    let add_comment = json!({"path": "/r", "file": "a", "from": 1, "to": 2, "body": "b"});
+    let resolve_comment = json!({"path": "/r", "id": 1, "resolved": true});
+    let delete_comment = json!({"path": "/r", "id": 1});
     let scripts = json!({"path": "/r"});
     let file = json!({"worktree": "/r", "path": "a", "base": "head"});
     let table = json!({"worktree": "/r", "path": "a.csv"});
@@ -2507,6 +2548,10 @@ fn commands_reach_the_managed_hive() {
         ("set_view", &view),
         ("list_changes", &changes),
         ("mark_seen", &mark_seen),
+        ("list_comments", &list_comments),
+        ("add_comment", &add_comment),
+        ("resolve_comment", &resolve_comment),
+        ("delete_comment", &delete_comment),
         ("list_scripts", &scripts),
         ("open_file", &file),
         ("open_table", &table),
@@ -2612,6 +2657,10 @@ fn commands_reach_the_managed_hive() {
         ("set_view", view),
         ("list_changes", changes),
         ("mark_seen", mark_seen),
+        ("list_comments", list_comments),
+        ("add_comment", add_comment),
+        ("resolve_comment", resolve_comment),
+        ("delete_comment", delete_comment),
         ("list_scripts", scripts),
         ("open_file", file.clone()),
         ("open_table", table),

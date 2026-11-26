@@ -2107,6 +2107,42 @@ impl Host {
         self.link().send(0, &mark)
     }
 
+    /// The review comments of a worktree (27.3); the answer arrives as `comments`.
+    pub fn list_comments(&self, path: String) -> Result<(), String> {
+        self.link().send(0, &Control::ListComments { path })
+    }
+
+    /// Adds a review comment on lines of a worktree's file (27.3); the answer arrives as
+    /// `comments`, or `error` when it is refused.
+    pub fn add_comment(
+        &self,
+        path: String,
+        file: String,
+        lines: (u32, u32),
+        body: String,
+    ) -> Result<(), String> {
+        let (from, to) = lines;
+        let add = Control::AddComment {
+            path,
+            file,
+            from,
+            to,
+            body,
+        };
+        self.link().send(0, &add)
+    }
+
+    /// Resolves a review comment, or opens it again (27.3); the answer arrives as `comments`.
+    pub fn resolve_comment(&self, path: String, id: u64, resolved: bool) -> Result<(), String> {
+        let resolve = Control::ResolveComment { path, id, resolved };
+        self.link().send(0, &resolve)
+    }
+
+    /// Deletes a review comment (27.3); the answer arrives as `comments`.
+    pub fn delete_comment(&self, path: String, id: u64) -> Result<(), String> {
+        self.link().send(0, &Control::DeleteComment { path, id })
+    }
+
     /// The answer arrives as `scripts` (23.4).
     pub fn list_scripts(&self, path: String) -> Result<(), String> {
         self.link().send(0, &Control::ListScripts { path })
@@ -2925,6 +2961,7 @@ const REMOTE_TO_UI: &[&str] = &[
     "delete_session_failed",
     "files",
     "changes",
+    "comments",
     "scripts",
     "search_results",
     "file",
@@ -3414,6 +3451,51 @@ pub mod commands {
         seen: bool,
     ) -> Result<(), String> {
         hive.on(host.as_deref())?.mark_seen(path, base, files, seen)
+    }
+
+    #[tauri::command]
+    pub fn list_comments(
+        hive: State<'_, Hive>,
+        host: Option<String>,
+        path: String,
+    ) -> Result<(), String> {
+        hive.on(host.as_deref())?.list_comments(path)
+    }
+
+    #[tauri::command]
+    pub fn add_comment(
+        hive: State<'_, Hive>,
+        host: Option<String>,
+        path: String,
+        file: String,
+        from: u32,
+        to: u32,
+        body: String,
+    ) -> Result<(), String> {
+        hive.on(host.as_deref())?
+            .add_comment(path, file, (from, to), body)
+    }
+
+    #[tauri::command]
+    pub fn resolve_comment(
+        hive: State<'_, Hive>,
+        host: Option<String>,
+        path: String,
+        id: u64,
+        resolved: bool,
+    ) -> Result<(), String> {
+        hive.on(host.as_deref())?
+            .resolve_comment(path, id, resolved)
+    }
+
+    #[tauri::command]
+    pub fn delete_comment(
+        hive: State<'_, Hive>,
+        host: Option<String>,
+        path: String,
+        id: u64,
+    ) -> Result<(), String> {
+        hive.on(host.as_deref())?.delete_comment(path, id)
     }
 
     #[tauri::command]

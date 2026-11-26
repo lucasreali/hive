@@ -842,6 +842,41 @@ pub enum Control {
         /// Why nothing could be listed, or why the list was cut short.
         error: Option<String>,
     },
+    /// App → service (27.3): the review comments of a worktree of a followed project (or a
+    /// folder project's folder), each moved to where its code is now. Answered by `Comments`.
+    ListComments {
+        path: String,
+    },
+    /// App → service (27.3): a comment `body` on the lines `from` to `to` (1-based, inclusive)
+    /// of the file `file` of the worktree `path`, anchored on their text as it is on disk now.
+    /// Answered by `Comments`, or `Error` when it is refused (a limit, a line past the file).
+    AddComment {
+        path: String,
+        file: String,
+        from: u32,
+        to: u32,
+        body: String,
+    },
+    /// App → service (27.3): resolves the comment `id` of the worktree `path`, or opens it
+    /// again (`resolved` false). Answered by `Comments`.
+    ResolveComment {
+        path: String,
+        id: u64,
+        resolved: bool,
+    },
+    /// App → service (27.3): deletes the comment `id` of the worktree `path`. Answered by
+    /// `Comments`.
+    DeleteComment {
+        path: String,
+        id: u64,
+    },
+    /// The review comments of the worktree `path` (27.3), oldest first, each where its code is
+    /// now. Sent when asked, after a change to them, and after every refresh of the watched
+    /// worktree while it has comments.
+    Comments {
+        path: String,
+        comments: Vec<ReviewComment>,
+    },
     /// App → service: the scripts of a worktree of a followed project (23.4), answered by
     /// `Scripts`.
     ListScripts {
@@ -2197,6 +2232,31 @@ pub struct ChangedFile {
     pub seen: Option<SeenMark>,
 }
 
+/// A review comment on lines of a worktree's file (27.3).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ReviewComment {
+    /// Unique in its worktree.
+    pub id: u64,
+    /// The file, relative to the worktree, `/`-separated.
+    pub file: String,
+    /// Its lines (1-based, inclusive) where its code is now; where it last was when outdated.
+    pub from: u32,
+    pub to: u32,
+    pub body: String,
+    /// The text of its lines (the first few, each cut short) and of up to three lines on each
+    /// side, as last found.
+    pub code: Vec<String>,
+    pub before: Vec<String>,
+    pub after: Vec<String>,
+    /// Who wrote it: the service's user for now; Stage 28 shares comments.
+    pub author: String,
+    /// When it was written, in milliseconds since the Unix epoch.
+    pub ms: u64,
+    pub resolved: bool,
+    /// Its code is gone from the file (changed or deleted): it stays listed, at its last place.
+    pub outdated: bool,
+}
+
 /// A changed file marked seen (27.1).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -3206,6 +3266,58 @@ mod tests {
             &Frame::control(0, &view).payload[..],
             br#"{"type":"view","terminal":3,"focused":true,"visible":false}"#
         );
+    }
+
+    #[test]
+    fn review_comments_are_tagged_json() {
+        let comments = Control::Comments {
+            path: "/r".into(),
+            comments: vec![ReviewComment {
+                id: 7,
+                file: "a.rs".into(),
+                from: 2,
+                to: 3,
+                body: "why?".into(),
+                code: vec!["x".into()],
+                before: vec![],
+                after: vec!["y".into()],
+                author: "me".into(),
+                ms: 9,
+                resolved: false,
+                outdated: true,
+            }],
+        };
+        assert_eq!(
+            &Frame::control(0, &comments).payload[..],
+            br#"{"type":"comments","path":"/r","comments":[{"id":7,"file":"a.rs","from":2,"to":3,"body":"why?","code":["x"],"before":[],"after":["y"],"author":"me","ms":9,"resolved":false,"outdated":true}]}"#
+        );
+        assert_eq!(Frame::control(0, &comments).to_control().unwrap(), comments);
+        let add = Control::AddComment {
+            path: "/r".into(),
+            file: "a.rs".into(),
+            from: 1,
+            to: 1,
+            body: "b".into(),
+        };
+        assert_eq!(
+            &Frame::control(0, &add).payload[..],
+            br#"{"type":"add_comment","path":"/r","file":"a.rs","from":1,"to":1,"body":"b"}"#
+        );
+        for request in [
+            add,
+            Control::ListComments { path: "/r".into() },
+            Control::ResolveComment {
+                path: "/r".into(),
+                id: 1,
+                resolved: true,
+            },
+            Control::DeleteComment {
+                path: "/r".into(),
+                id: 1,
+            },
+        ] {
+            assert_eq!(Frame::control(0, &request).to_control().unwrap(), request);
+        }
     }
 
     #[test]

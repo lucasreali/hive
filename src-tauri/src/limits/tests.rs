@@ -134,7 +134,12 @@ fn list(kind: &str, field: &str, len: usize) -> Value {
 
 #[test]
 fn projects_sessions_and_any_list_are_capped() {
-    for (kind, most) in [("projects", PROJECTS), ("sessions", SESSIONS)] {
+    let lists = [
+        ("projects", PROJECTS),
+        ("sessions", SESSIONS),
+        ("comments", COMMENTS),
+    ];
+    for (kind, most) in lists {
         assert_eq!(check(&mut list(kind, kind, most)), Ok(()));
         let over = format!("sent {} {kind}, over the {most} the app takes", most + 1);
         assert_eq!(check(&mut list(kind, kind, most + 1)), Err(over));
@@ -157,7 +162,10 @@ fn projects_sessions_and_any_list_are_capped() {
     let mut checked = fine.clone();
     assert_eq!(check(&mut checked), Ok(()));
     assert_eq!(checked, fine);
-    assert_eq!((PROJECTS, SESSIONS, LIST), (1000, 1000, 50_000));
+    assert_eq!(
+        (PROJECTS, SESSIONS, COMMENTS, LIST),
+        (1000, 1000, 1000, 50_000)
+    );
 }
 
 #[test]
@@ -178,6 +186,23 @@ fn a_remote_s_titles_badges_and_errors_are_clipped() {
     let mut notification = json!({"type": "terminal_notification", "body": long});
     check(&mut notification).unwrap();
     assert_eq!(notification["body"], clipped);
+    // A review comment's lines and author (27.3), and its text at 4096 characters.
+    let mut comments = json!({"type": "comments", "comments": [{
+        "code": [long], "before": [long], "after": [long], "author": long, "file": long,
+        "body": "é".repeat(LONG_TEXT + 1),
+    }]});
+    check(&mut comments).unwrap();
+    let comment = &comments["comments"][0];
+    for key in ["code", "before", "after"] {
+        assert_eq!(comment[key][0], clipped, "{key}");
+    }
+    assert_eq!(comment["author"], clipped);
+    assert_eq!(comment["file"], long);
+    assert_eq!(comment["body"], format!("{}…", "é".repeat(LONG_TEXT)));
+    let mut exact = json!({"type": "comments", "body": "a".repeat(LONG_TEXT)});
+    check(&mut exact).unwrap();
+    assert_eq!(exact["body"], "a".repeat(LONG_TEXT));
+    assert_eq!(LONG_TEXT, 4096);
     let untouched = json!({"type": "pull", "body": long, "path": long, "title": 3, "text": null});
     let mut message = untouched.clone();
     check(&mut message).unwrap();

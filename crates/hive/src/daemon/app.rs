@@ -20,7 +20,7 @@ use super::{Gone, State};
 use crate::VERSION;
 use crate::adapter::{self, Adapter, ClaudeCode};
 use crate::terminal::Input;
-use crate::{changes, dirs, file, procs, table, table_edit, uninstall, worktree};
+use crate::{changes, comments, dirs, file, procs, table, table_edit, uninstall, worktree};
 
 /// Longest `hive badge` label, in characters.
 const MAX_BADGE: usize = 40;
@@ -618,6 +618,7 @@ async fn app_frame(
                 match projects.remove_worktree(&path, force, procs::Source::System, archive) {
                     Ok(project) => {
                         archiving.forget_seen(std::slice::from_ref(&path));
+                        archiving.forget_comments(std::slice::from_ref(&path));
                         Control::WorktreeRemoved { project, path }
                     }
                     Err(err) => Control::RemoveWorktreeFailed {
@@ -658,6 +659,29 @@ async fn app_frame(
                 let marks = (files.as_slice(), seen);
                 changes::mark(&projects.list(), path, base, &marking.seen, marks)
             })
+        }
+        Ok(Control::ListComments { path }) => state.comments(path, comments::Request::List),
+        Ok(Control::AddComment {
+            path,
+            file,
+            from,
+            to,
+            body,
+        }) => {
+            let add = comments::Request::Add {
+                file,
+                lines: (from, to),
+                body,
+                author: comments::author(),
+                ms: crate::hook::now_ms(),
+            };
+            state.comments(path, add);
+        }
+        Ok(Control::ResolveComment { path, id, resolved }) => {
+            state.comments(path, comments::Request::Resolve { id, resolved });
+        }
+        Ok(Control::DeleteComment { path, id }) => {
+            state.comments(path, comments::Request::Delete { id });
         }
         Ok(Control::ListScripts { path }) => state.list_scripts(path),
         Ok(Control::ListSessions) => {
