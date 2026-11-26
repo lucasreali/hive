@@ -50,6 +50,11 @@ pub const REPO_BYTES: usize = 8 << 20;
 pub const TOTAL_BYTES: u64 = 64 << 20;
 /// Most runs of an edit believed.
 const MAX_RUNS: usize = 4096;
+/// Most hashed lines of one edit believed (what `hive hook` sends at most).
+const MAX_HASHED: usize = 40_000;
+/// Most runs of the file's earlier records tried when lines come back, and most runs of one
+/// edit searched for away from their line.
+const RECLAIM_RUNS: usize = 256;
 /// Longest file path believed.
 const PATH_LIMIT: usize = 4096;
 /// Longest subagent id kept, in bytes (as `states` keeps them).
@@ -113,11 +118,15 @@ pub struct Edit {
 
 impl Edit {
     /// Each run's 0-based range and hashes (empty when not kept).
+    /// A run outside the lines a file may have (a stored record is untrusted too) is left out.
     fn runs(&self) -> impl Iterator<Item = (Range<usize>, Vec<u64>)> + '_ {
-        self.added.iter().map(|(start, count, packed)| {
-            let at = start.saturating_sub(1);
+        self.added.iter().filter_map(|(start, count, packed)| {
+            let at = start.checked_sub(1)?;
+            let end = at
+                .checked_add(*count)
+                .filter(|&e| e <= FILE_LINES && *count > 0)?;
             let hashes = anchor::unpack(packed).filter(|h| h.len() == *count);
-            (at..at + count, hashes.unwrap_or_default())
+            Some((at..end, hashes.unwrap_or_default()))
         })
     }
 }
@@ -225,7 +234,8 @@ impl FileMap {
         let mut origins = Vec::with_capacity(hashes.len());
         for (start, len, origin) in &stored.origins {
             let origin = origin.origin()?;
-            if *start != origins.len() || origins.len() + len > hashes.len() {
+            let end = origins.len().checked_add(*len)?;
+            if *start != origins.len() || end > hashes.len() {
                 return None;
             }
             origins.extend(std::iter::repeat_n(origin, *len));
@@ -309,6 +319,7 @@ pub fn follow(
 
 fn claim(origins: &mut [Origin], changed: &[bool], file: &[u64], edit: &Edit, whole: bool) {
     let mine = Origin::Edit(edit.id);
+    let mut relocations = RECLAIM_RUNS;
     for (range, hashes) in edit.runs() {
         let clamped = range.start.min(file.len())..range.end.min(file.len());
         if hashes.is_empty() {
@@ -330,7 +341,11 @@ fn claim(origins: &mut [Origin], changed: &[bool], file: &[u64], edit: &Edit, wh
                 before: Vec::new(),
                 after: Vec::new(),
             };
-            match anchor::relocate(&anchor, file, range.start) {
+            let found = relocations.checked_sub(1).and_then(|left| {
+                relocations = left;
+                anchor::relocate(&anchor, file, range.start)
+            });
+            match found {
                 Some(found) => origins[found].fill(mine),
                 None => {
                     for line in clamped.filter(|&l| changed[l]) {
@@ -346,8 +361,13 @@ fn reclaim(origins: &mut [Origin], file: &[u64], history: &[&Edit]) {
     if !origins.contains(&Origin::Unknown) {
         return;
     }
-    for edit in history.iter().take(RECLAIM_RECORDS) {
-        for (range, hashes) in edit.runs().filter(|(_, h)| !h.is_empty()) {
+    let runs = history.iter().take(RECLAIM_RECORDS).flat_map(|edit| {
+        edit.runs()
+            .filter(|(_, h)| !h.is_empty())
+            .map(move |run| (edit.id, run))
+    });
+    for (id, (range, hashes)) in runs.take(RECLAIM_RUNS) {
+        {
             let anchor = Anchor {
                 start: range.start,
                 lines: hashes,
@@ -359,7 +379,7 @@ fn reclaim(origins: &mut [Origin], file: &[u64], history: &[&Edit]) {
             };
             for origin in &mut origins[found] {
                 if *origin == Origin::Unknown {
-                    *origin = Origin::Edit(edit.id);
+                    *origin = Origin::Edit(id);
                 }
             }
         }
@@ -452,14 +472,22 @@ fn claimed(edit: &Value) -> Option<Claimed> {
         return None;
     }
     let mut added = Vec::new();
+    let (mut next, mut hashed) = (1usize, 0usize);
     for run in runs {
-        let start = run.get(0)?.as_u64()? as usize;
-        let count = run.get(1)?.as_u64()? as usize;
+        let start = usize::try_from(run.get(0)?.as_u64()?).ok()?;
+        let count = usize::try_from(run.get(1)?.as_u64()?).ok()?;
         let packed = run.get(2)?.as_str()?;
-        if start == 0 || count == 0 || start + count > FILE_LINES + 1 {
+        let end = start.checked_add(count)?;
+        // In order, never overlapping, within the lines a followed file may have.
+        if start < next || count == 0 || end > FILE_LINES + 1 {
             return None;
         }
+        next = end;
         let kept = anchor::unpack(packed).is_some_and(|h| h.len() == count);
+        hashed += if kept { count } else { 0 };
+        if hashed > MAX_HASHED {
+            return None;
+        }
         added.push((
             start,
             count,
@@ -470,9 +498,14 @@ fn claimed(edit: &Value) -> Option<Claimed> {
             },
         ));
     }
+    let whole = edit.get("whole").and_then(Value::as_bool) == Some(true);
+    // A whole file is one run.
+    if whole && added.len() > 1 {
+        return None;
+    }
     Some(Claimed {
         file: file.to_owned(),
-        whole: edit.get("whole").and_then(Value::as_bool) == Some(true),
+        whole,
         file_level: kind == "notebook",
         user_modified: edit.get("user_modified").and_then(Value::as_bool) == Some(true),
         added,
@@ -587,7 +620,7 @@ impl Provenance {
         let mut inner = self.inner();
         let repo = self.repo(&mut inner, &project, now_ms);
         let id = repo.next_id;
-        repo.next_id += 1;
+        repo.next_id = repo.next_id.saturating_add(1);
         let file_level = claim.file_level || matches!(look, Look::TooLarge);
         let record = Edit {
             id,
@@ -771,15 +804,24 @@ impl Provenance {
             .map(|(worktree, files)| {
                 let files = files
                     .iter()
+                    .filter(|(rel, _)| relative(rel).is_some())
                     .filter_map(|(rel, m)| Some((rel.clone(), FileMap::from_stored(m)?)))
                     .collect();
                 (worktree, files)
             })
             .collect();
+        let mut edits = stored.edits;
+        edits.retain(|e| relative(&e.path).is_some() && sessions::valid_id(&e.session));
+        // Never an id already given, whatever the file says.
+        let next_id = edits
+            .iter()
+            .map(|e| e.id.saturating_add(1))
+            .max()
+            .unwrap_or(0);
         Repo {
             project: project.to_owned(),
-            next_id: stored.next_id,
-            edits: stored.edits,
+            next_id: next_id.max(stored.next_id),
+            edits,
             maps,
             touched: HashMap::new(),
         }
@@ -1086,13 +1128,13 @@ fn fit(repo: &mut Repo) -> Vec<u8> {
 }
 
 fn fit_within(repo: &mut Repo, most: usize) -> Vec<u8> {
-    // Bounded by what can go: each pass drops one map or one record, or stops.
+    // Bounded by what can go: each pass drops a tenth of the maps, else of the records, or stops.
     loop {
         let json = serde_json::to_vec(&stored(repo)).unwrap_or_default();
         if json.len() <= most {
             return json;
         }
-        let oldest = repo
+        let mut maps: Vec<(u64, String, String)> = repo
             .maps
             .iter()
             .flat_map(|(w, files)| {
@@ -1100,12 +1142,17 @@ fn fit_within(repo: &mut Repo, most: usize) -> Vec<u8> {
                     .iter()
                     .map(move |(rel, m)| (m.used_ms, w.clone(), rel.clone()))
             })
-            .min();
-        if let Some((_, worktree, rel)) = oldest {
-            if let Some(files) = repo.maps.get_mut(&worktree) {
-                files.remove(&rel);
-                if files.is_empty() {
-                    repo.maps.remove(&worktree);
+            .collect();
+        if !maps.is_empty() {
+            // A tenth of them, the untouched longest, per pass.
+            maps.sort();
+            let drop = (maps.len() / 10).max(1);
+            for (_, worktree, rel) in maps.drain(..drop) {
+                if let Some(files) = repo.maps.get_mut(&worktree) {
+                    files.remove(&rel);
+                    if files.is_empty() {
+                        repo.maps.remove(&worktree);
+                    }
                 }
             }
         } else if !repo.edits.is_empty() {

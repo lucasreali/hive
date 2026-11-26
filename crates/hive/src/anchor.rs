@@ -13,6 +13,10 @@ use std::ops::Range;
 /// bounded by the input: time `O((N + M) · MAX_EDITS)`, memory `O(MAX_EDITS²)` (8 MiB).
 pub const MAX_EDITS: usize = 1000;
 
+/// Most line comparisons one [`relocate`] makes; past it, it gives up (`None`), so a file of
+/// many identical lines cannot make it quadratic.
+pub const RELOCATE_WORK: usize = 1_000_000;
+
 /// Non-blank characters that make a single line worth finding again on its own.
 const SIGNIFICANT: usize = 8;
 
@@ -266,11 +270,27 @@ pub fn relocate_scored(
         before.zip(above).take_while(|p| matching(*p)).count()
             + after.take_while(|p| matching(*p)).count()
     };
-    (0..=file.len() - len)
-        .filter(|&at| file[at..at + len] == anchor.lines[..])
-        .map(|at| (score(at), at))
-        .min_by_key(|&(score, at)| (std::cmp::Reverse(score), at.abs_diff(hint), at))
-        .map(|(score, at)| (at..at + len, score))
+    // Bounded by the input and by [`RELOCATE_WORK`]: past it the text is too ambiguous to place.
+    let mut work = 0usize;
+    let mut best: Option<(usize, usize)> = None;
+    for at in 0..=file.len() - len {
+        if file[at] != anchor.lines[0] {
+            continue;
+        }
+        work += len;
+        if work > RELOCATE_WORK {
+            return None;
+        }
+        if file[at..at + len] != anchor.lines[..] {
+            continue;
+        }
+        let rank = |(score, at): (usize, usize)| (std::cmp::Reverse(score), at.abs_diff(hint), at);
+        let found = (score(at), at);
+        if best.is_none_or(|b| rank(found) < rank(b)) {
+            best = Some(found);
+        }
+    }
+    best.map(|(score, at)| (at..at + len, score))
 }
 
 /// Packs hashes as base64 (standard alphabet, padded) of their little-endian bytes, for a
@@ -628,6 +648,27 @@ mod tests {
             after: vec![s(2), s(4)],
         };
         assert_eq!(relocate_scored(&after, &file, 0), Some((4..5, 2)));
+    }
+
+    #[test]
+    fn relocate_gives_up_past_its_work_cap() {
+        // Runs of `len` identical lines ending in another: every place is tried in full.
+        let len = 1000;
+        let mut lines = vec![S; len - 1];
+        lines.push(S + 4);
+        let anchor = Anchor {
+            start: 0,
+            lines,
+            before: vec![],
+            after: vec![],
+        };
+        // Places tried: `file.len() - len + 1`, each costing `len`.
+        let fits = RELOCATE_WORK / len;
+        let mut file = vec![S; fits + len - 2];
+        file.push(S + 4);
+        assert_eq!(relocate(&anchor, &file, 0), Some(fits - 1..fits - 1 + len));
+        file.insert(0, S);
+        assert_eq!(relocate(&anchor, &file, 0), None);
     }
 
     #[test]

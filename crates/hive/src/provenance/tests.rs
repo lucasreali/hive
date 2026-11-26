@@ -1074,3 +1074,113 @@ fn the_store_key_names_one_file_per_project() {
     assert!(project_of(&projects, "/g").is_none());
     let _ = Worktree::clone(&projects[1].worktrees[0]);
 }
+
+#[test]
+fn hostile_numbers_in_a_hook_edit_are_refused() {
+    let two = anchor::pack(&[1, 3]);
+    let edit = |added: Value| json!({"file": "/w/a", "kind": "edit", "added": added});
+    // Overflowing, out of order, overlapping.
+    for bad in [
+        json!([[u64::MAX, 2, two]]),
+        json!([[1, u64::MAX, ""]]),
+        json!([[5, 1, ""], [2, 1, ""]]),
+        json!([[2, 2, ""], [3, 1, ""]]),
+    ] {
+        assert!(claimed(&edit(bad.clone())).is_none(), "{bad}");
+    }
+    assert!(claimed(&edit(json!([[2, 2, ""], [4, 1, ""]]))).is_some());
+    // At most MAX_HASHED hashed lines; ranges only do not count.
+    let run = |start: usize, n: usize| json!([start, n, anchor::pack(&vec![1; n])]);
+    let half = MAX_HASHED / 2;
+    assert!(claimed(&edit(json!([run(1, half), run(half + 1, half)]))).is_some());
+    assert!(claimed(&edit(json!([run(1, half), run(half + 1, half + 1)]))).is_none());
+    assert!(claimed(&edit(json!([run(1, half), [half + 1, half + 1, ""]]))).is_some());
+    // A whole file is one run.
+    let whole = json!({"file": "/w/a", "kind": "create", "whole": true,
+        "added": [[1, 1, ""], [3, 1, ""]]});
+    assert!(claimed(&whole).is_none());
+}
+
+#[test]
+fn runs_outside_a_files_lines_are_left_out() {
+    let mut e = edit(1, &[]);
+    e.added = vec![
+        (0, 1, String::new()),
+        (usize::MAX, 2, String::new()),
+        (FILE_LINES, 2, String::new()),
+        (2, 0, String::new()),
+        (FILE_LINES, 1, String::new()),
+        (3, 2, anchor::pack(&[7, 8])),
+    ];
+    let runs: Vec<_> = e.runs().collect();
+    assert_eq!(
+        runs,
+        [(FILE_LINES - 1..FILE_LINES, vec![]), (2..4, vec![7, 8])]
+    );
+}
+
+#[test]
+fn a_stored_map_with_an_overflowing_run_is_dropped() {
+    let m = map(&["a"], vec![Before]);
+    let hostile = StoredMap {
+        origins: vec![
+            (0, 1, StoredOrigin::Named("before".into())),
+            (1, usize::MAX, StoredOrigin::Named("before".into())),
+        ],
+        ..m.stored()
+    };
+    assert!(FileMap::from_stored(&hostile).is_none());
+}
+
+#[test]
+fn a_loaded_store_keeps_only_sound_records_and_never_reuses_an_id() {
+    let repo = Repo_::new();
+    let home = tempfile::tempdir().unwrap();
+    let dir = home.path().join("provenance");
+    std::fs::create_dir_all(&dir).unwrap();
+    let w = repo.worktree();
+    let record = |id: u64, path: &str, session: &str| {
+        json!({"id": id, "session": session, "tool": "Edit", "ms": T0, "worktree": w,
+            "path": path, "added": []})
+    };
+    let hashes = anchor::pack(&h(&["x"]));
+    let file_map = json!({"size": 0, "mtime_ms": 0, "used_ms": 0, "hashes": hashes,
+        "origins": [[0, 1, 7]]});
+    let mut files = serde_json::Map::new();
+    files.insert("a.txt".into(), file_map.clone());
+    files.insert(".git/config".into(), file_map);
+    let mut worktrees = serde_json::Map::new();
+    worktrees.insert(w.clone(), Value::Object(files));
+    let stored = json!({"version": 1, "project": w, "next_id": 0,
+        "edits": [record(7, "a.txt", "s1"), record(9, ".git/config", "s1"),
+            record(8, "b.txt", "../s")],
+        "worktrees": worktrees});
+    std::fs::write(dir.join(format!("{}.json", key(&w))), stored.to_string()).unwrap();
+    let store = Provenance::new(Some(dir));
+    let mut inner = store.inner();
+    let r = store.repo(&mut inner, &w, T0);
+    assert_eq!(r.edits.iter().map(|e| e.id).collect::<Vec<_>>(), [7]);
+    assert_eq!(r.next_id, 8);
+    assert_eq!(r.maps[&w].keys().collect::<Vec<_>>(), ["a.txt"]);
+}
+
+#[test]
+fn an_edit_searches_for_at_most_so_many_runs_away_from_their_line() {
+    // Every run is somewhere else in the file: the first RECLAIM_RUNS are found.
+    let lines: Vec<String> = (0..=RECLAIM_RUNS)
+        .map(|i| format!("significant line {i}"))
+        .collect();
+    let refs: Vec<&str> = lines.iter().map(String::as_str).collect();
+    let mut file = vec!["pad"];
+    file.extend(&refs);
+    let runs: Vec<(usize, &[&str])> = (0..refs.len()).map(|i| (i + 3, &refs[i..=i])).collect();
+    let e = edit(1, &runs);
+    let origins = follow(None, &h(&file), Unknown, Some((&e, false)), &[]);
+    assert_eq!(origins[1..=RECLAIM_RUNS], vec![E(1); RECLAIM_RUNS]);
+    assert_eq!(origins[RECLAIM_RUNS + 1], Before);
+    // Text that comes back: at most RECLAIM_RUNS runs of the history are tried.
+    let old = map(&["pad"], vec![Before]);
+    let back = follow(Some(&old), &h(&file), Unknown, None, &[&e]);
+    assert_eq!(back[1..=RECLAIM_RUNS], vec![E(1); RECLAIM_RUNS]);
+    assert_eq!(back[RECLAIM_RUNS + 1], Unknown);
+}

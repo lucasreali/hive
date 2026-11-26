@@ -41,6 +41,10 @@ const SENT_HASHES: usize = 40_000;
 const MAX_FILE_LINES: usize = 1_000_000;
 /// Longest `agent_type` kept, in characters.
 const AGENT_TYPE_LIMIT: usize = 64;
+/// Longest background task id kept, in bytes (as `states` keeps them).
+const ID_LIMIT: usize = 256;
+/// Most runs sent; the service refuses an edit with more.
+const MAX_RUNS: usize = 4096;
 
 /// The slimmed `PostToolUse` payload: [`KEPT`] fields, `tool_use_id` when it is a plain id,
 /// `tool_response`'s [`KEPT_RESPONSE`] fields, and `hive_edit` for a file edit. Anything that is
@@ -65,7 +69,13 @@ pub fn slim(payload: Value) -> Value {
     if let Some(Value::Object(response)) = &response {
         let kept: Map<String, Value> = KEPT_RESPONSE
             .iter()
-            .filter_map(|k| Some(((*k).to_owned(), response.get(*k)?.clone())))
+            .filter_map(|k| {
+                let id = response
+                    .get(*k)?
+                    .as_str()
+                    .filter(|id| id.len() <= ID_LIMIT)?;
+                Some(((*k).to_owned(), Value::String(id.to_owned())))
+            })
             .collect();
         out.insert("tool_response".to_owned(), Value::Object(kept));
     }
@@ -77,7 +87,26 @@ pub fn slim(payload: Value) -> Value {
     {
         out.insert("hive_edit".to_owned(), edit);
     }
-    Value::Object(out)
+    fitting(out)
+}
+
+/// `slimmed` as sent, at most [`crate::hook::MAX_INPUT`] once written: without `hive_edit` when
+/// it does not fit (the edit is lost, not the event), else only its ids.
+fn fitting(mut slimmed: Map<String, Value>) -> Value {
+    let size = |m: &Map<String, Value>| serde_json::to_vec(m).map_or(usize::MAX, |v| v.len());
+    if size(&slimmed) > crate::hook::MAX_INPUT {
+        slimmed.remove("hive_edit");
+    }
+    if size(&slimmed) > crate::hook::MAX_INPUT {
+        slimmed.retain(|k, v| {
+            matches!(k.as_str(), "session_id" | "agent_id" | "tool_name") && plain_id(v)
+        });
+        slimmed.insert(
+            "hive_error".to_owned(),
+            "hook input too large once slimmed".into(),
+        );
+    }
+    Value::Object(slimmed)
 }
 
 /// `[A-Za-z0-9_-]{1,64}`, as Claude's `toolu_…` ids are.
@@ -194,8 +223,10 @@ fn hunks(patch: &[Value]) -> (Vec<Run>, i64) {
         let Some(added) = hunk.added() else { continue };
         delta += hunk.new_lines as i64 - hunk.old_lines as i64;
         for (line, hash) in added {
+            let full = runs.len() == MAX_RUNS;
             match runs.last_mut() {
                 Some(run) if run.start + run.hashes.len() == line => run.hashes.push(hash),
+                _ if full => {}
                 _ => runs.push(Run {
                     start: line,
                     hashes: vec![hash],
@@ -219,7 +250,8 @@ impl<'a> Hunk<'a> {
         let number = |key: &str| hunk.get(key)?.as_u64();
         Some(Hunk {
             old_lines: number("oldLines")?,
-            new_start: number("newStart")?,
+            // Past any file's length, so line numbers never overflow.
+            new_start: number("newStart").filter(|&s| s <= MAX_FILE_LINES as u64)?,
             new_lines: number("newLines")?,
             lines: hunk.get("lines")?.as_array()?,
         })
@@ -253,12 +285,12 @@ impl<'a> Hunk<'a> {
     }
 }
 
-/// `session_id` and `tool_name` of a payload too large to read, from a bounded scan of its
+/// `session_id`, `agent_id` and `tool_name` of a payload too large to read, from a bounded scan of its
 /// first bytes: the first `"key": "value"` of each, when the value is a plain id.
 pub fn ids(head: &[u8]) -> Map<String, Value> {
     let text = String::from_utf8_lossy(head);
     let mut found = Map::new();
-    for key in ["session_id", "tool_name"] {
+    for key in ["session_id", "agent_id", "tool_name"] {
         let Some(at) = text.find(&format!("\"{key}\"")) else {
             continue;
         };
@@ -599,5 +631,70 @@ mod tests {
         assert_eq!(Value::Object(ids(br#"{"session_id""#)), json!({}));
         assert_eq!(Value::Object(ids(br#"{"session_id":"abc"#)), json!({}));
         assert_eq!(Value::Object(ids(br#"{"tool_name" "x"}"#)), json!({}));
+        assert_eq!(
+            Value::Object(ids(br#"{"agent_id":"a1b2","x":1}"#)),
+            json!({"agent_id": "a1b2"})
+        );
+    }
+
+    #[test]
+    fn only_short_string_task_ids_are_kept() {
+        let long = "t".repeat(ID_LIMIT + 1);
+        let payload = json!({"tool_name": "Bash", "tool_response": {
+            "backgroundTaskId": long, "taskId": 4, "agentId": "a".repeat(ID_LIMIT)}});
+        assert_eq!(
+            slim(payload)["tool_response"],
+            json!({"agentId": "a".repeat(ID_LIMIT)})
+        );
+    }
+
+    #[test]
+    fn runs_past_the_services_cap_and_far_line_numbers_are_left_out() {
+        let hunk = |start: usize| json!({"oldStart": start, "oldLines": 0, "newStart": start, "newLines": 1, "lines": ["+a"]});
+        // One hunk of MAX_RUNS + 1 runs, a context line between each.
+        let lines: Vec<&str> = (0..=MAX_RUNS).flat_map(|_| ["+a", " b"]).collect();
+        let n = lines.len() as u64;
+        let one = json!({"oldStart": 1, "oldLines": n / 2, "newStart": 1, "newLines": n,
+            "lines": lines});
+        let (runs, delta) = hunks(&[one]);
+        assert_eq!(runs.len(), MAX_RUNS);
+        assert_eq!(runs[MAX_RUNS - 1].start, 2 * MAX_RUNS - 1);
+        assert_eq!(delta, n as i64 / 2);
+        let far = [hunk(MAX_FILE_LINES + 1), hunk(MAX_FILE_LINES)];
+        let (runs, _) = hunks(&far);
+        assert_eq!(runs.len(), 1);
+        assert_eq!(runs[0].start, MAX_FILE_LINES);
+    }
+
+    #[test]
+    fn a_slimmed_payload_too_large_to_send_loses_its_edit_then_all_but_its_ids() {
+        let big = |n: usize| json!(vec![json!({"id": "x".repeat(100)}); n]);
+        let mut payload = edit_payload(one_hunk());
+        payload["agent_id"] = json!("a1");
+        payload["background_tasks"] = big(10);
+        assert!(slim(payload.clone()).get("hive_edit").is_some());
+        // Over the limit with the edit, within it without: the edit goes.
+        let size = |p: &Value| serde_json::to_vec(p).unwrap().len();
+        payload["background_tasks"] = big(0);
+        let mut bare = slim(payload.clone());
+        let with_edit = size(&bare);
+        bare.as_object_mut().unwrap().remove("hive_edit");
+        let without = size(&bare);
+        // Each task adds 110 bytes (109 and a comma), the first 109.
+        let tasks = (crate::hook::MAX_INPUT - without + 1) / 110;
+        assert!(without + tasks * 110 - 1 <= crate::hook::MAX_INPUT);
+        assert!(with_edit + tasks * 110 - 1 > crate::hook::MAX_INPUT);
+        payload["background_tasks"] = big(tasks);
+        let slimmed = slim(payload.clone());
+        assert_eq!(slimmed.get("hive_edit"), None);
+        assert_eq!(slimmed.get("hive_error"), None);
+        assert!(slimmed.to_string().len() <= crate::hook::MAX_INPUT);
+        // Still over: only the ids stay.
+        payload["background_tasks"] = big(crate::hook::MAX_INPUT / 100);
+        assert_eq!(
+            slim(payload),
+            json!({"session_id": "0b5c9e7e-1111-4c2d-9f00-aaaaaaaaaaaa", "agent_id": "a1",
+                "tool_name": "Edit", "hive_error": "hook input too large once slimmed"})
+        );
     }
 }
