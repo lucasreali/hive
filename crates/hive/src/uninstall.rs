@@ -31,7 +31,7 @@ const PROGRAM: [&str; 3] = ["bin", "shell", "hive-hooks.json"];
 /// What else Hive writes in its folder ([`Paths`]), and nothing else is removed from it: a
 /// `HIVE_HOME` naming another folder (`~/.claude`, a projects folder) loses nothing of its own.
 /// A name followed by a `.` and more is that file's own (`spaces.json.corrupt`, a `.tmp`).
-const DATA: [&str; 9] = [
+const DATA: [&str; 10] = [
     "settings.json",
     "spaces.json",
     "projects.json",
@@ -39,6 +39,7 @@ const DATA: [&str; 9] = [
     "offered-pulls.json",
     "usage.json",
     "open-sessions.json",
+    "seen.json",
     "shared",
     "accounts",
 ];

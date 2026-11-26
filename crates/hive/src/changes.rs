@@ -12,6 +12,7 @@ use hive_protocol::{ChangedFile, Control, DiffBase, FileStatus, Project};
 
 use crate::git::{self, read_limited};
 use crate::projects;
+use crate::seen::Seen;
 
 /// Untracked files larger than this are not counted (their lines show as unknown).
 const UNTRACKED_LIMIT: u64 = 8_388_608; // 8 MiB
@@ -22,6 +23,8 @@ const UNTRACKED_BUDGET: u64 = 33_554_432; // 32 MiB
 pub(crate) const BINARY_PROBE: usize = 8000;
 /// Most bytes of JSON for the files of one `changes` message, well under `MAX_PAYLOAD`.
 const MESSAGE_BUDGET: usize = 3_145_728; // 3 MiB
+/// What a file's seen mark (27.1) may add to its JSON, set after the budget was counted.
+const SEEN_ROOM: usize = r#","seen":"changed""#.len();
 
 /// The `git status` whose entries [`parse_status`] reads.
 pub const STATUS: [&str; 5] = [
@@ -93,12 +96,49 @@ pub fn against(projects: &[Project], path: &str, asked: DiffBase) -> io::Result<
 /// Why the main worktree, or a worktree of a detached main worktree, has no branch base.
 const NO_BRANCH: &str = "No branch to compare with: this is the main worktree, or it is detached";
 
-/// The `changes` answer for the worktree `path` of `projects` against `asked`, and, when it
-/// was listed against `HEAD`, its [`Totals`].
-pub fn answer(projects: &[Project], path: String, asked: DiffBase) -> (Control, Option<Totals>) {
+/// The `changes` answer for the worktree `path` of `projects` against `asked`, each file with
+/// its mark of `seen` (27.1), and, when it was listed against `HEAD`, its [`Totals`].
+pub fn answer(
+    projects: &[Project],
+    path: String,
+    asked: DiffBase,
+    seen: &Seen,
+) -> (Control, Option<Totals>) {
+    marked(projects, path, asked, seen, None)
+}
+
+/// The `mark_seen` answer (27.1): the `files` of the worktree `path` marked seen or not
+/// (`marks`) against `asked`, then its `changes`; `error` when the marks cannot be saved.
+pub fn mark(
+    projects: &[Project],
+    path: String,
+    asked: DiffBase,
+    seen: &Seen,
+    files: (&[String], bool),
+) -> Control {
+    marked(projects, path, asked, seen, Some(files)).0
+}
+
+/// [`answer`], first marking `files` seen or not when given.
+fn marked(
+    projects: &[Project],
+    path: String,
+    asked: DiffBase,
+    seen: &Seen,
+    files: Option<(&[String], bool)>,
+) -> (Control, Option<Totals>) {
     match against(projects, &path, asked) {
         Ok(against) => {
-            let listed = list(&against.dir, against.commit.as_deref());
+            let mut listed = list(&against.dir, against.commit.as_deref());
+            if let Ok(changes) = &mut listed {
+                let marking = files
+                    .map(|(paths, marks)| seen.mark(&path, &against, &changes.files, paths, marks));
+                if let Some(Err(err)) = marking {
+                    let message = format!("Cannot mark the files as seen: {err}");
+                    return (Control::Error { message }, None);
+                }
+                seen.apply(&path, &against, &mut changes.files);
+            }
             let totals = listed.as_ref().ok().map(|c| Totals {
                 files: c.changed,
                 added: c.added,
@@ -147,7 +187,7 @@ pub fn numstat(base: &str) -> [&str; 8] {
 }
 
 /// `HEAD`'s commit, or the empty tree before the first commit.
-fn head(dir: &Path) -> io::Result<String> {
+pub(crate) fn head(dir: &Path) -> io::Result<String> {
     let head = git::output(dir, &["rev-parse", "--verify", "--quiet", "HEAD"], &[0, 1])?;
     let base = if head.is_empty() {
         git(dir, &["hash-object", "-t", "tree", "/dev/null"])?
@@ -338,6 +378,7 @@ fn collect(dir: &Path, entries: Vec<Entry>, counts: &Counts, mut budget: u64) ->
                 old_path: from.as_deref().map(lossy),
                 added,
                 removed,
+                seen: None,
             }
         })
         .collect();
@@ -350,7 +391,7 @@ fn collect(dir: &Path, entries: Vec<Entry>, counts: &Counts, mut budget: u64) ->
     let total = files.len();
     let mut budget = MESSAGE_BUDGET;
     for file in files {
-        let size = serde_json::to_vec(&file).unwrap_or_default().len() + 1;
+        let size = serde_json::to_vec(&file).unwrap_or_default().len() + 1 + SEEN_ROOM;
         let Some(left) = budget.checked_sub(size) else {
             break;
         };
@@ -422,6 +463,7 @@ mod tests {
             old_path: None,
             added: counts.0,
             removed: counts.1,
+            seen: None,
         }
     }
 
@@ -615,7 +657,7 @@ u UU N... 100644 100644 100644 100644 a1 a2 a3 both.rs\0\
         let json: usize = changes
             .files
             .iter()
-            .map(|f| serde_json::to_vec(f).unwrap().len() + 1)
+            .map(|f| serde_json::to_vec(f).unwrap().len() + 1 + SEEN_ROOM)
             .sum();
         assert!(json <= MESSAGE_BUDGET, "{json}");
         let next = serde_json::to_vec(&file(
@@ -625,7 +667,8 @@ u UU N... 100644 100644 100644 100644 a1 a2 a3 both.rs\0\
         ))
         .unwrap()
         .len()
-            + 1;
+            + 1
+            + SEEN_ROOM;
         assert!(json + next > MESSAGE_BUDGET, "the next file did not fit");
     }
 
@@ -736,6 +779,7 @@ garbage\0\
             worktree(&lone, Some("o"), false),
         ])];
         let path = w.display().to_string();
+        let seen = Seen::new(top.join("hive/seen.json"));
 
         assert_eq!(
             against(&projects, &path, DiffBase::Branch).unwrap(),
@@ -752,7 +796,7 @@ garbage\0\
         let untracked = file("u", FileStatus::Untracked, (Some(1), Some(0)));
         // The status counts only against HEAD: not the branch's commits.
         assert_eq!(
-            answer(&projects, path.clone(), DiffBase::Branch),
+            answer(&projects, path.clone(), DiffBase::Branch, &seen),
             (
                 changes(
                     &path,
@@ -770,15 +814,48 @@ garbage\0\
         );
         // Against HEAD, only what is not committed.
         assert_eq!(
-            answer(&projects, path.clone(), DiffBase::Head),
+            answer(&projects, path.clone(), DiffBase::Head, &seen),
             (
-                changes(&path, DiffBase::Head, None, vec![modified, untracked]),
+                changes(
+                    &path,
+                    DiffBase::Head,
+                    None,
+                    vec![modified.clone(), untracked.clone()]
+                ),
                 Some(Totals {
                     files: 2,
                     added: 3,
                     removed: 1
                 })
             )
+        );
+
+        // Marked seen (27.1): the answer carries the marks of the base it was listed against.
+        let a = ["a".to_owned()];
+        let mut seen_a = modified.clone();
+        seen_a.seen = Some(hive_protocol::SeenMark::Seen);
+        assert_eq!(
+            mark(&projects, path.clone(), DiffBase::Head, &seen, (&a, true)),
+            changes(&path, DiffBase::Head, None, vec![seen_a, untracked.clone()])
+        );
+        let (Control::Changes { files, .. }, _) =
+            answer(&projects, path.clone(), DiffBase::Branch, &seen)
+        else {
+            panic!("expected changes")
+        };
+        assert!(files.iter().all(|f| f.seen.is_none()), "{files:?}");
+        // Marks that cannot be saved say why, and nothing is marked.
+        let capped = Seen::with_limit(top.join("hive/capped.json"), 2);
+        assert_eq!(
+            mark(&projects, path.clone(), DiffBase::Head, &capped, (&a, true)),
+            Control::Error {
+                message: "Cannot mark the files as seen: capped.json would be over 2 bytes".into()
+            }
+        );
+        mark(&projects, path.clone(), DiffBase::Head, &seen, (&a, false));
+        assert_eq!(
+            answer(&projects, path.clone(), DiffBase::Head, &seen).0,
+            changes(&path, DiffBase::Head, None, vec![modified, untracked])
         );
 
         // A detached HEAD still has a merge-base with main.
@@ -790,7 +867,7 @@ garbage\0\
         let lone = lone.display().to_string();
         let why = "No commit in common with main";
         assert_eq!(
-            answer(&projects, lone.clone(), DiffBase::Branch).0,
+            answer(&projects, lone.clone(), DiffBase::Branch, &seen).0,
             changes(&lone, DiffBase::Head, Some(why), vec![])
         );
 
@@ -810,7 +887,7 @@ garbage\0\
 
         // Only a followed worktree.
         assert_eq!(
-            answer(&projects, "/nope".into(), DiffBase::Branch),
+            answer(&projects, "/nope".into(), DiffBase::Branch, &seen),
             (
                 Control::Changes {
                     path: "/nope".into(),

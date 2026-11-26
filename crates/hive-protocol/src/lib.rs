@@ -814,6 +814,15 @@ pub enum Control {
         path: String,
         base: DiffBase,
     },
+    /// App → service (27.1): mark the files `files` (paths of its `Changes`) of a worktree of a
+    /// followed project as seen in its diff against `base`, or not (`seen` false). Answered by
+    /// `Changes`, or `Error` when the marks cannot be kept.
+    MarkSeen {
+        path: String,
+        base: DiffBase,
+        files: Vec<String>,
+        seen: bool,
+    },
     /// Every file that differs from the base (committed since it, staged, unstaged and
     /// untracked), sorted by path, with the line totals of all of them.
     Changes {
@@ -2182,6 +2191,20 @@ pub struct ChangedFile {
     /// Lines added and removed; `None` for a binary (or too large) file.
     pub added: Option<u64>,
     pub removed: Option<u64>,
+    /// Its seen mark in the diff against this base (27.1); `None`: not marked. Left out when
+    /// `None`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub seen: Option<SeenMark>,
+}
+
+/// A changed file marked seen (27.1).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SeenMark {
+    /// Its diff is the one it was marked on.
+    Seen,
+    /// Its diff changed since it was marked: unseen again.
+    Changed,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -3198,6 +3221,7 @@ mod tests {
                 old_path: Some("a".into()),
                 added: Some(1),
                 removed: None,
+                seen: None,
             }],
             added: 1,
             removed: 0,
@@ -3212,6 +3236,29 @@ mod tests {
             base: DiffBase::Branch,
         };
         assert_eq!(Frame::control(0, &list).to_control().unwrap(), list);
+        // A file's seen mark (27.1), left out when it has none.
+        let Control::Changes { mut files, .. } = changes else {
+            unreachable!()
+        };
+        files[0].seen = Some(SeenMark::Changed);
+        let json = serde_json::to_string(&files[0]).unwrap();
+        assert!(
+            json.ends_with(r#""removed":null,"seen":"changed"}"#),
+            "{json}"
+        );
+        let back: ChangedFile = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, files[0]);
+        let mark = Control::MarkSeen {
+            path: "/r".into(),
+            base: DiffBase::Head,
+            files: vec!["b".into()],
+            seen: true,
+        };
+        assert_eq!(
+            &Frame::control(0, &mark).payload[..],
+            br#"{"type":"mark_seen","path":"/r","base":"head","files":["b"],"seen":true}"#
+        );
+        assert_eq!(Frame::control(0, &mark).to_control().unwrap(), mark);
     }
 
     #[test]

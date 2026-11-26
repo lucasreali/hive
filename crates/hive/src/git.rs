@@ -283,6 +283,12 @@ pub fn output_within(dir: &Path, args: &[&str], ok: &[i32], time: Duration) -> i
     run_within(dir, &args, &[], ok, OUTPUT_LIMIT, Some(time))
 }
 
+/// [`output`] with `input` on stdin, within [`TIME_LIMIT`] (see [`run_within`]).
+pub fn output_with(dir: &Path, args: &[&str], input: &[u8]) -> io::Result<Vec<u8>> {
+    let args: Vec<&OsStr> = args.iter().map(OsStr::new).collect();
+    run_within(dir, &args, input, &[0], OUTPUT_LIMIT, Some(TIME_LIMIT))
+}
+
 /// Reads at most `limit` bytes; more is an error.
 pub fn read_limited(input: &mut dyn Read, limit: u64) -> io::Result<Vec<u8>> {
     let mut buf = Vec::new();

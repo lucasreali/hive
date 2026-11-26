@@ -37,6 +37,7 @@ pub mod registry;
 pub mod ring;
 pub mod scripts;
 pub mod search;
+pub mod seen;
 pub mod session_watch;
 pub mod sessions;
 pub mod settings;
@@ -54,6 +55,7 @@ pub mod watch;
 pub mod windows;
 pub mod workbook;
 pub mod worktree;
+pub mod worktree_store;
 pub mod wrapper;
 
 /// Binary version, compared with the app's in the handshake.

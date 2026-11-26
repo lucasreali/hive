@@ -70,6 +70,7 @@ sort! {
         | ExpandIgnored
         | View
         | ListChanges
+        | MarkSeen
         | ListScripts
         | ListSessions
         | LocateSession
@@ -501,8 +502,15 @@ fn samples() -> Vec<Control> {
             base: DiffBase::Head,
             branch: None,
             base_error: None,
-            files: vec![],
-            added: 0,
+            files: vec![ChangedFile {
+                path: s("a"),
+                status: FileStatus::Modified,
+                old_path: None,
+                added: Some(1),
+                removed: Some(0),
+                seen: Some(SeenMark::Seen),
+            }],
+            added: 1,
             removed: 0,
             error: None,
         },
