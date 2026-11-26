@@ -24,11 +24,11 @@ test("files panel: shows the selected worktree's changes; Ctrl+Shift+B toggles i
   await expect(panel).toBeVisible();
   await panel.getByRole("tablist", { name: "Panel" }).getByRole("tab", { name: "Diff" }).click();
   // A Claude worktree compares with the main branch (9.11); HEAD is a click away.
-  await expect(panel.locator(".files-summary")).toHaveText("5 files changed+24−49HEADmain");
-  const base = panel.getByRole("group", { name: "Compare with" });
-  await expect(base.getByRole("button", { name: "main" })).toHaveAttribute("aria-pressed", "true");
-  await base.getByRole("button", { name: "HEAD" }).click();
-  await expect(base.getByRole("button", { name: "HEAD" })).toHaveAttribute("aria-pressed", "true");
+  await expect(panel.locator(".files-summary")).toHaveText("5 files changed+24−49main");
+  const base = panel.getByRole("combobox", { name: "Compare with" });
+  await base.click();
+  await page.getByRole("option", { name: "HEAD" }).click();
+  await expect(base).toHaveText("HEAD");
   const files = panel.getByRole("tree", { name: "Files" });
   // Only the changed files; folders start collapsed.
   await expect(files.getByRole("treeitem")).toHaveCount(3);
@@ -53,7 +53,7 @@ test("files panel: shows the selected worktree's changes; Ctrl+Shift+B toggles i
 
   // Selecting another worktree asks the service again; the file's tab goes with its worktree.
   await tree.getByRole("button", { name: "fix-login" }).click();
-  await expect(panel.locator(".files-summary")).toHaveText("2 files changed+4−1HEADmain");
+  await expect(panel.locator(".files-summary")).toHaveText("2 files changed+4−1main");
   await expect(view).toBeHidden();
   const tab = page.getByRole("tab", { name: "token.ts" });
   await expect(tab).toHaveCount(0);

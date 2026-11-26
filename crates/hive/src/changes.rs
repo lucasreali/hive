@@ -117,7 +117,7 @@ fn merge_base(dir: &Path, branch: Option<&str>) -> Result<String, String> {
 }
 
 /// The commit `id` from the app: only a full id (40 or 64 hex digits), checked to be a commit
-/// of the repository at `dir`.
+/// of the repository at `dir` (any failure of git's says it is not).
 fn verify(dir: &Path, id: &str) -> Result<String, String> {
     let hex = matches!(id.len(), 40 | 64) && id.bytes().all(|b| b.is_ascii_hexdigit());
     if !hex {
@@ -127,8 +127,7 @@ fn verify(dir: &Path, id: &str) -> Result<String, String> {
     let args = ["rev-parse", "--verify", "--quiet", "--end-of-options", &rev];
     match git::output(dir, &args, &[0, 1]) {
         Ok(out) if !out.is_empty() => Ok(lossy(out.trim_ascii())),
-        Ok(_) => Err(GONE.to_owned()),
-        Err(err) => Err(err.to_string()),
+        _ => Err(GONE.to_owned()),
     }
 }
 
@@ -250,7 +249,9 @@ fn log(dir: &Path, branch: Option<String>, most: usize) -> io::Result<(Vec<Commi
     let mine: Vec<&str> = mine.lines().collect();
     let fields: Vec<String> = out.split(|&b| b == 0).map(lossy).collect();
     let mut commits: Vec<CommitInfo> = fields
-        .chunks_exact(5)
+        .as_chunks::<5>()
+        .0
+        .iter()
         .map(|c| CommitInfo {
             on_branch: mine.contains(&c[0].as_str()),
             id: c[0].clone(),

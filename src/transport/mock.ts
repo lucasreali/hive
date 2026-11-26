@@ -3,6 +3,7 @@ import type {
   Alert,
   AppMode,
   ChangedFile,
+  CommitInfo,
   DiffBase,
   Dirs,
   FileMedia,
@@ -21,6 +22,7 @@ import type {
   Subagent,
   TableEdit,
   TableText,
+  TurnBase,
   UninstallList,
   Worktree,
 } from "../protocol";
@@ -624,6 +626,38 @@ const mockFiles = (worktree: Worktree) =>
 
 /** The service's reason a branch base falls back to HEAD without a branch to compare with. */
 const NO_BRANCH = "No branch to compare with: this is the main worktree, or it is detached";
+/** The service's reasons a turn or a commit base falls back to HEAD (27.2). */
+const NO_TURN = "No snapshot of this agent's last turn in this worktree";
+const NO_COMMIT = "This commit is not in the repository";
+
+/** The agents with a snapshot of their last turn in every fake worktree (27.2), latest first. */
+export const MOCK_TURNS: TurnBase[] = [
+  {
+    session: "mock-turn-1",
+    title: "fix login redirect",
+    started_ms: 1_700_000_300_000,
+    late: false,
+  },
+  { session: "mock-turn-2", title: "write the tests", started_ms: 1_700_000_100_000, late: true },
+];
+
+/** A fake worktree's last commits (27.2): two of its branch, then older ones. */
+export const MOCK_COMMITS: CommitInfo[] = [
+  ["a1b2c3d", "Fix the login redirect", true],
+  ["b2c3d4e", "Add the session store", true],
+  ["c3d4e5f", "Bump the dependencies", false],
+  ["d4e5f60", "Initial commit", false],
+].map(([short, subject, on_branch], i) => ({
+  id: `${short}${"0".repeat(33)}`,
+  short: short as string,
+  author: i % 2 ? "Ana Souza" : "Lucas",
+  time_ms: 1_700_000_000_000 - i * 86_400_000,
+  subject: subject as string,
+  on_branch: on_branch as boolean,
+}));
+
+/** What changed in a fake worktree since an agent's last turn: its last changed file. */
+const sinceTurn = (path: string) => (MOCK_CHANGES[path] ?? []).slice(-1);
 
 /** A stand-in for `hive::changes::answer`: the fake worktree's changes, or why not. */
 function changes(projects: Project[], path: string, asked: DiffBase): ServiceMessage {
@@ -631,23 +665,33 @@ function changes(projects: Project[], path: string, asked: DiffBase): ServiceMes
   if (!project) {
     const error = `${path} is not a worktree of a followed project`;
     const none = { base: "head", branch: null, base_error: null } as const;
-    return { type: "changes", path, ...none, files: [], added: 0, removed: 0, error };
+    return { type: "changes", path, ...none, files: [], added: 0, removed: 0, error, turns: [] };
   }
-  // The same files against either base: only the answer's base changes.
+  // The same files against HEAD, the branch or a commit: only the answer's base changes.
   const main = project.worktrees.find((w) => w.main);
   const branch = main && main.path !== path ? main.branch : null;
-  const fallback = asked === "branch" && !branch;
-  const files = MOCK_CHANGES[path] ?? [];
+  const turn = typeof asked === "object" && "turn" in asked ? asked.turn.session : null;
+  const commit = typeof asked === "object" && "commit" in asked ? asked.commit.id : null;
+  const why =
+    asked === "branch" && !branch
+      ? NO_BRANCH
+      : turn !== null && !MOCK_TURNS.some((t) => t.session === turn)
+        ? NO_TURN
+        : commit !== null && !MOCK_COMMITS.some((c) => c.id === commit)
+          ? NO_COMMIT
+          : null;
+  const files = turn !== null && !why ? sinceTurn(path) : (MOCK_CHANGES[path] ?? []);
   return {
     type: "changes",
     path,
-    base: fallback ? "head" : asked,
+    base: why ? "head" : asked,
     branch,
-    base_error: fallback ? NO_BRANCH : null,
+    base_error: why,
     files,
     added: sum(files, "added"),
     removed: sum(files, "removed"),
     error: null,
+    turns: MOCK_TURNS,
   };
 }
 
@@ -1677,6 +1721,12 @@ export function createMockTransport(
     async listChanges(path, base) {
       later(changes(projects, path, base));
     },
+    async listCommits(path) {
+      const followed = worktreeAt(path);
+      const error = followed ? null : `${path} is not a worktree of a followed project`;
+      const commits = followed ? MOCK_COMMITS : [];
+      later({ type: "commits", path, commits, truncated: false, error });
+    },
     async listScripts(path) {
       scriptsAsked = holder(path) ? path : null;
       later(scriptsOfWorktree(path));
@@ -1732,10 +1782,15 @@ export function createMockTransport(
       );
       later({ type: "search_results", ...answer, matches, error: null });
     },
-    async openFile(worktree, path) {
+    async openFile(worktree, path, base) {
       // A folder project's file has no base (23.1).
       const folder = holder(worktree)?.folder;
-      later({ type: "file", ...fileAt(worktree, path), ...(folder && { base: null }) });
+      const read = fileAt(worktree, path);
+      // Since an agent's turn, a file it did not change is as it was then (27.2).
+      const turn = typeof base === "object" && "turn" in base;
+      const same = turn && !sinceTurn(worktree).some((f) => f.path === path);
+      const at = folder ? { base: null } : same ? { base: read.content } : {};
+      later({ type: "file", ...read, ...at });
     },
     async openTable(worktree, path) {
       later({ type: "table", ...table(fileAt(worktree, path)) });

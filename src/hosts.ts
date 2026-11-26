@@ -52,6 +52,7 @@ export const REMOTE_TYPES = [
   "delete_session_failed",
   "files",
   "changes",
+  "commits",
   "scripts",
   "search_results",
   "file",

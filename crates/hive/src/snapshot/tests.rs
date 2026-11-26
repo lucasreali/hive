@@ -179,6 +179,8 @@ fn no_hook_or_filter_of_the_repository_runs() {
     run(&root, &["config", "filter.spy.clean", &filter]);
     run(&root, &["config", "filter.spy.required", "true"]);
     run(&root, &["config", "filter.other.smudge", "cat"]);
+    // A key without a driver's name names no driver.
+    run(&root, &["config", "filter.lonely", "x"]);
     std::fs::write(root.join(".gitattributes"), "* filter=spy\n").unwrap();
     std::fs::write(root.join("a"), "changed").unwrap();
     let turn = take(&snapshots, &root, "s", 1);
@@ -291,6 +293,11 @@ fn past_the_size_cap_the_oldest_snapshots_go() {
     assert_eq!(kept, ["c", "b"]);
     assert!(store.size() <= one * 5 / 2);
     assert_eq!(third.session, "c");
+    // At the cap exactly, nothing goes (a snapshot of nothing new adds no object).
+    let exact = Snapshots::new(snapshots.root.clone()).with_limits(store.size(), Duration::MAX);
+    take(&exact, &root, "e", 4);
+    let kept: Vec<String> = store.read().turns.into_iter().map(|t| t.session).collect();
+    assert_eq!(kept, ["e", "c", "b"]);
     // A snapshot bigger than the cap alone is not kept.
     let tiny = Snapshots::new(snapshots.root.clone()).with_limits(1, Duration::ZERO);
     let err = tiny.take(&root, &id(&root), "d", 4).unwrap_err();
@@ -299,6 +306,31 @@ fn past_the_size_cap_the_oldest_snapshots_go() {
         "this turn's snapshot was too large to keep"
     );
     assert_eq!(store.read().turns, []);
+}
+
+#[test]
+fn a_store_is_pruned_at_most_once_in_a_while() {
+    let (_tmp, root, snapshots) = repo();
+    // What a listing hashed and no snapshot keeps: a loose object of the store.
+    let listed = |snapshots: &Snapshots, text: &str| {
+        take(snapshots, &root, "s", 1);
+        std::fs::write(root.join("a"), text).unwrap();
+        let since = snapshots.since(&root, &id(&root), "s").unwrap();
+        since.list().unwrap();
+        let oid = git::output(&root, &["hash-object", "a"], &[0]).unwrap();
+        std::fs::write(root.join("a"), "a").unwrap();
+        take(snapshots, &root, "s", 2);
+        let index = since.store.index(&id(&root));
+        let oid = String::from_utf8_lossy(oid.trim_ascii()).into_owned();
+        since
+            .store
+            .work(&root, &index, &args(&["cat-file", "-e", &oid]))
+            .is_ok()
+    };
+    let rarely = Snapshots::new(snapshots.root.clone()).with_limits(SIZE_CAP, Duration::MAX);
+    assert!(listed(&rarely, "listed once"));
+    let always = Snapshots::new(snapshots.root.clone()).with_limits(SIZE_CAP, Duration::ZERO);
+    assert!(!listed(&always, "listed twice"));
 }
 
 #[test]

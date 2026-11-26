@@ -162,6 +162,7 @@ export type ServiceMessage =
   // A refused request, e.g. watching a worktree that is not followed. Not stored.
   | { type: "error"; message: string }
   | ({ type: "changes" } & Changes)
+  | ({ type: "commits" } & Commits)
   | ({ type: "scripts" } & WorktreeScripts)
   | ({ type: "file" } & FileText)
   // Consumed by the Tauri side (26.16), never forwarded to the UI: it answers with
@@ -422,10 +423,44 @@ export type ChangedFile = {
 };
 
 /**
- * What a worktree's changes are compared with (9.11): its HEAD, or the merge-base with the main
- * worktree's branch (the service finds it).
+ * What a worktree's changes are compared with (9.11, 27.2): its HEAD, the merge-base with the main
+ * worktree's branch (the service finds it), the worktree as it was when an agent's last turn
+ * started (the service's snapshot), or a commit picked by its full id.
  */
-export type DiffBase = "head" | "branch";
+export type DiffBase =
+  | "head"
+  | "branch"
+  | { turn: { session: string } }
+  | { commit: { id: string } };
+
+/** Mirrors `hive_protocol::TurnBase`: an agent whose last turn the worktree can be compared with. */
+export type TurnBase = {
+  session: string;
+  /** The agent's title, or the start of its session id. */
+  title: string;
+  started_ms: number;
+  /** The snapshot finished after the agent's first edit: that edit may be missing. */
+  late: boolean;
+};
+
+/** Mirrors `hive_protocol::CommitInfo`: a commit the worktree can be compared with (27.2). */
+export type CommitInfo = {
+  id: string;
+  short: string;
+  author: string;
+  time_ms: number;
+  subject: string;
+  /** Made on the worktree's branch since it left the main worktree's branch. */
+  on_branch: boolean;
+};
+
+/** A worktree's last commits (`commits`), its branch's first. */
+export type Commits = {
+  path: string;
+  commits: CommitInfo[];
+  truncated: boolean;
+  error: string | null;
+};
 
 /** A worktree's changes against its base, sorted by path, with the service's totals. */
 export type Changes = {
@@ -439,6 +474,8 @@ export type Changes = {
   added: number;
   removed: number;
   error: string | null;
+  /** The agents whose last turn can be compared with, the latest first (absent before 27.2). */
+  turns?: TurnBase[];
 };
 
 /**

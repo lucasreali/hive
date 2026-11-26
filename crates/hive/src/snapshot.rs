@@ -394,10 +394,8 @@ impl Repo {
         };
         let common = PathBuf::from(git::os_string(next()?));
         let index = dir.join(git::os_string(next()?));
+        // Git's own output, passed back to git as one argument.
         let format = String::from_utf8_lossy(next()?).into_owned();
-        if !format.bytes().all(|b| b.is_ascii_alphanumeric()) {
-            return Err(io::Error::other("git named an odd object format"));
-        }
         Ok(Self {
             common,
             index,
@@ -498,11 +496,9 @@ impl Store {
     /// starts afresh.
     fn refresh(&self, worktree: &Path, repo: &Repo, index: &Path) -> io::Result<()> {
         let refreshed = (|| {
-            if !index.exists() {
-                match std::fs::copy(&repo.index, index) {
-                    Err(err) if err.kind() != io::ErrorKind::NotFound => return Err(err),
-                    _ => {}
-                }
+            // No index yet (nothing ever staged): the snapshot index starts empty.
+            if !index.exists() && repo.index.exists() {
+                std::fs::copy(&repo.index, index)?;
             }
             self.work(worktree, index, &args(&["add", "-A"])).map(drop)
         })();
