@@ -122,10 +122,16 @@ async fn an_agents_edit_is_found_from_its_line_after_a_restart() {
         ),
         ("src/lib.rs", 1, Some(2))
     );
-    // Written at shutdown, kept private, never inside the repository.
+    // Written within a few seconds while the service runs, kept private, never inside the
+    // repository.
+    let dir = repo.env.path("data/hive/provenance");
+    let started = std::time::Instant::now();
+    while std::fs::read_dir(&dir).map_or(0, |d| d.count()) == 0 {
+        assert!(started.elapsed() < Duration::from_secs(10), "never written");
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
     drop(app);
     stop(daemon);
-    let dir = repo.env.path("data/hive/provenance");
     let stored: Vec<_> = std::fs::read_dir(&dir).unwrap().flatten().collect();
     assert_eq!(stored.len(), 1, "{stored:?}");
     let text = std::fs::read_to_string(stored[0].path()).unwrap();

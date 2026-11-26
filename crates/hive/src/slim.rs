@@ -667,6 +667,30 @@ mod tests {
     }
 
     #[test]
+    fn a_slimmed_payload_of_exactly_the_limit_is_sent_whole() {
+        let size = |p: &Value| serde_json::to_vec(p).unwrap().len();
+        let limit = crate::hook::MAX_INPUT;
+        // `cwd` padded so the slimmed payload is exactly the limit, edit included.
+        let mut payload = edit_payload(one_hunk());
+        payload["cwd"] = json!("");
+        let pad = limit - size(&slim(payload.clone()));
+        payload["cwd"] = json!("c".repeat(pad));
+        let slimmed = slim(payload.clone());
+        assert_eq!(size(&slimmed), limit);
+        assert!(slimmed.get("hive_edit").is_some());
+        // Without its edit, exactly the limit: the rest is sent, not only the ids.
+        let mut bare = slimmed;
+        let edit_len = size(&bare);
+        bare.as_object_mut().unwrap().remove("hive_edit");
+        let edit_len = edit_len - size(&bare);
+        payload["cwd"] = json!("c".repeat(pad + edit_len));
+        let slimmed = slim(payload);
+        assert_eq!(slimmed.get("hive_edit"), None);
+        assert_eq!(slimmed.get("hive_error"), None);
+        assert_eq!(size(&slimmed), limit);
+    }
+
+    #[test]
     fn a_slimmed_payload_too_large_to_send_loses_its_edit_then_all_but_its_ids() {
         let big = |n: usize| json!(vec![json!({"id": "x".repeat(100)}); n]);
         let mut payload = edit_payload(one_hunk());

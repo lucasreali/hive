@@ -1098,6 +1098,9 @@ fn a_commits_file_gives_the_line_and_its_context() {
     .unwrap();
     repo.commit("big");
     assert!(at_commit(&repo.root, "HEAD", "big.txt", 1).is_none());
+    std::fs::write(repo.root.join("big.txt"), "x".repeat(FILE_BYTES as usize)).unwrap();
+    repo.commit("at the cap");
+    assert!(at_commit(&repo.root, "HEAD", "big.txt", 1).is_some());
 }
 
 #[test]

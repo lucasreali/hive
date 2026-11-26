@@ -158,7 +158,8 @@ pub fn diff(old: &[u64], new: &[u64]) -> LineMap {
 /// [`MAX_EDITS`].
 fn myers(a: &[u64], b: &[u64]) -> Option<Vec<(usize, usize)>> {
     let (n, m) = (a.len() as isize, b.len() as isize);
-    let limit = (a.len() + b.len()).min(MAX_EDITS) as isize;
+    // A script never needs more than `n + m` edits, so the loop ends by then.
+    let limit = MAX_EDITS as isize;
     let off = limit + 1;
     let mut v = vec![0isize; 2 * off as usize + 1];
     // Before each step d, the diagonals -(d+1)..=d+1 it reads.
@@ -272,7 +273,7 @@ pub fn relocate_scored(
     };
     // Bounded by the input and by [`RELOCATE_WORK`]: past it the text is too ambiguous to place.
     let mut work = 0usize;
-    let mut best: Option<(usize, usize)> = None;
+    let mut found = Vec::new();
     for at in 0..=file.len() - len {
         if file[at] != anchor.lines[0] {
             continue;
@@ -284,13 +285,12 @@ pub fn relocate_scored(
         if file[at..at + len] != anchor.lines[..] {
             continue;
         }
-        let rank = |(score, at): (usize, usize)| (std::cmp::Reverse(score), at.abs_diff(hint), at);
-        let found = (score(at), at);
-        if best.is_none_or(|b| rank(found) < rank(b)) {
-            best = Some(found);
-        }
+        found.push((score(at), at));
     }
-    best.map(|(score, at)| (at..at + len, score))
+    found
+        .into_iter()
+        .min_by_key(|&(score, at)| (std::cmp::Reverse(score), at.abs_diff(hint), at))
+        .map(|(score, at)| (at..at + len, score))
 }
 
 /// Packs hashes as base64 (standard alphabet, padded) of their little-endian bytes, for a
