@@ -264,15 +264,7 @@ pub fn read_since(dir: &Path, path: &str, since: &Since) -> io::Result<(Side, Si
     let disk = on_disk(dir, relative(path)?)?;
     let blob = match parse_ls_tree(&since.ls_tree(path)?) {
         Some(blob) => Some(blob),
-        None => {
-            let renamed = changes::parse_raw(&since.raw()?)
-                .into_iter()
-                .find(|entry| entry.0 == path.as_bytes() && entry.1 == FileStatus::Renamed);
-            match renamed.and_then(|(_, _, from)| from) {
-                Some(from) => parse_ls_tree(&since.ls_tree(&String::from_utf8_lossy(&from))?),
-                None => None,
-            }
-        }
+        None => renamed_since(since, path)?,
     };
     let base = match blob {
         None => Side::Missing,
@@ -280,6 +272,20 @@ pub fn read_since(dir: &Path, path: &str, since: &Since) -> io::Result<(Side, Si
         Some((oid, _)) => Side::Bytes(since.blob(&oid)?),
     };
     Ok((disk, base))
+}
+
+/// The blob, at the turn `since`, of the file a rename since then moved to `path`, if any.
+fn renamed_since(since: &Since, path: &str) -> io::Result<Option<(String, u64)>> {
+    let raw = since.raw()?;
+    let renamed = changes::parse_raw(&raw)
+        .into_iter()
+        .find(|entry| entry.0 == path.as_bytes() && entry.1 == FileStatus::Renamed);
+    let Some(from) = renamed.and_then(|(_, _, from)| from) else {
+        return Ok(None);
+    };
+    Ok(parse_ls_tree(
+        &since.ls_tree(&String::from_utf8_lossy(&from))?,
+    ))
 }
 
 /// [`read`] in a folder in no repository (a folder project's, 23.1): no base.
@@ -2706,6 +2712,12 @@ mod tests {
         assert_eq!(at("exact").1, bytes(&exact));
         // A path from the app is checked as ever.
         assert!(read_at(&against(), "../x").is_err());
+        // Without a turn, the base is HEAD (or the commit).
+        let head = changes::Against {
+            dir: root.clone(),
+            ..changes::Against::default()
+        };
+        assert_eq!(read_at(&head, "a").unwrap(), (bytes("a2"), bytes("a")));
         // A snapshot no longer whole: the base side at HEAD.
         let since = against();
         let store = std::fs::read_dir(tmp.path().join("snapshots")).unwrap();

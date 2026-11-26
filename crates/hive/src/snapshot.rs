@@ -407,7 +407,8 @@ impl Repo {
         let mut lines = out.split(|&b| b == b'\n').filter(|line| !line.is_empty());
         let mut next = || {
             let line = lines.next();
-            line.ok_or_else(|| io::Error::other("git did not name the repository"))
+            line.ok_or("git did not name the repository")
+                .map_err(io::Error::other)
         };
         let common = PathBuf::from(git::os_string(next()?));
         let index = dir.join(git::os_string(next()?));
@@ -595,7 +596,7 @@ impl Store {
         let tree = String::from_utf8_lossy(out.trim_ascii()).into_owned();
         // Git's own output, checked as a stored one is.
         let written = object_id(&tree).then_some(tree);
-        written.ok_or_else(|| io::Error::other("git wrote no tree"))
+        written.ok_or("git wrote no tree").map_err(io::Error::other)
     }
 
     /// The ref keeping `turn`'s tree.
