@@ -122,20 +122,16 @@ fn why(verb: &str, err: &io::Error) -> String {
 /// errors (the arguments may hold a long message).
 fn run(
     dir: &Path,
-    args: &[&OsStr],
+    (verb, args): (&str, &[&OsStr]),
     input: &[u8],
     env: &[(&str, String)],
     time: Duration,
 ) -> Result<Vec<u8>, String> {
-    let verb = args
-        .iter()
-        .find(|arg| !arg.to_string_lossy().starts_with('-'))
-        .map_or_else(String::new, |verb| verb.to_string_lossy().into_owned());
     let mut command = git::command(dir).map_err(|err| err.to_string())?;
     worktree::quiet(command.args(args), env);
-    let shown = [OsStr::new(&verb)];
+    let shown = [OsStr::new(verb)];
     git::limited(command, "git", &shown, input, &[0], OUTPUT, Some(time))
-        .map_err(|err| why(&verb, &err))
+        .map_err(|err| why(verb, &err))
 }
 
 /// Checks the paths the app sent: 1 to [`PATHS_LIMIT`] of them, each relative to the
@@ -186,7 +182,8 @@ pub fn stage(dir: &Path, paths: &[String], staged: bool) -> Result<String, Strin
     };
     let args = [&["--literal-pathspecs"][..], verb, &from_stdin].concat();
     let args: Vec<&OsStr> = args.iter().map(OsStr::new).collect();
-    run(dir, &args, &input, &[], COMMIT_TIME)?;
+    let verb = if staged { "add" } else { "reset" };
+    run(dir, (verb, &args), &input, &[], COMMIT_TIME)?;
     let files = match paths {
         [one] => one.clone(),
         many => format!("{} files", many.len()),
@@ -213,7 +210,7 @@ pub fn commit(dir: &Path, message: &str, env: &[(&str, String)]) -> Result<Strin
     // One argument: a message starting with `-` is still the message.
     let message = format!("--message={message}");
     let args = [OsStr::new("commit"), OsStr::new(&message)];
-    run(dir, &args, &[], env, COMMIT_TIME)?;
+    run(dir, ("commit", &args), &[], env, COMMIT_TIME)?;
     let args = ["log", "-1", "--format=%h%x00%s"];
     let out = git::output(dir, &args, &[0]).unwrap_or_default();
     let out = String::from_utf8_lossy(&out);
@@ -353,7 +350,7 @@ pub fn push(dir: &Path, env: &[(&str, String)], confirmed: (&str, &str)) -> Resu
     }
     let args = push_args(&target);
     let args: Vec<&OsStr> = args.iter().map(OsStr::new).collect();
-    run(dir, &args, &[], env, PUSH_TIME)?;
+    run(dir, ("push", &args), &[], env, PUSH_TIME)?;
     let set = match target.set_upstream {
         true => ", now its upstream",
         false => "",
