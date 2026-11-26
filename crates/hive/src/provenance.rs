@@ -595,12 +595,14 @@ impl Provenance {
         };
         let real = canonical(Path::new(&claim.file))?;
         let root = canonical(Path::new(&worktree))?;
-        let Some(rel) = real
+        // `/`-separated, as git and the app name it on every system.
+        let parts: Option<Vec<&str>> = real
             .strip_prefix(&root)
             .ok()
-            .and_then(Path::to_str)
-            .and_then(relative)
-            .map(str::to_owned)
+            .and_then(|rel| rel.components().map(|c| c.as_os_str().to_str()).collect());
+        let Some(rel) = parts
+            .map(|parts| parts.join("/"))
+            .filter(|rel| relative(rel).is_some())
         else {
             return Ok(());
         };

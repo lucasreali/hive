@@ -9,6 +9,20 @@ use crate::health::tests::run;
 
 const T0: u64 = 1_699_000_000_000;
 
+/// The start of an absolute path on this system.
+#[cfg(unix)]
+const ROOT: &str = "/";
+#[cfg(windows)]
+const ROOT: &str = "C:\\";
+#[cfg(unix)]
+const ABS_A: &str = "/w/a";
+#[cfg(windows)]
+const ABS_A: &str = "C:\\w\\a";
+#[cfg(unix)]
+const ABS_N: &str = "/w/n";
+#[cfg(windows)]
+const ABS_N: &str = "C:\\w\\n";
+
 fn h(lines: &[&str]) -> Vec<u64> {
     lines
         .iter()
@@ -197,44 +211,44 @@ fn the_run_around_a_line_has_its_origin() {
 #[test]
 fn a_hook_edit_is_checked_before_it_is_believed() {
     let packed = anchor::pack(&[1, 2]);
-    let good = json!({"file": "/w/a", "kind": "edit", "whole": false, "user_modified": true,
+    let good = json!({"file": ABS_A, "kind": "edit", "whole": false, "user_modified": true,
         "added": [[3, 2, packed]]});
     let claim = claimed(&good).unwrap();
     assert_eq!(claim.added, [(3, 2, packed.clone())]);
     assert!(claim.user_modified && !claim.whole && !claim.file_level);
-    let notebook = json!({"file": "/w/n", "kind": "notebook", "added": [], "whole": true});
+    let notebook = json!({"file": ABS_N, "kind": "notebook", "added": [], "whole": true});
     let claim = claimed(&notebook).unwrap();
     assert!(claim.file_level && claim.whole && !claim.user_modified);
     // Hashes that do not unpack to the count keep the range only.
-    let short = json!({"file": "/w/a", "kind": "create", "added": [[1, 3, packed]]});
+    let short = json!({"file": ABS_A, "kind": "create", "added": [[1, 3, packed]]});
     assert_eq!(claimed(&short).unwrap().added, [(1, 3, String::new())]);
     let last = FILE_LINES;
-    let at_end = json!({"file": "/w/a", "kind": "edit", "added": [[last, 1, ""]]});
+    let at_end = json!({"file": ABS_A, "kind": "edit", "added": [[last, 1, ""]]});
     assert!(claimed(&at_end).is_some());
     let many: Vec<Value> = (0..MAX_RUNS).map(|i| json!([i + 1, 1, ""])).collect();
-    assert!(claimed(&json!({"file": "/w/a", "kind": "edit", "added": many})).is_some());
+    assert!(claimed(&json!({"file": ABS_A, "kind": "edit", "added": many})).is_some());
     let too_many: Vec<Value> = (0..=MAX_RUNS).map(|i| json!([i + 1, 1, ""])).collect();
-    let long = format!("/{}", "a".repeat(PATH_LIMIT));
+    let long = format!("{ROOT}{}", "a".repeat(PATH_LIMIT));
     for bad in [
         json!({"file": "a", "kind": "edit", "added": []}),
         json!({"file": long, "kind": "edit", "added": []}),
         json!({"file": 3, "kind": "edit", "added": []}),
-        json!({"file": "/w/a", "kind": "delete", "added": []}),
-        json!({"file": "/w/a", "added": []}),
-        json!({"file": "/w/a", "kind": "edit"}),
-        json!({"file": "/w/a", "kind": "edit", "added": too_many}),
-        json!({"file": "/w/a", "kind": "edit", "added": [[0, 1, ""]]}),
-        json!({"file": "/w/a", "kind": "edit", "added": [[1, 0, ""]]}),
-        json!({"file": "/w/a", "kind": "edit", "added": [[last + 1, 1, ""]]}),
-        json!({"file": "/w/a", "kind": "edit", "added": [[1, last + 1, ""]]}),
-        json!({"file": "/w/a", "kind": "edit", "added": [["1", 1, ""]]}),
-        json!({"file": "/w/a", "kind": "edit", "added": [[1, "1", ""]]}),
-        json!({"file": "/w/a", "kind": "edit", "added": [[1, 1, 3]]}),
+        json!({"file": ABS_A, "kind": "delete", "added": []}),
+        json!({"file": ABS_A, "added": []}),
+        json!({"file": ABS_A, "kind": "edit"}),
+        json!({"file": ABS_A, "kind": "edit", "added": too_many}),
+        json!({"file": ABS_A, "kind": "edit", "added": [[0, 1, ""]]}),
+        json!({"file": ABS_A, "kind": "edit", "added": [[1, 0, ""]]}),
+        json!({"file": ABS_A, "kind": "edit", "added": [[last + 1, 1, ""]]}),
+        json!({"file": ABS_A, "kind": "edit", "added": [[1, last + 1, ""]]}),
+        json!({"file": ABS_A, "kind": "edit", "added": [["1", 1, ""]]}),
+        json!({"file": ABS_A, "kind": "edit", "added": [[1, "1", ""]]}),
+        json!({"file": ABS_A, "kind": "edit", "added": [[1, 1, 3]]}),
     ] {
         assert!(claimed(&bad).is_none(), "{bad}");
     }
     assert_eq!(
-        claimed(&json!({"file": "/w/a", "kind": "edit", "added": [], "whole": true}))
+        claimed(&json!({"file": ABS_A, "kind": "edit", "added": [], "whole": true}))
             .map(|c| c.whole),
         Some(true)
     );
@@ -607,6 +621,16 @@ fn an_editor_save_starts_following_a_file_and_bad_paths_are_ignored() {
     store.saved(&repo.projects, &repo.worktree(), "../b.txt", T0);
     store.saved(&repo.projects, "/elsewhere", "b.txt", T0);
     assert_eq!(store.inner().repos.len(), 1);
+    // A save of a file gone meanwhile follows nothing and changes nothing.
+    store.inner().dirty.clear();
+    store.saved(&repo.projects, &repo.worktree(), "gone.txt", T0);
+    let inner = store.inner();
+    assert!(inner.dirty.is_empty());
+    assert!(!inner.repos[&repo.worktree()].maps[&repo.worktree()].contains_key("gone.txt"));
+    drop(inner);
+    // Without a folder, a removed project only leaves memory.
+    store.project_removed(&repo.worktree());
+    assert!(store.inner().repos.is_empty());
 }
 
 #[test]
@@ -650,7 +674,9 @@ fn records_survive_a_restart_and_a_malformed_file_is_set_aside() {
     );
     other.flush();
     let text = std::fs::read_to_string(&written).unwrap();
-    std::fs::write(&written, text.replace(&repo.worktree(), "/elsewhere")).unwrap();
+    let quoted = |p: &str| serde_json::to_string(p).unwrap();
+    let text = text.replace(&quoted(&repo.worktree()), &quoted("/elsewhere"));
+    std::fs::write(&written, text).unwrap();
     assert!(
         Provenance::new(Some(dir))
             .files_changed(&repo.projects, T0)
@@ -698,7 +724,10 @@ fn a_worktree_gone_drops_its_maps_and_a_project_removed_its_file() {
     store.flush();
     let text = std::fs::read_to_string(&written).unwrap();
     let moved = text.replace(
-        &format!("\"worktrees\":{{\"{}\"", repo.worktree()),
+        &format!(
+            "\"worktrees\":{{{}",
+            serde_json::to_string(&repo.worktree()).unwrap()
+        ),
         "\"worktrees\":{\"/gone/worktree\"",
     );
     assert_ne!(moved, text);
@@ -1094,7 +1123,7 @@ fn the_store_key_names_one_file_per_project() {
 #[test]
 fn hostile_numbers_in_a_hook_edit_are_refused() {
     let two = anchor::pack(&[1, 3]);
-    let edit = |added: Value| json!({"file": "/w/a", "kind": "edit", "added": added});
+    let edit = |added: Value| json!({"file": ABS_A, "kind": "edit", "added": added});
     // Overflowing, out of order, overlapping.
     for bad in [
         json!([[u64::MAX, 2, two]]),
@@ -1112,7 +1141,7 @@ fn hostile_numbers_in_a_hook_edit_are_refused() {
     assert!(claimed(&edit(json!([run(1, half), run(half + 1, half + 1)]))).is_none());
     assert!(claimed(&edit(json!([run(1, half), [half + 1, half + 1, ""]]))).is_some());
     // A whole file is one run.
-    let whole = json!({"file": "/w/a", "kind": "create", "whole": true,
+    let whole = json!({"file": ABS_A, "kind": "create", "whole": true,
         "added": [[1, 1, ""], [3, 1, ""]]});
     assert!(claimed(&whole).is_none());
 }
@@ -1386,8 +1415,8 @@ fn the_caps_are_the_approved_ones() {
 
 #[test]
 fn a_hook_edit_path_may_be_as_long_as_the_limit() {
-    let at = format!("/{}", "a".repeat(PATH_LIMIT - 1));
-    let over = format!("/{}", "a".repeat(PATH_LIMIT));
+    let at = format!("{ROOT}{}", "a".repeat(PATH_LIMIT - ROOT.len()));
+    let over = format!("{ROOT}{}", "a".repeat(PATH_LIMIT - ROOT.len() + 1));
     let edit = |file: &str| json!({"file": file, "kind": "edit", "added": []});
     assert!(claimed(&edit(&at)).is_some());
     assert!(claimed(&edit(&over)).is_none());
