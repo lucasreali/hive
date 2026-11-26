@@ -742,6 +742,14 @@ Created 2026-11-25 at the human's request: a complete review of Hive, mainly of 
 - [ ] **31.11 Consolidate the findings.** `main` — Needs 31.3–31.10. `docs/review/README.md`: every finding in one table, sorted by priority, duplicates merged, and the refactor tasks proposed from them (each with the findings it closes, the expected gain, its risk and its dependencies), grouped in waves that can run in parallel, with "changes #N" proposals listed apart for the human's decision. ⏸ Checkpoint: the human approves which findings become tasks; the approved ones are written here as 31.12… (D31.1).
 - [ ] **31.12 Stage 31 hand check.** `main` — After the approved refactor tasks: the human uses Hive for a day on real work; 31.7's measurements are taken again and compared in `docs/review/performance.md`. ⏸ Checkpoint.
 
+## Stage 32 — Pinned tabs
+
+Created 2026-11-26 at the human's request: "quero conseguir fixar um chat para evitar que feche acidentalmente um chat". Today a chat tab (#40) closes with its close button or menu, with a confirmation only while its agent is 🔵, 🟣, 🟡 or 🟠 (#18); an idle chat closes at once and its conversation is gone from the tab bar (#57).
+
+- [ ] **32.1 Design: pin a tab.** `main` — No code. A proposal for the human: which tabs can be pinned (chats only, or terminals and files too); what a pin does (no close button, "Close" disabled or asking for confirmation in the tab's menu and the palette (6.3), skipped by "close others / close all", kept when the worktree's tabs are closed in bulk, what happens when the worktree is removed or the app quits, #44 resume); how it looks (a pin icon, a narrower tab, pinned tabs first in the bar or in place, #57); how to pin and unpin (tab context menu, a palette command, a shortcut only if #35 allows one); where the pin is kept (UI state in `localStorage` per worktree beside the tab order, #57 and #37, or in the service if it must survive a reinstall or another app connected over SSH, Stage 26/28). Marked "changes #N" where a decision of `docs/hive.md` moves; the human updates `docs/hive.md`. ⏸ Checkpoint.
+- [ ] **32.2 Pinned tabs.** `task/32.2-pinned-tabs` — Needs 32.1's approval. Build the approved design. Tests: bun (pin/unpin, the close paths refused or confirmed, the order, the persistence and its fallback when storage is empty or throws); Playwright on the mock transport (pin a chat, try every close path, reload, the pin and the order are kept), in One Dark and One Light.
+- [ ] **32.3 Stage 32 hand check.** `main` — The human pins a chat in the real app, tries to close it every way (button, menu, palette, closing other tabs, closing the worktree), quits and reopens Hive. ⏸ Checkpoint.
+
 ---
 
 ## Not now (Fase 2)
