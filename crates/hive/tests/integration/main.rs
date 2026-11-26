@@ -57,6 +57,9 @@ mod registry;
 mod remote;
 #[cfg(unix)]
 #[cfg(test)]
+mod review;
+#[cfg(unix)]
+#[cfg(test)]
 mod scripts;
 #[cfg(unix)]
 #[cfg(test)]

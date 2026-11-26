@@ -20,7 +20,7 @@ use super::{Gone, State};
 use crate::VERSION;
 use crate::adapter::{self, Adapter, ClaudeCode};
 use crate::terminal::Input;
-use crate::{changes, dirs, file, procs, table, table_edit, uninstall, worktree};
+use crate::{changes, dirs, file, procs, review, table, table_edit, uninstall, worktree};
 
 /// Longest `hive badge` label, in characters.
 const MAX_BADGE: usize = 40;
@@ -638,6 +638,63 @@ async fn app_frame(
                 },
             }
         }),
+        Ok(Control::CreateReview { path }) => {
+            state.change_worktrees(move |projects| match review::create(projects, &path) {
+                Ok((project, created)) => Control::WorktreeCreated {
+                    project,
+                    path: created.path.to_string_lossy().into_owned(),
+                    notes: created.notes,
+                },
+                Err(err) => Control::CreateWorktreeFailed {
+                    project: projects
+                        .holding(&path)
+                        .map(|(p, _)| p.id)
+                        .unwrap_or_default(),
+                    name: path,
+                    message: err.to_string(),
+                },
+            })
+        }
+        Ok(Control::PlanBringBack { path }) => state.projects(move |projects| {
+            let plan = review::plan(projects, &path);
+            Control::BringBackPlan {
+                path,
+                error: plan.as_ref().err().map(ToString::to_string),
+                plan: plan.ok(),
+            }
+        }),
+        Ok(Control::BringBack { path, tip }) => {
+            // The merge commit has the space's git identity (21.5), as its terminals would.
+            let space = tokio::task::block_in_place(|| state.projects.space_env(&path));
+            let env = crate::spaces::vars(&space);
+            state.change_worktrees(move |projects| {
+                match review::bring_back(projects, &path, &tip, &env) {
+                    Ok((project, commits, fast_forward)) => Control::BroughtBack {
+                        project,
+                        path,
+                        commits,
+                        fast_forward,
+                    },
+                    Err(err) => Control::BringBackFailed {
+                        path,
+                        message: err.to_string(),
+                    },
+                }
+            })
+        }
+        Ok(Control::DiscardReview { path, force }) => {
+            let archiving = state.clone();
+            state.change_worktrees(move |projects| {
+                let archive = |root: &str| archiving.archive(root, &path);
+                match review::discard(projects, &path, force, procs::Source::System, archive) {
+                    Ok(project) => Control::WorktreeRemoved { project, path },
+                    Err(err) => Control::RemoveWorktreeFailed {
+                        path,
+                        message: err.to_string(),
+                    },
+                }
+            })
+        }
         Ok(Control::ListChanges { path, base }) => {
             state.projects(move |projects| changes::answer(&projects.list(), path, base).0)
         }

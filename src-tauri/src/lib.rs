@@ -2055,6 +2055,26 @@ impl Host {
         self.link().send(0, &Control::RenameWorktree { path, name })
     }
 
+    /// The answer arrives as `worktree_created` or `create_worktree_failed`.
+    pub fn create_review(&self, path: String) -> Result<(), String> {
+        self.link().send(0, &Control::CreateReview { path })
+    }
+
+    /// The answer arrives as `bring_back_plan`.
+    pub fn plan_bring_back(&self, path: String) -> Result<(), String> {
+        self.link().send(0, &Control::PlanBringBack { path })
+    }
+
+    /// The answer arrives as `brought_back` or `bring_back_failed`.
+    pub fn bring_back(&self, path: String, tip: String) -> Result<(), String> {
+        self.link().send(0, &Control::BringBack { path, tip })
+    }
+
+    /// The answer arrives as `worktree_removed` or `remove_worktree_failed`.
+    pub fn discard_review(&self, path: String, force: bool) -> Result<(), String> {
+        self.link().send(0, &Control::DiscardReview { path, force })
+    }
+
     /// Answered by `files` now and after every change in the worktree.
     pub fn watch_worktree(&self, path: String, base: DiffBase) -> Result<(), String> {
         self.link().send(0, &Control::WatchWorktree { path, base })
@@ -2902,6 +2922,9 @@ const REMOTE_TO_UI: &[&str] = &[
     "remove_worktree_failed",
     "worktree_renamed",
     "rename_worktree_failed",
+    "bring_back_plan",
+    "brought_back",
+    "bring_back_failed",
     "worktree_status",
     "sessions",
     "session_deleted",
@@ -3283,6 +3306,44 @@ pub mod commands {
         name: String,
     ) -> Result<(), String> {
         hive.on(host.as_deref())?.rename_worktree(path, name)
+    }
+
+    #[tauri::command]
+    pub fn create_review(
+        hive: State<'_, Hive>,
+        host: Option<String>,
+        path: String,
+    ) -> Result<(), String> {
+        hive.on(host.as_deref())?.create_review(path)
+    }
+
+    #[tauri::command]
+    pub fn plan_bring_back(
+        hive: State<'_, Hive>,
+        host: Option<String>,
+        path: String,
+    ) -> Result<(), String> {
+        hive.on(host.as_deref())?.plan_bring_back(path)
+    }
+
+    #[tauri::command]
+    pub fn bring_back(
+        hive: State<'_, Hive>,
+        host: Option<String>,
+        path: String,
+        tip: String,
+    ) -> Result<(), String> {
+        hive.on(host.as_deref())?.bring_back(path, tip)
+    }
+
+    #[tauri::command]
+    pub fn discard_review(
+        hive: State<'_, Hive>,
+        host: Option<String>,
+        path: String,
+        force: bool,
+    ) -> Result<(), String> {
+        hive.on(host.as_deref())?.discard_review(path, force)
     }
 
     #[tauri::command]

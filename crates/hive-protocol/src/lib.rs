@@ -765,6 +765,53 @@ pub enum Control {
         name: String,
         message: String,
     },
+    /// App → service: "Review in a new worktree…" (27.4) of the worktree `path` of a followed
+    /// project: a Claude worktree `review-<name>` on a new branch of the same name, from the tip
+    /// of `path`'s branch, linked to `path` as its review (`Worktree::review_of`). Answered by
+    /// `WorktreeCreated`, or `CreateWorktreeFailed` with `path` as its name.
+    CreateReview {
+        path: String,
+    },
+    /// App → service: what "Bring changes back" of the review worktree `path` would do,
+    /// answered by `BringBackPlan`. Nothing changes.
+    PlanBringBack {
+        path: String,
+    },
+    BringBackPlan {
+        path: String,
+        /// `None` with `error` when nothing can be brought back.
+        plan: Option<ReviewPlan>,
+        error: Option<String>,
+    },
+    /// App → service, on the user's click only (#12): brings the review `path`'s commits into
+    /// its reviewed worktree's branch, in that worktree: a fast-forward when possible, else a
+    /// merge commit (never a rebase). Refused when either worktree has uncommitted changes, or
+    /// when the review's branch is no longer at `tip` (the plan shown); a conflict is aborted
+    /// and its message answered. Answered by `BroughtBack` or `BringBackFailed`.
+    BringBack {
+        path: String,
+        tip: String,
+    },
+    BroughtBack {
+        /// The project with its updated worktrees.
+        project: Project,
+        path: String,
+        /// The commits brought, and whether it was a fast-forward.
+        commits: u64,
+        fast_forward: bool,
+    },
+    BringBackFailed {
+        path: String,
+        message: String,
+    },
+    /// App → service: "Discard review" of the review worktree `path`: removed as
+    /// `RemoveWorktree` removes it (4.4's checks, `--force` when `force`); its `review-<name>`
+    /// branch is deleted too when every commit of it is on the reviewed branch, else kept.
+    /// Answered by `WorktreeRemoved` or `RemoveWorktreeFailed`.
+    DiscardReview {
+        path: String,
+        force: bool,
+    },
     /// App → service: watch this worktree of a followed project for the files panel,
     /// answered by `Files` now and after every change. Only one worktree is watched: this
     /// replaces the previous one. Its `Changes` are listed against `base`.
@@ -1959,6 +2006,37 @@ pub struct Worktree {
     pub claude: bool,
     /// `None` when git could not tell.
     pub status: Option<WorktreeStatus>,
+    /// The worktree (its path) this one reviews (27.4): the sidebar shows it under that one.
+    /// Optional, so adding it kept protocol 1 compatible.
+    #[serde(default)]
+    pub review_of: Option<String>,
+}
+
+/// What "Bring changes back" of a review (27.4) would do.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ReviewPlan {
+    /// The reviewed worktree (its path), and its branch the commits go to.
+    pub reviewed: String,
+    pub into: String,
+    /// The review's branch, and its tip: the commit id `BringBack` must still find there.
+    pub branch: String,
+    pub tip: String,
+    /// The commits that would go, newest first, at most [`BRING_BACK_SHOWN`]; `total` counts
+    /// them all.
+    pub commits: Vec<ReviewCommit>,
+    pub total: u64,
+    /// The reviewed branch has no commit of its own since: it moves to `tip`, no merge commit.
+    pub fast_forward: bool,
+}
+
+/// Most commits a [`ReviewPlan`] lists.
+pub const BRING_BACK_SHOWN: usize = 100;
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ReviewCommit {
+    pub id: String,
+    /// Its subject line, cut by the service.
+    pub summary: String,
 }
 
 /// A worktree's health, for the sidebar. Hive never merges anything (#12).
@@ -3069,6 +3147,7 @@ mod tests {
             main: true,
             claude: false,
             status: None,
+            review_of: None,
         };
         let project = Project {
             id: "/r".into(),
@@ -3443,6 +3522,58 @@ mod tests {
             &Frame::control(0, &failed).payload[..],
             br#"{"type":"remove_worktree_failed","path":"/r/w","message":"m"}"#
         );
+    }
+
+    #[test]
+    fn review_messages_are_tagged_json() {
+        let create = Control::CreateReview {
+            path: "/r/w".into(),
+        };
+        assert_eq!(
+            &Frame::control(0, &create).payload[..],
+            br#"{"type":"create_review","path":"/r/w"}"#
+        );
+        let bring = Control::BringBack {
+            path: "/r/v".into(),
+            tip: "ab".into(),
+        };
+        assert_eq!(
+            &Frame::control(0, &bring).payload[..],
+            br#"{"type":"bring_back","path":"/r/v","tip":"ab"}"#
+        );
+        let plan = Control::BringBackPlan {
+            path: "/r/v".into(),
+            plan: Some(ReviewPlan {
+                reviewed: "/r/w".into(),
+                into: "b".into(),
+                branch: "review-w".into(),
+                tip: "ab".into(),
+                commits: vec![ReviewCommit {
+                    id: "ab".into(),
+                    summary: "fix".into(),
+                }],
+                total: 1,
+                fast_forward: true,
+            }),
+            error: None,
+        };
+        assert_eq!(
+            &Frame::control(0, &plan).payload[..],
+            br#"{"type":"bring_back_plan","path":"/r/v","plan":{"reviewed":"/r/w","into":"b","branch":"review-w","tip":"ab","commits":[{"id":"ab","summary":"fix"}],"total":1,"fast_forward":true},"error":null}"#
+        );
+        assert_eq!(Frame::control(0, &plan).to_control().unwrap(), plan);
+        let discard = Control::DiscardReview {
+            path: "/r/v".into(),
+            force: false,
+        };
+        assert_eq!(
+            &Frame::control(0, &discard).payload[..],
+            br#"{"type":"discard_review","path":"/r/v","force":false}"#
+        );
+        // A worktree from a service before reviews is none.
+        let old = br#"{"id":"/r","name":"r","path":"/r","branch":null,"main":true,"claude":false,"status":null}"#;
+        let worktree: Worktree = serde_json::from_slice(old).unwrap();
+        assert_eq!(worktree.review_of, None);
     }
 
     #[test]

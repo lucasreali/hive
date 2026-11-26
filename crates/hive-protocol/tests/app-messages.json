@@ -151,7 +151,8 @@
               "behind": null,
               "merged": false,
               "last_commit_ms": 2
-            }
+            },
+            "review_of": null
           }
         ],
         "error": null,
@@ -183,7 +184,8 @@
             "behind": null,
             "merged": false,
             "last_commit_ms": 2
-          }
+          },
+          "review_of": null
         }
       ],
       "error": null,
@@ -220,7 +222,8 @@
             "behind": null,
             "merged": false,
             "last_commit_ms": 2
-          }
+          },
+          "review_of": null
         }
       ],
       "error": null,
@@ -423,7 +426,8 @@
             "behind": null,
             "merged": false,
             "last_commit_ms": 2
-          }
+          },
+          "review_of": null
         }
       ],
       "error": null,
@@ -462,7 +466,8 @@
             "behind": null,
             "merged": false,
             "last_commit_ms": 2
-          }
+          },
+          "review_of": null
         }
       ],
       "error": null,
@@ -499,7 +504,8 @@
             "behind": null,
             "merged": false,
             "last_commit_ms": 2
-          }
+          },
+          "review_of": null
         }
       ],
       "error": null,
@@ -514,6 +520,65 @@
     "type": "rename_worktree_failed",
     "path": "/r/.claude/worktrees/x",
     "name": "y",
+    "message": "m"
+  },
+  {
+    "type": "bring_back_plan",
+    "path": "/r/.claude/worktrees/review-x",
+    "plan": {
+      "reviewed": "/r/.claude/worktrees/x",
+      "into": "worktree-x",
+      "branch": "review-x",
+      "tip": "c0ffee",
+      "commits": [
+        {
+          "id": "c0ffee",
+          "summary": "Fix the login"
+        }
+      ],
+      "total": 1,
+      "fast_forward": false
+    },
+    "error": null
+  },
+  {
+    "type": "brought_back",
+    "project": {
+      "id": "/r",
+      "name": "r",
+      "path": "/r",
+      "worktrees": [
+        {
+          "id": "/r",
+          "name": "main",
+          "path": "/r",
+          "branch": "main",
+          "main": true,
+          "claude": false,
+          "status": {
+            "changes": 1,
+            "added": 3,
+            "removed": 4,
+            "ahead": null,
+            "behind": null,
+            "merged": false,
+            "last_commit_ms": 2
+          },
+          "review_of": null
+        }
+      ],
+      "error": null,
+      "group": false,
+      "folder": false,
+      "parent": "/g"
+    },
+    "path": "/r/.claude/worktrees/review-x",
+    "commits": 1,
+    "fast_forward": false
+  },
+  {
+    "type": "bring_back_failed",
+    "path": "/r/.claude/worktrees/review-x",
     "message": "m"
   },
   {

@@ -1647,6 +1647,7 @@ not json
             main,
             claude: !main,
             status: None,
+            review_of: None,
         };
         Project {
             id: path.into(),

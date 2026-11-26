@@ -65,6 +65,10 @@ sort! {
         | CreateIssueWorktree
         | RemoveWorktree
         | RenameWorktree
+        | CreateReview
+        | PlanBringBack
+        | BringBack
+        | DiscardReview
         | WatchWorktree
         | UnwatchWorktree
         | ExpandIgnored
@@ -152,6 +156,9 @@ sort! {
         | RemoveWorktreeFailed
         | WorktreeRenamed
         | RenameWorktreeFailed
+        | BringBackPlan
+        | BroughtBack
+        | BringBackFailed
         | WorktreeStatus
         | Files
         | Changes
@@ -211,6 +218,7 @@ fn project() -> Project {
                 merged: false,
                 last_commit_ms: 2,
             }),
+            review_of: None,
         }],
         error: None,
         group: false,
@@ -484,6 +492,32 @@ fn samples() -> Vec<Control> {
         RenameWorktreeFailed {
             path: s("/r/.claude/worktrees/x"),
             name: s("y"),
+            message: m(),
+        },
+        BringBackPlan {
+            path: s("/r/.claude/worktrees/review-x"),
+            plan: Some(ReviewPlan {
+                reviewed: s("/r/.claude/worktrees/x"),
+                into: s("worktree-x"),
+                branch: s("review-x"),
+                tip: s("c0ffee"),
+                commits: vec![ReviewCommit {
+                    id: s("c0ffee"),
+                    summary: s("Fix the login"),
+                }],
+                total: 1,
+                fast_forward: false,
+            }),
+            error: None,
+        },
+        BroughtBack {
+            project: project(),
+            path: s("/r/.claude/worktrees/review-x"),
+            commits: 1,
+            fast_forward: false,
+        },
+        BringBackFailed {
+            path: s("/r/.claude/worktrees/review-x"),
             message: m(),
         },
         WorktreeStatus {
