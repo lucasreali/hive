@@ -126,7 +126,9 @@ for (const panelWidth of [280, 320, 380, 400, 420, 440, 460, 520, 640]) {
     await expect(rail.locator(".panel-rail-separator")).toHaveCount(2);
     // Icons stay put whichever is selected.
     await rail.getByRole("tab", { name: "Files" }).click();
-    expect((await rail.getByRole("tab", { name: "Sessions" }).boundingBox())?.y).toBe(places[LABELS.indexOf("Sessions")]);
+    expect((await rail.getByRole("tab", { name: "Sessions" }).boundingBox())?.y).toBe(
+      places[LABELS.indexOf("Sessions")],
+    );
   });
 }
 
