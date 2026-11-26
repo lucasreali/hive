@@ -59,4 +59,5 @@ test("diff: files marked seen, counted, filtered, marked all, changed since seen
     "title",
     "Changed since seen",
   );
+  await page.screenshot({ path: "target/e2e/seen.png" });
 });

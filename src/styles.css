@@ -1180,6 +1180,14 @@ label:has(> input[type="checkbox"]:disabled) {
   color: var(--text-3);
 }
 
+.files-seen .ghost.text {
+  width: auto;
+  height: 22px;
+  margin-left: auto;
+  padding: 0 6px;
+  white-space: nowrap;
+}
+
 .files-seen button[aria-pressed="true"] {
   color: var(--text);
   background: var(--hover);
