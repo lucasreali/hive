@@ -1,6 +1,6 @@
 use std::os::unix::ffi::OsStrExt;
 
-use hive_protocol::{ChangedFile, Control, DiffBase, FileStatus, Role};
+use hive_protocol::{ChangedFile, Control, DiffBase, FileStatus, Role, SeenMark};
 
 use crate::common::{Conn, stop};
 use crate::worktree::Repo;
@@ -28,6 +28,7 @@ fn file(path: &str, status: FileStatus, added: Option<u64>, removed: Option<u64>
         old_path: None,
         added,
         removed,
+        seen: None,
     }
 }
 
@@ -142,6 +143,70 @@ async fn a_worktree_lists_what_differs_from_head() {
     };
     assert_eq!(files, vec![]);
     assert!(error.is_some());
+    drop(conn);
+    stop(daemon);
+}
+
+/// Each changed file's path and seen mark (27.1).
+fn marks(reply: Control) -> Vec<(String, Option<SeenMark>)> {
+    let Control::Changes { files, base, .. } = reply else {
+        panic!("expected changes: {reply:?}")
+    };
+    assert_eq!(base, DiffBase::Branch);
+    files.into_iter().map(|f| (f.path, f.seen)).collect()
+}
+
+#[tokio::test]
+async fn seen_marks_are_kept_invalidated_and_dropped_with_the_worktree() {
+    let repo = Repo::new();
+    assert!(repo.hive(&["create", "a"]).status.success());
+    let root = repo.root.display().to_string();
+    let wt = format!("{root}/.claude/worktrees/a");
+    std::fs::write(format!("{wt}/README"), "changed").unwrap();
+    std::fs::write(format!("{wt}/new.txt"), "n\n").unwrap();
+    let mut daemon = repo.env.daemon();
+    let mut conn = repo.env.connect(Role::App).await;
+    follow(&mut conn, &root).await;
+
+    let mark = Control::MarkSeen {
+        path: wt.clone(),
+        base: DiffBase::Branch,
+        files: vec!["README".into(), "nope".into()],
+        seen: true,
+    };
+    conn.send(0, mark).await;
+    let seen = Some(SeenMark::Seen);
+    let expected = vec![("README".to_owned(), seen), ("new.txt".to_owned(), None)];
+    assert_eq!(marks(conn.control().await.1), expected);
+    // In Hive's folder, kept across a restart.
+    let file = repo.env.path("data/hive/seen.json");
+    assert!(std::fs::read_to_string(&file).unwrap().contains(&wt));
+    drop(conn);
+    stop(daemon);
+    daemon = repo.env.daemon();
+    let mut conn = repo.env.connect(Role::App).await;
+    assert_eq!(marks(changes(&mut conn, &wt).await), expected);
+
+    // A new change to it: changed since seen.
+    std::fs::write(format!("{wt}/README"), "changed again").unwrap();
+    let changed = vec![
+        ("README".to_owned(), Some(SeenMark::Changed)),
+        ("new.txt".to_owned(), None),
+    ];
+    assert_eq!(marks(changes(&mut conn, &wt).await), changed);
+
+    // Removed, the worktree takes its marks along.
+    let remove = Control::RemoveWorktree {
+        path: wt.clone(),
+        force: true,
+    };
+    conn.send(0, remove).await;
+    let removed = conn.control().await.1;
+    assert!(
+        matches!(removed, Control::WorktreeRemoved { .. }),
+        "{removed:?}"
+    );
+    assert_eq!(std::fs::read_to_string(&file).unwrap(), "{}");
     drop(conn);
     stop(daemon);
 }

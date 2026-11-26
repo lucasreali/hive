@@ -616,7 +616,10 @@ async fn app_frame(
             state.change_worktrees(move |projects| {
                 let archive = |root: &str| archiving.archive(root, &path);
                 match projects.remove_worktree(&path, force, procs::Source::System, archive) {
-                    Ok(project) => Control::WorktreeRemoved { project, path },
+                    Ok(project) => {
+                        archiving.forget_seen(std::slice::from_ref(&path));
+                        Control::WorktreeRemoved { project, path }
+                    }
                     Err(err) => Control::RemoveWorktreeFailed {
                         path,
                         message: err.to_string(),
@@ -642,6 +645,12 @@ async fn app_frame(
         Ok(Control::ListCommits { path }) => {
             state.projects(move |projects| changes::commits(&projects.list(), path))
         }
+        Ok(Control::MarkSeen {
+            path,
+            base,
+            files,
+            seen,
+        }) => state.mark_seen(path, base, (files, seen)),
         Ok(Control::ListScripts { path }) => state.list_scripts(path),
         Ok(Control::ListSessions) => {
             // The accounts' folders may have changed: watched again.

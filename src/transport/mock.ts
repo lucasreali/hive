@@ -660,7 +660,11 @@ export const MOCK_COMMITS: CommitInfo[] = [
 const sinceTurn = (path: string) => (MOCK_CHANGES[path] ?? []).slice(-1);
 
 /** A stand-in for `hive::changes::answer`: the fake worktree's changes, or why not. */
-function changes(projects: Project[], path: string, asked: DiffBase): ServiceMessage {
+function changes(
+  projects: Project[],
+  path: string,
+  asked: DiffBase,
+): Extract<ServiceMessage, { type: "changes" }> {
   const project = projects.find((p) => p.worktrees.some((w) => w.path === path));
   if (!project) {
     const error = `${path} is not a worktree of a followed project`;
@@ -1177,7 +1181,21 @@ export function createMockTransport(
     const listed = files.get(path) as string[];
     later({ type: "files", path, files: listed, ignored: ignored.sort(), truncated: false });
     // A folder project's folder has no changes (23.1).
-    if (!holder(path)?.folder) later(changes(projects, path, watchedBase));
+    if (!holder(path)?.folder) later(markedChanges(path, watchedBase));
+  };
+  // A stand-in for `hive::seen` (27.1): by `<worktree>\n<base>`, each marked file's text when
+  // marked (its diff's identity here); a file written since is changed since seen.
+  const seenMarks = new Map<string, Map<string, string>>();
+  const textOf = (worktree: string, path: string) => written.get(`${worktree}/${path}`) ?? "";
+  const markedChanges = (path: string, asked: DiffBase) => {
+    const listed = changes(projects, path, asked);
+    const marks = seenMarks.get(`${path}\n${listed.base}`) ?? new Map<string, string>();
+    const files = listed.files.map((f): ChangedFile => {
+      const mark = marks.get(f.path);
+      if (mark === undefined) return f;
+      return { ...f, seen: mark === textOf(path, f.path) ? "seen" : "changed" };
+    });
+    return { ...listed, files };
   };
   // A stand-in for an agent writing a file: `touch <name>` in a worktree's terminal.
   const touch = (cwd: string, name: string) => {
@@ -1719,7 +1737,18 @@ export function createMockTransport(
       later({ type: "worktree_renamed", project: updated, from: path, path: renamed.path });
     },
     async listChanges(path, base) {
-      later(changes(projects, path, base));
+      later(markedChanges(path, base));
+    },
+    async markSeen(path, base, paths, seen) {
+      const listed = changes(projects, path, base);
+      const key = `${path}\n${listed.base}`;
+      const marks = seenMarks.get(key) ?? new Map<string, string>();
+      for (const f of listed.files.filter((f) => paths.includes(f.path))) {
+        if (seen) marks.set(f.path, textOf(path, f.path));
+        else marks.delete(f.path);
+      }
+      seenMarks.set(key, marks);
+      later(markedChanges(path, base));
     },
     async listCommits(path) {
       const followed = worktreeAt(path);

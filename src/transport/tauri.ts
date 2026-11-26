@@ -80,6 +80,7 @@ export const tauriTransport: Transport = {
   setView: (terminal, focused, visible) => hosted("set_view", { terminal, focused, visible }),
   listChanges: (path, base) => hosted("list_changes", { path, base }),
   listCommits: (path) => hosted("list_commits", { path }),
+  markSeen: (path, base, files, seen) => hosted("mark_seen", { path, base, files, seen }),
   listScripts: (path) => hosted("list_scripts", { path }),
   listSessions: () => hosted("list_sessions"),
   locateSession: (id, target) => hosted("locate_session", { id, target }),

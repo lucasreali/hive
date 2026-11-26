@@ -515,6 +515,8 @@ export type HiveState = {
   changesSeen: Record<string, number>;
   /** By worktree path: the base picked in the Changes panel (UI state, this run only). */
   diffBases: Record<string, DiffBase>;
+  /** The Diff view lists only the files not marked seen (27.1; UI state, this run only). */
+  unseenOnly: boolean;
   /** The last `file` the service sent; shown only while it is the open file. */
   file: FileText | null;
   /** The last `table` the service sent (23.6); shown only while it is the open file's. */
@@ -652,6 +654,7 @@ export const initialState: HiveState = {
   scriptRuns: {},
   changesSeen: {},
   diffBases: {},
+  unseenOnly: false,
   file: null,
   table: null,
   tableAsks: [],

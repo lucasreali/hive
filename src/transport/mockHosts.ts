@@ -83,6 +83,7 @@ const HOSTED = [
   "expandIgnored",
   "setView",
   "listChanges",
+  "markSeen",
   "listScripts",
   "listSessions",
   "locateSession",

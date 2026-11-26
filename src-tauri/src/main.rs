@@ -226,6 +226,7 @@ fn main() {
             commands::set_view,
             commands::list_changes,
             commands::list_commits,
+            commands::mark_seen,
             commands::list_scripts,
             commands::open_file,
             commands::open_table,

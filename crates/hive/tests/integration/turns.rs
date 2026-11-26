@@ -133,6 +133,7 @@ async fn the_diff_since_an_agents_last_turn_shows_only_what_changed_since() {
         old_path: None,
         added: Some(1),
         removed: Some(0),
+        seen: None,
     };
     let Control::Changes {
         base,

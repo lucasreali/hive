@@ -1255,6 +1255,15 @@ async fn project_requests_go_to_the_service_and_answers_to_the_ui() {
     hive.list_commits("/r".into()).unwrap();
     let commits = Control::ListCommits { path: "/r".into() };
     assert_eq!(service.control().await, (0, commits));
+    hive.mark_seen("/r".into(), DiffBase::Head, vec!["a".into()], false)
+        .unwrap();
+    let mark = Control::MarkSeen {
+        path: "/r".into(),
+        base: DiffBase::Head,
+        files: vec!["a".into()],
+        seen: false,
+    };
+    assert_eq!(service.control().await, (0, mark));
     hive.list_scripts("/r".into()).unwrap();
     let scripts = Control::ListScripts { path: "/r".into() };
     assert_eq!(service.control().await, (0, scripts));
@@ -2006,6 +2015,10 @@ async fn bridge_exit_ends_terminals_then_disconnects() {
         not_connected
     );
     assert_eq!(hive.list_commits("/r".into()), not_connected);
+    assert_eq!(
+        hive.mark_seen("/r".into(), DiffBase::Head, vec![], true),
+        not_connected
+    );
     assert_eq!(hive.list_scripts("/r".into()), not_connected);
     assert_eq!(
         hive.open_file("/r".into(), "a".into(), DiffBase::Head),
@@ -2345,6 +2358,7 @@ fn commands_reach_the_managed_hive() {
             set_view,
             list_changes,
             list_commits,
+            mark_seen,
             list_scripts,
             open_file,
             open_table,
@@ -2447,6 +2461,7 @@ fn commands_reach_the_managed_hive() {
     let expand = json!({"path": "/r", "folders": ["target"]});
     let view = json!({"terminal": 1, "focused": true, "visible": true});
     let changes = json!({"path": "/r", "base": "head"});
+    let mark_seen = json!({"path": "/r", "base": "head", "files": ["a"], "seen": true});
     let scripts = json!({"path": "/r"});
     let file = json!({"worktree": "/r", "path": "a", "base": "head"});
     let table = json!({"worktree": "/r", "path": "a.csv"});
@@ -2497,6 +2512,7 @@ fn commands_reach_the_managed_hive() {
         ("set_view", &view),
         ("list_changes", &changes),
         ("list_commits", &scripts),
+        ("mark_seen", &mark_seen),
         ("list_scripts", &scripts),
         ("open_file", &file),
         ("open_table", &table),
@@ -2601,6 +2617,7 @@ fn commands_reach_the_managed_hive() {
         ("expand_ignored", expand),
         ("set_view", view),
         ("list_changes", changes),
+        ("mark_seen", mark_seen),
         ("list_scripts", scripts),
         ("open_file", file.clone()),
         ("open_table", table),

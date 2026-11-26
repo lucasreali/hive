@@ -2095,6 +2095,23 @@ impl Host {
         self.link().send(0, &Control::ListCommits { path })
     }
 
+    /// Marks files seen in the diff, or not (27.1); the answer arrives as `changes`.
+    pub fn mark_seen(
+        &self,
+        path: String,
+        base: DiffBase,
+        files: Vec<String>,
+        seen: bool,
+    ) -> Result<(), String> {
+        let mark = Control::MarkSeen {
+            path,
+            base,
+            files,
+            seen,
+        };
+        self.link().send(0, &mark)
+    }
+
     /// The answer arrives as `scripts` (23.4).
     pub fn list_scripts(&self, path: String) -> Result<(), String> {
         self.link().send(0, &Control::ListScripts { path })
@@ -3400,6 +3417,18 @@ pub mod commands {
         path: String,
     ) -> Result<(), String> {
         hive.on(host.as_deref())?.list_commits(path)
+    }
+
+    #[tauri::command]
+    pub fn mark_seen(
+        hive: State<'_, Hive>,
+        host: Option<String>,
+        path: String,
+        base: DiffBase,
+        files: Vec<String>,
+        seen: bool,
+    ) -> Result<(), String> {
+        hive.on(host.as_deref())?.mark_seen(path, base, files, seen)
     }
 
     #[tauri::command]
