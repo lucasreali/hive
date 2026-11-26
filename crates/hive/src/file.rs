@@ -2679,6 +2679,8 @@ mod tests {
         std::fs::write(root.join("u"), "untracked").unwrap();
         let big = "x".repeat(TEXT_LIMIT as usize + 1);
         std::fs::write(root.join("big"), &big).unwrap();
+        let exact = "x".repeat(TEXT_LIMIT as usize);
+        std::fs::write(root.join("exact"), &exact).unwrap();
         let snapshots = crate::snapshot::Snapshots::new(tmp.path().join("snapshots"));
         let id = root.display().to_string();
         snapshots.take(root, &id, "s", 1).unwrap();
@@ -2687,6 +2689,8 @@ mod tests {
         std::fs::write(root.join("u"), "u2").unwrap();
         std::fs::rename(root.join("r"), root.join("s")).unwrap();
         std::fs::write(root.join("n"), "n").unwrap();
+        // New, after the rename in git's order: never read as its old path.
+        std::fs::write(root.join("t"), "t").unwrap();
         let against = || changes::Against {
             dir: root.clone(),
             since: Some(snapshots.since(root, &id, "s").unwrap()),
@@ -2698,6 +2702,8 @@ mod tests {
         assert_eq!(at("s"), (bytes("r"), bytes("r")));
         assert_eq!(at("n"), (bytes("n"), Side::Missing));
         assert_eq!(at("big"), (Side::TooLarge, Side::TooLarge));
+        assert_eq!(at("t"), (bytes("t"), Side::Missing));
+        assert_eq!(at("exact").1, bytes(&exact));
         // A path from the app is checked as ever.
         assert!(read_at(&against(), "../x").is_err());
         // A snapshot no longer whole: the base side at HEAD.

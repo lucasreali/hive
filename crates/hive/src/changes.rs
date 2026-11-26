@@ -1101,13 +1101,17 @@ garbage\0\
                 late: false,
             },
         ];
-        let mut expected = changes(&path, base.clone(), None, files);
-        if let Control::Changes {
-            branch, turns: t, ..
-        } = &mut expected
-        {
-            (*branch, *t) = (None, turns);
-        }
+        let expected = Control::Changes {
+            path: path.clone(),
+            base: base.clone(),
+            branch: None,
+            base_error: None,
+            added: 3,
+            removed: 1,
+            files,
+            error: None,
+            turns,
+        };
         assert_eq!((listed, totals), (expected, None));
         // The same as git's diff of the turn's tree and a snapshot taken now.
         let now = snapshots.take(&root, &path, "s3", 10).unwrap();

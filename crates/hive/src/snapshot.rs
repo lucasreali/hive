@@ -523,14 +523,21 @@ impl Store {
     /// every repository nested in it that git looks into: `git add -A` runs `git status` in each
     /// checked-out gitlink of `index` (a submodule, an embedded repository), which runs that
     /// repository's own filters, and so on down. The options reach those through
-    /// `GIT_CONFIG_PARAMETERS`. At most [`NESTED`] nested repositories.
-    fn nested_filters(&self, worktree: &Path, index: &Path) -> io::Result<Vec<String>> {
+    /// `GIT_CONFIG_PARAMETERS`. At most `most` nested repositories.
+    fn nested_filters(
+        &self,
+        worktree: &Path,
+        index: &Path,
+        most: usize,
+    ) -> io::Result<Vec<String>> {
         let mut options = filters(worktree)?;
         let mut queue = self.gitlinks(worktree, Some(index))?;
         let mut seen = 0;
         while let Some(dir) = queue.pop() {
             seen += 1;
-            nested(seen)?;
+            if seen > most {
+                return Err(io::Error::other("too many nested repositories to snapshot"));
+            }
             // Not checked out: git looks into nothing there.
             if dir.join(".git").exists() {
                 options.extend(filters(&dir)?);
@@ -568,7 +575,7 @@ impl Store {
             if !index.exists() && repo.index.exists() {
                 std::fs::copy(&repo.index, index)?;
             }
-            let filters = self.nested_filters(worktree, index)?;
+            let filters = self.nested_filters(worktree, index, NESTED)?;
             self.work_with(worktree, index, &filters, &args(&["add", "-A"]))
                 .map(drop)
         })();
@@ -719,14 +726,6 @@ fn filters(dir: &Path) -> io::Result<Vec<String>> {
 /// Whether `text` is an object id: 40 or 64 hex digits.
 fn object_id(text: &str) -> bool {
     matches!(text.len(), 40 | 64) && text.bytes().all(|b| b.is_ascii_hexdigit())
-}
-
-/// An error once `seen` nested repositories are more than [`NESTED`].
-fn nested(seen: usize) -> io::Result<()> {
-    if seen > NESTED {
-        return Err(io::Error::other("too many nested repositories to snapshot"));
-    }
-    Ok(())
 }
 
 /// A session id from a hook payload (untrusted) is used in a ref and a file name only when it

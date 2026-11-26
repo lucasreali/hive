@@ -322,6 +322,36 @@ mod tests {
     use hive_protocol::Settings;
 
     #[tokio::test(flavor = "multi_thread")]
+    async fn an_edit_before_its_snapshot_makes_the_turn_late_and_titles_name_the_turns() {
+        let dir = tempfile::tempdir().unwrap();
+        let state = super::super::test_state(dir.path());
+        let repo = dir.path().join("repo");
+        std::fs::create_dir(&repo).unwrap();
+        crate::health::tests::run(&repo, &["init", "-q"]);
+        crate::health::tests::commit(&repo, "a");
+        let id = repo.display().to_string();
+        let tool = |tool: &str| EventKind::ToolFinished {
+            tool: Some(tool.into()),
+        };
+        // A read is no edit; an edit is, only for its own session.
+        for (session, event) in [("read", tool("Read")), ("edit", tool("Write"))] {
+            state.snapshots.started(session);
+            state.turn_snapshot(session, None, &event);
+            let turn = state.snapshots.take(&repo, &id, session, 1).unwrap();
+            assert_eq!(turn.late, session == "edit", "{session}");
+        }
+        // An agent's title names its turns; one without a title is not named.
+        let mut agents = state.agents.lock().await;
+        let mut titled = Agent::new(1, Instant::now(), 0);
+        titled.title = Some("claude-3".into());
+        agents.insert("s1".into(), titled);
+        agents.insert("s2".into(), Agent::new(2, Instant::now(), 0));
+        drop(agents);
+        let titles = HashMap::from([("s1".to_owned(), "claude-3".to_owned())]);
+        assert_eq!(state.titles().await, titles);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
     async fn the_power_assertion_is_held_while_an_agent_works_and_the_setting_is_on() {
         let dir = tempfile::tempdir().unwrap();
         let calls = Calls::default();

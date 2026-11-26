@@ -410,8 +410,16 @@ fn a_sweep_drops_old_turns_gone_worktrees_and_gone_repositories() {
     );
     let (store, _) = snapshots.store(&Repo::of(&root).unwrap());
     assert!(!store.read().turns.contains(&old));
-    // Nothing more to drop: the store stays as it is.
+    // Nothing more to drop: the store stays as it is, its snapshot index too (no prune).
+    let index = store.index(&id(&root));
+    snapshots
+        .since(&root, &id(&root), "new")
+        .unwrap()
+        .list()
+        .unwrap();
+    assert!(index.exists());
     snapshots.sweep(AGE_MS + 2);
+    assert!(index.exists());
     assert_eq!(snapshots.turns(&root, &id(&root)), [new]);
     // Garbage in the folder, and a store whose repository moved, go.
     std::fs::create_dir(snapshots.root.join("junk")).unwrap();
@@ -498,6 +506,11 @@ fn a_listing_past_the_size_cap_prunes_what_it_hashed() {
     let roomy = Snapshots::new(snapshots.root.clone()).with_limits(SIZE_CAP, Duration::MAX);
     roomy.since(&root, &id(&root), "s").unwrap().list().unwrap();
     assert!(store.size() > kept);
+    // At the cap exactly: nothing goes.
+    let listed = store.size();
+    let exact = Snapshots::new(snapshots.root.clone()).with_limits(listed, Duration::MAX);
+    exact.since(&root, &id(&root), "s").unwrap().list().unwrap();
+    assert_eq!(store.size(), listed);
     let tight = Snapshots::new(snapshots.root.clone()).with_limits(kept, Duration::MAX);
     tight.since(&root, &id(&root), "s").unwrap().list().unwrap();
     assert_eq!(store.size(), kept);
@@ -549,9 +562,63 @@ fn turns_are_kept_per_session_and_by_age() {
 
 #[test]
 fn a_snapshot_looks_into_a_bounded_number_of_nested_repositories() {
-    assert!(nested(NESTED).is_ok());
-    let err = nested(NESTED + 1).unwrap_err();
+    let (_tmp, root, snapshots) = repo();
+    // Two nested repositories, one inside the other.
+    let inner = root.join("inner");
+    let deeper = inner.join("deeper");
+    for dir in [&deeper, &inner] {
+        std::fs::create_dir_all(dir).unwrap();
+        run(dir, &["init", "-q"]);
+        commit(dir, "f");
+    }
+    run(&inner, &["add", "deeper"]);
+    take(&snapshots, &root, "s", 1);
+    let (store, _) = snapshots.store(&Repo::of(&root).unwrap());
+    let index = store.index(&id(&root));
+    assert!(store.nested_filters(&root, &index, 2).is_ok());
+    let err = store.nested_filters(&root, &index, 1).unwrap_err();
     assert_eq!(err.to_string(), "too many nested repositories to snapshot");
+    assert_eq!(NESTED, 256);
+}
+
+#[test]
+fn the_caps_are_the_humans() {
+    assert_eq!((KEEP, AGE_MS, SIZE_CAP), (10, 604_800_000, 1 << 30));
+    // The repository's hooks are looked for in an empty folder of Hive's.
+    let store = Store { dir: "/h".into() };
+    let command = store.command(Path::new("/w")).unwrap();
+    let hooks: Vec<_> = command
+        .get_args()
+        .map(|a| a.to_string_lossy().into_owned())
+        .collect();
+    let expected = format!(
+        "core.hooksPath={}",
+        Path::new("/h").join("no-hooks").display()
+    );
+    assert!(hooks.contains(&expected), "{hooks:?}");
+}
+
+#[test]
+fn the_last_turn_of_a_session_is_its_highest_whatever_the_order() {
+    let (_tmp, root, snapshots) = repo();
+    let first = take(&snapshots, &root, "s", 1);
+    std::fs::write(root.join("a"), "a2").unwrap();
+    let second = take(&snapshots, &root, "s", 2);
+    let (store, _) = snapshots.store(&Repo::of(&root).unwrap());
+    let mut record = store.read();
+    record.turns = vec![first, second.clone()];
+    store.write(&record).unwrap();
+    assert_eq!(snapshots.turns(&root, &id(&root)), [second]);
+}
+
+#[test]
+fn a_record_that_cannot_be_opened_resets_the_store() {
+    let (_tmp, root, snapshots) = repo();
+    take(&snapshots, &root, "s", 1);
+    let (store, _) = snapshots.store(&Repo::of(&root).unwrap());
+    std::fs::remove_file(store.record()).unwrap();
+    std::fs::create_dir(store.record()).unwrap();
+    assert_eq!(take(&snapshots, &root, "s", 2).n, 1);
 }
 
 #[test]
