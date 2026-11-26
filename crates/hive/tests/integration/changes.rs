@@ -1,6 +1,6 @@
 use std::os::unix::ffi::OsStrExt;
 
-use hive_protocol::{ChangedFile, Control, DiffBase, FileStatus, Role};
+use hive_protocol::{ChangedFile, Control, DiffBase, FileStatus, Role, Staged};
 
 use crate::common::{Conn, stop};
 use crate::worktree::Repo;
@@ -28,6 +28,11 @@ fn file(path: &str, status: FileStatus, added: Option<u64>, removed: Option<u64>
         old_path: None,
         added,
         removed,
+        // What these tests stage is what `git add` and `git mv` made (27.6).
+        staged: Some(match status {
+            FileStatus::Added | FileStatus::Renamed => Staged::Yes,
+            _ => Staged::No,
+        }),
     }
 }
 

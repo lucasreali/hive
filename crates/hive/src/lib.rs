@@ -54,6 +54,7 @@ pub mod watch;
 #[cfg(windows)]
 pub mod windows;
 pub mod workbook;
+pub mod workflows;
 pub mod worktree;
 pub mod wrapper;
 
