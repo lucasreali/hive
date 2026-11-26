@@ -66,9 +66,11 @@ export function createMockGit(
       if (!holder(worktree)) {
         return later({ type: "git_failed", worktree, action, message: refused(worktree) });
       }
-      for (const f of files[worktree] ?? []) {
-        if (paths.includes(f.path)) f.staged = staged ? "yes" : "no";
-      }
+      // New objects, as a new message's would be: the store keeps an equal list's.
+      const state = staged ? "yes" : "no";
+      files[worktree] = (files[worktree] ?? []).map((f) =>
+        paths.includes(f.path) ? { ...f, staged: state } : f,
+      );
       const what = paths.length === 1 ? paths[0] : `${paths.length} files`;
       const message = `${staged ? "Staged" : "Unstaged"} ${what}`;
       later({ type: "git_done", worktree, action, message });

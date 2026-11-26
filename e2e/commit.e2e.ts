@@ -33,7 +33,7 @@ test("commit: stage a file by its box, commit it asked first, then push the bran
   await expect(page.getByRole("status", { name: "Messages" })).toContainText(
     "Committed 4f2a9c1: Keep the session longer",
   );
-  await expect(files.getByRole("checkbox")).toHaveCount(1);
+  await expect(files.getByRole("checkbox", { name: /^(Un)?[Ss]tage / })).toHaveCount(1);
   await expect(box.getByLabel("Commit message")).toHaveValue("");
 
   // Push: where it goes first, then pushed once asked.
