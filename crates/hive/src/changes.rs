@@ -887,6 +887,16 @@ garbage\0\
         let error = gone.error.unwrap_or_default();
         assert!(error.starts_with("git merge-base"), "{error}");
 
+        // A worktree git no longer reads: why, with no totals and nothing marked.
+        std::fs::remove_file(w.join(".git")).unwrap();
+        let (reply, totals) = answer(&projects, path.clone(), DiffBase::Head, &seen);
+        assert_eq!(totals, None);
+        let reply = format!("{reply:?}");
+        assert!(
+            reply.contains("files: [], ") && reply.contains("error: Some("),
+            "{reply}"
+        );
+
         // Only a followed worktree.
         assert_eq!(
             answer(&projects, "/nope".into(), DiffBase::Branch, &seen),
