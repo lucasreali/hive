@@ -161,7 +161,8 @@ impl Agent {
     /// in that payload's `background_tasks` (Claude Code lists the session's running ones on
     /// every `Stop`/`SubagentStop`): it waits to be woken by it. A waiting subagent leaves
     /// when a later `background_tasks` no longer has any of its launches, or when its own
-    /// worktree is removed.
+    /// worktree is removed. A subagent whose run fails (its `StopFailure`) gets no
+    /// `SubagentStop` (27.7): it leaves on its failure, or waits the same way.
     ///
     /// An agent team teammate does not leave when its turn ends: it stays listed, idle, until
     /// its own `SessionEnd` or its agent's, and its next `SubagentStart` makes it work again.
@@ -205,6 +206,11 @@ impl Agent {
             }
             if stopped.is_some() || live.is_some() {
                 agent.prune(live.map_or(&[], Vec::as_slice));
+            }
+            if let (Some(sub), EventKind::TurnFailed { .. }) = (&event.subagent, &event.kind)
+                && !agent.teammates.contains(&sub.id)
+            {
+                return agent.fail(&sub.id);
             }
             let Some(sub) = &event.subagent else {
                 // A teammate's `TeammateIdle` without its `agent_id` names no line to change,
@@ -353,6 +359,21 @@ impl Agent {
             .filter(|s| waiting.contains(&s.id))
         {
             sub.state = AgentState::Working;
+        }
+    }
+
+    /// A subagent's run ended on an API error (its `StopFailure`): Claude Code gives the
+    /// failure to the agent and sends no `SubagentStop`, so it leaves now, unless one of its
+    /// launches may still wake it: then it waits (5.10) until a `background_tasks` without
+    /// them. Its `StopFailure` lists none, so the other waiting subagents are left as they are.
+    fn fail(&mut self, id: &str) {
+        if self.launched.get(id).is_none_or(Vec::is_empty) {
+            return self.leave(id);
+        }
+        self.waiting.insert(id.to_owned());
+        for sub in self.subagents.iter_mut().filter(|s| s.id == id) {
+            sub.state = AgentState::Working;
+            sub.activity = None;
         }
     }
 
@@ -2001,6 +2022,69 @@ mod tests {
         agent.feed("s", &stop_with("Stop", None, &[]), now);
         agent.feed("s", &stop_with("SubagentStop", Some("a"), &[]), now);
         assert_eq!(shown(&agent), (WaitingYou, vec![("a".into(), Idle)]));
+        assert!(agent.waiting.is_empty());
+    }
+
+    /// A subagent's `StopFailure` (an API error ended its run), with no `agent_type`.
+    fn failed(sub: &str) -> AgentEvent {
+        let payload = json!({"session_id": "s", "agent_id": sub, "error": "rate_limit"});
+        ClaudeCode.translate("StopFailure", Some("1".into()), payload)
+    }
+
+    #[test]
+    fn a_subagent_that_fails_without_subagent_stop_leaves() {
+        let now = Instant::now();
+        let mut agent = Agent::new(1, now, 0);
+        agent.feed("s", &hook("UserPromptSubmit", None, json!({})), now);
+        for sub in ["a", "b"] {
+            agent.feed("s", &hook("SubagentStart", Some(sub), json!({})), now);
+        }
+        // Its failure ends it: it leaves, and the agent's own state is not changed by it.
+        assert!(agent.feed("s", &failed("a"), now).is_some());
+        assert_eq!(shown(&agent), (WithSubagents, vec![("b".into(), Working)]));
+        assert_eq!(agent.state, Working);
+        // A failure of one never listed does not list it in error.
+        assert_eq!(agent.feed("s", &failed("z"), now), None);
+        agent.feed("s", &hook("SubagentStop", Some("b"), json!({})), now);
+        agent.feed("s", &hook("Stop", None, json!({})), now);
+        assert_eq!(shown(&agent), (WaitingYou, vec![]));
+        assert!(agent.stamps.keys().all(Option::is_none));
+    }
+
+    #[test]
+    fn a_failed_subagent_still_in_background_tasks_stays_until_they_end() {
+        let now = Instant::now();
+        let mut agent = Agent::new(1, now, 0);
+        for sub in ["a", "b"] {
+            agent.feed("s", &hook("SubagentStart", Some(sub), json!({})), now);
+        }
+        agent.feed("s", &launched("a", "backgroundTaskId", "t1"), now);
+        agent.feed("s", &tool("PermissionRequest", Some("a"), "x"), now);
+        agent.feed("s", &failed("a"), now);
+        assert_eq!(agent.subagents[0].activity, None);
+        // Its launch may still wake it (5.10): it waits, working, without pruning others.
+        assert_eq!(
+            shown(&agent),
+            (
+                WithSubagents,
+                vec![("a".into(), Working), ("b".into(), Working)]
+            )
+        );
+        assert!(agent.waiting.contains("a"));
+        agent.feed("s", &stop_with("Stop", None, &["t1"]), now);
+        assert_eq!(shown(&agent).1.len(), 2);
+        agent.feed("s", &stop_with("Stop", None, &[]), now);
+        assert_eq!(shown(&agent).1, [("b".into(), Working)]);
+    }
+
+    #[test]
+    fn a_teammate_that_fails_stays_listed_in_error() {
+        let now = Instant::now();
+        let mut agent = Agent::new(1, now, 0);
+        agent.feed("s", &idle("a", "researcher"), now);
+        agent.feed("s", &hook("SubagentStart", Some("a"), json!({})), now);
+        agent.feed("s", &failed("a"), now);
+        assert_eq!(shown(&agent), (Error, vec![("a".into(), Error)]));
         assert!(agent.waiting.is_empty());
     }
 
