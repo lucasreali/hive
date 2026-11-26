@@ -3237,10 +3237,14 @@ mod tests {
         };
         assert_eq!(Frame::control(0, &list).to_control().unwrap(), list);
         // A file's seen mark (27.1), left out when it has none.
-        let Control::Changes { mut files, .. } = changes else {
-            unreachable!()
-        };
-        files[0].seen = Some(SeenMark::Changed);
+        let files = [ChangedFile {
+            path: "b".into(),
+            status: FileStatus::Modified,
+            old_path: None,
+            added: None,
+            removed: None,
+            seen: Some(SeenMark::Changed),
+        }];
         let json = serde_json::to_string(&files[0]).unwrap();
         assert!(
             json.ends_with(r#""removed":null,"seen":"changed"}"#),

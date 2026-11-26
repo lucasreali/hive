@@ -838,12 +838,10 @@ garbage\0\
             mark(&projects, path.clone(), DiffBase::Head, &seen, (&a, true)),
             changes(&path, DiffBase::Head, None, vec![seen_a, untracked.clone()])
         );
-        let (Control::Changes { files, .. }, _) =
-            answer(&projects, path.clone(), DiffBase::Branch, &seen)
-        else {
-            panic!("expected changes")
-        };
-        assert!(files.iter().all(|f| f.seen.is_none()), "{files:?}");
+        let (reply, _) = answer(&projects, path.clone(), DiffBase::Branch, &seen);
+        let unmarked = |f: &ChangedFile| f.seen.is_none();
+        let none = matches!(&reply, Control::Changes { files, .. } if files.iter().all(unmarked));
+        assert!(none, "{reply:?}");
         // Marks that cannot be saved say why, and nothing is marked.
         let capped = Seen::with_limit(top.join("hive/capped.json"), 2);
         assert_eq!(

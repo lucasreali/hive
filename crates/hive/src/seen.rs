@@ -381,6 +381,9 @@ mod tests {
             .unwrap()
             .set_len(HASH_LIMIT + 1)
             .unwrap();
+        // A deleted file alone: nothing to hash.
+        repo.mark(&head, &["a"], true);
+        assert_eq!(repo.marks(&head)[0], ("a".to_owned(), Some(Marked)));
         let all = ["a", "moved", "link", "big"];
         repo.mark(&head, &all, true);
         let seen: Vec<_> = repo.marks(&head).into_iter().map(|(_, m)| m).collect();
@@ -404,11 +407,8 @@ mod tests {
             .filter(|(_, m)| *m == Some(Changed))
             .map(|(p, _)| p.as_str())
             .collect();
-        let expected = if cfg!(unix) {
-            vec!["big", "link", "moved"]
-        } else {
-            vec!["big", "moved"]
-        };
+        let mut expected = vec!["big", "link", "moved"];
+        expected.retain(|p| cfg!(unix) || *p != "link");
         assert_eq!(changed, expected);
     }
 
@@ -418,13 +418,17 @@ mod tests {
         assert_eq!(on_disk(&repo.dir, "a"), None);
         assert_eq!(on_disk(&repo.dir, "gone"), Some(NONE.to_owned()));
         assert_eq!(on_disk(&repo.dir, ".git"), Some(NONE.to_owned()));
-        let odd = "odd\nname";
-        if std::fs::write(repo.dir.join(odd), "x").is_ok() {
+        // A name `--stdin-paths` cannot take: its size and time.
+        for odd in ["odd\rname", "cr\r"] {
+            repo.write(odd, "x");
             let id = on_disk(&repo.dir, odd).unwrap_or_default();
             assert!(id.starts_with("stat:1:"), "{id}");
         }
-        repo.write("cr\r", "x");
-        assert!(on_disk(&repo.dir, "cr\r").is_some());
+        #[cfg(unix)]
+        {
+            repo.write("odd\nname", "x");
+            assert!(on_disk(&repo.dir, "odd\nname").is_some());
+        }
         // At the cap, hashed.
         let at = std::fs::File::create(repo.dir.join("at")).unwrap();
         at.set_len(HASH_LIMIT).unwrap();
