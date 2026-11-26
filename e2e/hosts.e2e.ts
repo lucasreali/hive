@@ -11,7 +11,7 @@ async function open(page: Page, theme: string) {
   await page.goto("/?mock=remote");
   const tree = page.getByRole("navigation", { name: "Projects" });
   await expect(tree.getByRole("button", { name: "fix-login" })).toBeVisible();
-  await expect(page.locator(".host-chip")).toContainText("gpu-box");
+  await expect(page.locator(".hosts-item")).toHaveText("1 host");
   await page.evaluate((t) => {
     document.documentElement.dataset.theme = t;
   }, theme);
@@ -53,17 +53,16 @@ for (const theme of ["one-dark", "one-light"]) {
     page,
   }) => {
     const tree = await open(page, theme);
-    const chip = page.locator(".host-chip");
-    await expect(chip).toHaveAttribute("data-status", "connected");
-    await expect(chip).toContainText("gpu-box");
-    await expect(chip.locator(".connection-state")).toHaveText("connected");
+    const item = page.locator(".hosts-item");
+    await expect(item).toHaveAttribute("data-status", "connected");
+    await expect(item).toHaveText("1 host");
     const space = tree.getByRole("combobox", { name: "Space" });
     await expect(space).toHaveText("Default");
     await space.click();
-    for (const name of ["Default", "Default · gpu-box", "New space on this Mac…"]) {
+    for (const name of ["Default", "Default · gpu-box", "New space…", "Edit space…"]) {
       await expect(page.getByRole("option", { name, exact: true })).toBeVisible();
     }
-    await expect(page.getByRole("option", { name: "New space on gpu-box…" })).toBeVisible();
+    await expect(page.locator(".space-host")).toHaveText(["This Mac", "gpu-box"]);
     await page.screenshot({ path: `target/e2e/hosts-switcher-${theme}.png` });
     await page.keyboard.press("Escape");
 
@@ -74,10 +73,21 @@ for (const theme of ["one-dark", "one-light"]) {
     await expect(tree.getByRole("button", { name: "shop", exact: true })).toHaveCount(0);
     await page.screenshot({ path: `target/e2e/hosts-remote-space-${theme}.png` });
 
-    // A new space is made on the host picked.
+    // A new space is made on the host picked in its dialog.
+    await pick(page, "Default");
     await space.click();
-    await page.getByRole("option", { name: "New space on gpu-box…" }).click();
+    await page.getByRole("option", { name: "New space…" }).click();
     const dialog = page.getByRole("dialog", { name: "New space" });
+    const where = dialog.getByRole("listbox", { name: "Where" });
+    await expect(where.getByRole("option", { name: "This Mac" })).toHaveAttribute(
+      "aria-selected",
+      "true",
+    );
+    await where.getByRole("option", { name: "gpu-box" }).click();
+    await expect(where.getByRole("option", { name: "gpu-box" })).toHaveAttribute(
+      "aria-selected",
+      "true",
+    );
     await dialog.getByLabel("Name", { exact: true }).fill("Training");
     await dialog.getByLabel("Name", { exact: true }).press("Enter");
     await expect(space).toHaveText("Training · gpu-box");
@@ -101,9 +111,9 @@ for (const theme of ["one-dark", "one-light"]) {
     await type(page, "drop-link");
     const overlay = page.getByRole("status").filter({ hasText: "Reconnecting to gpu-box…" });
     await expect(overlay.first()).toBeVisible();
-    const chip = page.locator(".host-chip");
-    await expect(chip).toHaveAttribute("data-status", "reconnecting");
-    await expect(chip).toContainText("reconnecting since");
+    const item = page.locator(".hosts-item");
+    await expect(item).toHaveText("1 host down");
+    await expect(item).toHaveAttribute("data-status", "disconnected");
     // Its buffer stays; what is typed goes nowhere.
     await page.keyboard.type("lost");
     await page.waitForTimeout(300);
@@ -111,8 +121,12 @@ for (const theme of ["one-dark", "one-light"]) {
     expect(await shown()).not.toContain("lost");
     await page.screenshot({ path: `target/e2e/hosts-overlay-${theme}.png` });
 
-    await chip.getByRole("button", { name: "Reconnect" }).click();
-    await expect(chip).toHaveAttribute("data-status", "connected");
+    await item.click();
+    const popover = page.getByRole("dialog", { name: "Hosts" });
+    await expect(popover).toContainText("reconnecting since");
+    await popover.getByRole("button", { name: "Reconnect gpu-box" }).click();
+    await expect(item).toHaveAttribute("data-status", "connected");
+    await expect(item).toHaveText("1 host");
     await expect(page.locator(".host-overlay")).toHaveCount(0);
   });
 
@@ -158,12 +172,9 @@ test("Settings → Hosts adds a host by its alias, shows its link, tests and rem
   await dialog.getByLabel("Host alias").fill("lab");
   await dialog.getByRole("button", { name: "Add host" }).click();
   await expect(dialog.getByText(/disconnected: ssh: Could not resolve hostname lab/)).toBeVisible();
-  await expect(page.locator(".host-chip", { hasText: "lab" })).toHaveAttribute(
-    "data-status",
-    "disconnected",
-  );
+  await expect(page.locator(".hosts-item")).toHaveText("1 of 2 hosts down");
   await page.screenshot({ path: "target/e2e/hosts-settings.png" });
   await dialog.getByRole("button", { name: "Remove lab" }).click();
-  await expect(page.locator(".host-chip", { hasText: "lab" })).toHaveCount(0);
+  await expect(page.locator(".hosts-item")).toHaveText("1 host");
   await expect(dialog.getByRole("button", { name: "Remove gpu-box" })).toBeVisible();
 });

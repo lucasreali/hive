@@ -1,0 +1,19 @@
+{
+  "note": "SYNTHETIC: built by hand from the fields Claude Code's docs list (hooks: StopFailure, SubagentStart, SubagentStop, Stop background_tasks; sub-agents: API errors in subagents), not recorded (TODO 27.7). Four background subagents run while a fifth fails on an API error: its StopFailure carries its agent_id without an agent_type, and no SubagentStop follows. The lead's Stop lists only the four as background_tasks.",
+  "calls": [
+    ["SessionStart", {"session_id": "lead", "source": "startup"}],
+    ["UserPromptSubmit", {"session_id": "lead"}],
+    ["SubagentStart", {"session_id": "lead", "agent_id": "g1", "agent_type": "general-purpose"}],
+    ["SubagentStart", {"session_id": "lead", "agent_id": "g2", "agent_type": "general-purpose"}],
+    ["SubagentStart", {"session_id": "lead", "agent_id": "g3", "agent_type": "general-purpose"}],
+    ["SubagentStart", {"session_id": "lead", "agent_id": "g4", "agent_type": "general-purpose"}],
+    ["PreToolUse", {"session_id": "lead", "agent_id": "f5", "tool_name": "Read", "tool_input": {"file_path": "/x/a.rs"}}],
+    ["StopFailure", {"session_id": "lead", "agent_id": "f5", "error": "rate_limit", "last_assistant_message": "API Error: Rate limit reached"}],
+    ["Stop", {"session_id": "lead", "stop_hook_active": false, "last_assistant_message": "Four agents are at work.", "background_tasks": [
+      {"id": "g1", "type": "subagent", "status": "running", "description": "a", "agent_type": "general-purpose"},
+      {"id": "g2", "type": "subagent", "status": "running", "description": "b", "agent_type": "general-purpose"},
+      {"id": "g3", "type": "subagent", "status": "running", "description": "c", "agent_type": "general-purpose"},
+      {"id": "g4", "type": "subagent", "status": "running", "description": "d", "agent_type": "general-purpose"}
+    ], "session_crons": []}]
+  ]
+}

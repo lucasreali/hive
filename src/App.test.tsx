@@ -65,7 +65,7 @@ test("on macOS the shell leaves room for the traffic lights and speaks macOS", (
   expect(screen.queryByTitle("Close")).toBeNull();
   const status = screen.getByTitle("Service connection");
   act(() => apply({ type: "welcome", version: "0.1.0", distro: null }));
-  expect(status.textContent).toBe("macOSconnected");
+  expect(status.textContent).toBe("This Macconnected");
   for (const title of ["Add project (⇧⌘O)", "Close (⇧⌘B)"]) {
     expect(screen.getByTitle(title)).toBeDefined();
   }
