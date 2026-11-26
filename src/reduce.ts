@@ -389,6 +389,30 @@ function reduce(s: HiveState, m: HostMessage): Partial<HiveState> {
         ...patchDialog(s, { created: { project: project.id, path, notes } }),
       };
     }
+    case "bring_back_plan": {
+      const { type: _, ...plan } = m;
+      return patchDialog(s, { plan });
+    }
+    case "bring_back_failed":
+      return patchDialog(s, { bringFailure: { path: m.path, message: m.message } });
+    case "brought_back": {
+      const list = Object.values(s.projects ?? {}).map((p) =>
+        p.id === m.project.id ? m.project : p,
+      );
+      const plan = s.worktreeDialog.plan?.path === m.path ? s.worktreeDialog.plan.plan : null;
+      const into = plan ? ` into ${plan.into}` : "";
+      const how = m.fast_forward ? "fast-forward" : "merge commit";
+      const done = s.modal === "bring-back" && s.modalWorktree === m.path;
+      return {
+        ...reduce(s, { type: "projects", projects: list }),
+        modal: done ? null : s.modal,
+        ...withNotice(
+          s,
+          "info",
+          `Brought ${m.commits} commit${m.commits === 1 ? "" : "s"} back${into} (${how}).`,
+        ),
+      };
+    }
     case "worktree_removed":
     case "worktree_renamed": {
       // As a new list: a worktree that went away is dropped as `projects` drops it.
@@ -397,13 +421,14 @@ function reduce(s: HiveState, m: HostMessage): Partial<HiveState> {
       );
       const next = reduce(s, { type: "projects", projects: list });
       const renamed = m.type === "worktree_renamed" && s.selection === m.from;
-      const dialog = m.type === "worktree_removed" ? "remove-worktree" : "rename-worktree";
+      const dialogs =
+        m.type === "worktree_removed" ? ["remove-worktree", "discard-review"] : ["rename-worktree"];
       const gone = m.type === "worktree_removed" ? m.path : m.from;
       return {
         ...next,
         selection: renamed ? m.path : next.selection,
         // Only the dialog opened for that worktree has done its job.
-        modal: s.modal === dialog && s.modalWorktree === gone ? null : s.modal,
+        modal: dialogs.includes(s.modal ?? "") && s.modalWorktree === gone ? null : s.modal,
       };
     }
     case "remove_worktree_failed":

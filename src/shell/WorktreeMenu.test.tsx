@@ -47,6 +47,7 @@ test("a worktree's right click opens its menu at the pointer; main and foreign o
     ["New terminal here", false],
     ["Copy path", false],
     ["Show in Explorer", false],
+    ["Review in a new worktree…", false],
     ["Rename…", false],
     ["Delete…", false],
   ]);
@@ -109,10 +110,12 @@ test("arrows move between enabled items; Esc, Tab, a click outside, scrolling an
   expect(document.activeElement).toBe(item("Copy path"));
   fireEvent.keyDown(m, { key: "ArrowDown" });
   fireEvent.keyDown(m, { key: "ArrowDown" });
+  expect(document.activeElement).toBe(item("Review in a new worktree…"));
+  fireEvent.keyDown(m, { key: "ArrowDown" });
   // Rename and Delete are disabled on main: it wraps to the first item.
   expect(document.activeElement).toBe(item("New terminal here"));
   fireEvent.keyDown(m, { key: "ArrowUp" });
-  expect(document.activeElement).toBe(item("Show in Explorer"));
+  expect(document.activeElement).toBe(item("Review in a new worktree…"));
   fireEvent.keyDown(m, { key: "x" });
   expect(menu()).toBeTruthy();
   fireEvent.keyDown(m, { key: "Escape" });

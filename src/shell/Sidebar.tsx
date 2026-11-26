@@ -298,7 +298,10 @@ function ProjectNode({
               ))}
             </>
           ) : (
-            shown.map((w) => <WorktreeNode key={w.id} worktree={w} />)
+            // A review (27.4) shows under the worktree it reviews.
+            shown
+              .filter((w) => !shown.some((r) => r.id === w.review_of))
+              .map((w) => <WorktreeNode key={w.id} worktree={w} />)
           )}
         </ul>
       )}
@@ -365,23 +368,37 @@ function Health({ status: s }: { status: WorktreeStatus }) {
   );
 }
 
+/** The shown reviews of the worktree `id` (27.4), as the service marks them. */
+const reviewsOf = (s: HiveState, id: string) =>
+  Object.values(s.projects ?? {})
+    .flatMap((p) => p.worktrees)
+    .filter((r) => r.review_of === id && !s.subagentWorktrees.includes(r.id));
+
 /**
- * A worktree and its agents; it collapses only when it has agents, as in the prototype. It
- * renders again only when its worktree, its agents or their order change, not on another
- * worktree's hook event (9.23).
+ * A worktree, its agents and the reviews of it (27.4), a review marked with the name of the
+ * worktree it reviews (`reviewed`); it collapses only when it has agents or reviews, as in the
+ * prototype. It renders again only when its worktree, its reviews, its agents or their order
+ * change, not on another worktree's hook event (9.23).
  */
-const WorktreeNode = memo(function WorktreeNode({ worktree: w }: { worktree: Worktree }) {
+const WorktreeNode = memo(function WorktreeNode({
+  worktree: w,
+  reviewed,
+}: {
+  worktree: Worktree;
+  reviewed?: string;
+}) {
   const agents = useAgentsIn(w.id);
+  const reviews = useHive(useShallow((s) => reviewsOf(s, w.id)));
   const open = useHive((s) => !s.collapsed[`worktree:${w.id}`]);
   const selected = useHive((s) => s.selection === w.id);
   // Agents move only among their worktree's: the service places each by its cwd (8.2).
   const drag = useReorder(`agents:${w.id}`, moveAgent);
   return (
-    <li>
+    <li className={reviewed ? "in-review" : undefined}>
       <div className="tree-row worktree" title={w.path} data-selected={selected}>
         {/* One fixed box with or without agents, so every worktree's icon lines up (7.13). */}
         <span className="chevron-box">
-          {agents.length > 0 && (
+          {agents.length + reviews.length > 0 && (
             <button
               type="button"
               className="chevron"
@@ -403,12 +420,19 @@ const WorktreeNode = memo(function WorktreeNode({ worktree: w }: { worktree: Wor
         >
           <BranchIcon />
           <span className="label">{w.name}</span>
+          {reviewed && (
+            <span className="badge review-badge" title={`A review of ${reviewed}`}>
+              review
+            </span>
+          )}
         </button>
         {w.status && <Health status={w.status} />}
         <PullBadge worktree={w.id} />
         <RunBadge worktree={w.id} />
         {/* After the badges, in the row's right column of indicators (7.13). */}
-        {!open && <Rollup agents={(a) => a.worktree === w.id} />}
+        {!open && (
+          <Rollup agents={(a) => a.worktree === w.id || reviews.some((r) => r.id === a.worktree)} />
+        )}
         <button
           type="button"
           className="new-chat"
@@ -423,6 +447,9 @@ const WorktreeNode = memo(function WorktreeNode({ worktree: w }: { worktree: Wor
         <ul>
           {agents.map((a) => (
             <AgentRow key={a.id} agent={a} drag={drag(a.id)} />
+          ))}
+          {reviews.map((r) => (
+            <WorktreeNode key={r.id} worktree={r} reviewed={w.name} />
           ))}
         </ul>
       )}
