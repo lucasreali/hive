@@ -11,6 +11,7 @@ import type {
   GhLogin,
   ProgressState,
   Project,
+  ReviewComment,
   SaveError,
   Script,
   ServiceMessage,
@@ -1136,6 +1137,8 @@ export function createMockTransport(
     }
     const listed = files.get(path) as string[];
     later({ type: "files", path, files: listed, ignored: ignored.sort(), truncated: false });
+    // Its comments move with their code (27.3).
+    if (reviews.get(path)?.length) later(anchored(path));
     // A folder project's folder has no changes (23.1).
     if (!holder(path)?.folder) later(markedChanges(path, watchedBase));
   };
@@ -1152,6 +1155,36 @@ export function createMockTransport(
       return { ...f, seen: mark === textOf(path, f.path) ? "seen" : "changed" };
     });
     return { ...listed, files };
+  };
+  // A stand-in for `hive::comments` (27.3): by worktree, its comments; each listing looks for a
+  // comment's lines in the file's text now, nearest to where they were, else it is outdated.
+  const reviews = new Map<string, ReviewComment[]>();
+  const linesOf = (worktree: string, path: string) => {
+    const content = fileAt(worktree, path).content;
+    return content == null ? null : content.replace(/\n$/, "").split("\n");
+  };
+  const anchored = (worktree: string) => {
+    const kept = (reviews.get(worktree) ?? []).map((c) => {
+      const lines = linesOf(worktree, c.file) ?? [];
+      const n = c.to - c.from + 1;
+      const at = lines
+        .map((_, i) => i)
+        .filter((i) => lines.slice(i, i + n).join("\n") === c.code.join("\n"))
+        .sort((a, b) => Math.abs(a + 1 - c.from) - Math.abs(b + 1 - c.from))[0];
+      if (at === undefined) return { ...c, outdated: true };
+      return { ...c, from: at + 1, to: at + n, outdated: false };
+    });
+    reviews.set(worktree, kept);
+    return { type: "comments" as const, path: worktree, comments: kept };
+  };
+  const reviewOp = (worktree: string, change: (kept: ReviewComment[]) => ReviewComment[]) => {
+    if (!holder(worktree)) {
+      const message = `Cannot change the comment: ${worktree} is not a worktree of a followed project`;
+      return void later({ type: "error", message });
+    }
+    anchored(worktree);
+    reviews.set(worktree, change(reviews.get(worktree) ?? []));
+    later(anchored(worktree));
   };
   // A stand-in for an agent writing a file: `touch <name>` in a worktree's terminal.
   const touch = (cwd: string, name: string) => {
@@ -1705,6 +1738,33 @@ export function createMockTransport(
       }
       seenMarks.set(key, marks);
       later(markedChanges(path, base));
+    },
+    async listComments(path) {
+      reviewOp(path, (kept) => kept);
+    },
+    async addComment(path, file, from, to, body) {
+      // Not followed: refused by `reviewOp`.
+      const lines = (holder(path) && linesOf(path, file)) || [];
+      if (holder(path) && (to > lines.length || from < 1 || to < from)) {
+        const message = `Cannot add the comment: ${file} has no line ${to} (it has ${lines.length})`;
+        return void later({ type: "error", message });
+      }
+      reviewOp(path, (kept) => {
+        const id = Math.max(0, ...kept.map((c) => c.id)) + 1;
+        const code = lines.slice(from - 1, to);
+        const [before, after] = [
+          lines.slice(Math.max(0, from - 4), from - 1),
+          lines.slice(to, to + 3),
+        ];
+        const comment = { id, file, from, to, body, code, before, after, author: "you" };
+        return [...kept, { ...comment, ms: Date.now(), resolved: false, outdated: false }];
+      });
+    },
+    async resolveComment(path, id, resolved) {
+      reviewOp(path, (kept) => kept.map((c) => (c.id === id ? { ...c, resolved } : c)));
+    },
+    async deleteComment(path, id) {
+      reviewOp(path, (kept) => kept.filter((c) => c.id !== id));
     },
     async listScripts(path) {
       scriptsAsked = holder(path) ? path : null;

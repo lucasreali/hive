@@ -4030,7 +4030,7 @@ fieldset.new-account {
   overflow-wrap: anywhere;
 }
 
-/* Review comments (6.7): the input under the file view's header, the list under its body. */
+/* Review comments (6.7): the input under the file view's header. */
 .comment-input {
   flex: none;
   display: flex;
@@ -4062,76 +4062,127 @@ fieldset.new-account {
   box-shadow: 0 0 0 1px var(--focus);
 }
 
-.review {
-  flex: none;
-  max-height: 30%;
+/* The right panel's Comments view (27.3): Open, Outdated and Resolved, each comment with its
+   place, code, text and actions. */
+.comments {
+  flex: 1 1 0;
+  min-height: 0;
+  overflow: auto;
   display: flex;
   flex-direction: column;
-  border-top: 1px solid var(--border-subtle);
-  background: var(--panel);
 }
 
-.review-bar {
+.comments-bar {
   height: 28px;
   flex: none;
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  padding: 0 6px 0 12px;
+  justify-content: flex-end;
+  padding: 0 6px;
 }
 
-.review-title {
-  font-size: var(--fs-meta);
-  color: var(--text-3);
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-}
-
-.review .ghost.text {
+.comments .ghost.text {
   width: auto;
   height: 22px;
   padding: 0 6px;
 }
 
-.review .ghost:disabled {
+.comments .ghost:disabled {
   color: var(--text-4);
 }
 
-.review ul {
+.comments-title {
+  margin: 0;
+  padding: 6px 12px 2px;
+  font-size: var(--fs-meta);
+  font-weight: normal;
+  color: var(--text-3);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.comments-group ul {
   margin: 0;
   padding: 0 0 4px;
   list-style: none;
-  overflow-y: auto;
 }
 
-.review-item {
+.comment-item {
   display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 2px 6px 2px 12px;
+  flex-direction: column;
+  gap: 2px;
+  padding: 4px 6px 4px 12px;
   font-size: var(--fs-small);
 }
 
-.review-item:hover {
+.comment-item:hover {
   background: var(--hover);
 }
 
-.review-where {
-  flex: none;
-  font-family: var(--font-mono);
-  color: var(--accent);
+.comment-item[data-outdated] {
+  color: var(--text-3);
 }
 
-.review-text {
-  flex: 1;
+.comment-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
   min-width: 0;
+}
+
+.comment-where {
+  min-width: 0;
+  padding: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  color: var(--text);
+  background: none;
+  border: none;
+  font-family: var(--font-mono);
+  font-size: var(--fs-small);
+  color: var(--accent);
+  cursor: pointer;
 }
 
-.review-delete {
+.comment-item[data-outdated] .comment-where {
+  color: var(--text-3);
+  text-decoration: line-through;
+}
+
+.comment-meta {
+  flex: none;
+  margin-left: auto;
+  font-size: var(--fs-meta);
+  color: var(--text-3);
+}
+
+.comment-code {
+  margin: 0;
+  padding: 2px 6px;
+  max-height: 6em;
+  overflow: hidden;
+  background: var(--bg);
+  border-radius: var(--radius);
+  font-family: var(--font-mono);
+  font-size: var(--fs-meta);
+  color: var(--text-2);
+  white-space: pre;
+}
+
+.comment-body {
+  margin: 0;
+  color: var(--text);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.comment-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 2px;
+}
+
+.comment-delete {
   width: 20px;
   height: 20px;
 }

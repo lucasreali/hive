@@ -1,6 +1,7 @@
 import { afterEach, beforeAll, expect, spyOn, test } from "bun:test";
-import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { detachAfterAll } from "../../test/transport";
+import type { Project, ReviewComment } from "../protocol";
 import { apply } from "../reduce";
 import { type HiveState, initialState, useHive } from "../store";
 import { closeTerminal, mountTerminals, openTerminal, terminal } from "../terminals";
@@ -8,12 +9,14 @@ import { transport } from "../transport";
 import {
   CommentButton,
   CommentInput,
-  deleteComment,
+  CommentsView,
+  commentsTarget,
   endComment,
-  ReviewList,
-  reviewTarget,
+  openComments,
   reviewText,
-  sendReview,
+  sendable,
+  sendComments,
+  sendOpenComments,
   startComment,
 } from "./review";
 
@@ -31,10 +34,28 @@ afterEach(() => {
 });
 
 const wt = "/home/u/shop";
-const a = { path: "src/a.ts", from: 3, to: 5, text: "why?" };
-const b = { path: "docs/my notes.md", from: 7, to: 7, text: "typo" };
+const comment = (patch: Partial<ReviewComment>): ReviewComment => ({
+  id: 1,
+  file: "src/a.ts",
+  from: 3,
+  to: 5,
+  body: "why?",
+  code: ["let a = 1;"],
+  before: [],
+  after: [],
+  author: "ana",
+  ms: Date.now() - 5 * 60_000,
+  resolved: false,
+  outdated: false,
+  ...patch,
+});
+const a = comment({});
+const b = comment({ id: 2, file: "docs/my notes.md", from: 7, to: 7, body: "typo", code: [] });
+const resolved = comment({ id: 3, body: "done", resolved: true });
+const outdated = comment({ id: 4, body: "gone", outdated: true });
 
-test("a comment opens on the shown file's selected lines and is kept per worktree", () => {
+test("a comment opens on the shown file's selected lines and goes to the service", () => {
+  const add = spyOn(transport, "addComment").mockImplementation(async () => {});
   startComment();
   expect(useHive.getState().commenting).toBeNull();
   useHive.setState({ openFile: { worktree: wt, path: "src/a.ts" }, fileShown: true });
@@ -47,75 +68,77 @@ test("a comment opens on the shown file's selected lines and is kept per worktre
   startComment();
   expect(useHive.getState().commenting).toEqual({ worktree: wt, path: "src/a.ts", from: 3, to: 5 });
 
-  // An empty comment is dropped; a comment is trimmed and appended to its worktree's.
+  // An empty comment is dropped; a comment is trimmed and sent.
   endComment("  ");
-  expect(useHive.getState()).toMatchObject({ commenting: null, comments: {} });
+  expect(useHive.getState().commenting).toBeNull();
   endComment("ignored: no input open");
-  expect(useHive.getState().comments).toEqual({});
+  expect(add).not.toHaveBeenCalled();
   startComment();
   endComment(" why? ");
-  startComment();
-  endComment("again");
-  expect(useHive.getState().comments).toEqual({ [wt]: [a, { ...a, text: "again" }] });
-
-  deleteComment(wt, 0);
-  expect(useHive.getState().comments).toEqual({ [wt]: [{ ...a, text: "again" }] });
-  deleteComment("/elsewhere", 0);
-  expect(useHive.getState().comments["/elsewhere"]).toEqual([]);
+  expect(add).toHaveBeenCalledWith(wt, "src/a.ts", 3, 5, "why?");
+  expect(useHive.getState().commenting).toBeNull();
+  add.mockRestore();
 });
 
 test("the review is one line per comment: its reference, then the comment", () => {
   expect(reviewText([a, b])).toBe(
     '@src/a.ts (lines 3–5) — why?\n@"docs/my notes.md" (line 7) — typo',
   );
+  expect([a, b, resolved, outdated].map(sendable)).toEqual([true, true, false, false]);
 });
 
 const ready: Partial<HiveState> = {
-  openFile: { worktree: wt, path: "src/a.ts" },
-  comments: { [wt]: [a, b] },
+  comments: { [wt]: [a, b, resolved, outdated] },
   tabs: [
     { id: 1, cwd: "/home/u/other" },
     { id: 2, cwd: wt },
   ],
   activeTab: 2,
 };
-const target = (patch: Partial<HiveState>) => reviewTarget({ ...initialState, ...ready, ...patch });
+const target = (patch: Partial<HiveState>, comments = [a, b]) =>
+  commentsTarget({ ...initialState, ...ready, ...patch }, wt, comments);
 
-test("the review goes where a reference would, or it says why not", () => {
-  expect(target({})).toEqual({ terminal: 2, worktree: wt, text: reviewText([a, b]) });
-  expect(target({ openFile: null })).toEqual({ why: "No comments to send" });
-  expect(target({ comments: {} })).toEqual({ why: "No comments to send" });
-  expect(target({ comments: { [wt]: [] } })).toEqual({ why: "No comments to send" });
+test("comments go where a reference would, or it says why not", () => {
+  expect(target({})).toEqual({ terminal: 2, text: reviewText([a, b]) });
+  expect(target({}, [])).toEqual({ why: "No open comments to send" });
   expect(target({ activeTab: 1 })).toEqual({ why: "The active terminal is in another worktree" });
   expect(target({ activeTab: null })).toEqual({ why: "No terminal open" });
 });
 
-test("sending pastes the review without Enter, shows the terminal and drops the comments", async () => {
+test("the open comments are the shown worktree's, open and still there", () => {
+  expect(openComments(initialState)).toEqual({ worktree: "", comments: [] });
+  const project = {
+    id: wt,
+    name: "shop",
+    group: false,
+    folder: false,
+    worktrees: [{ id: wt, path: wt, name: "shop" }],
+  } as unknown as Project;
+  const s = { ...initialState, ...ready, projects: { [wt]: project }, selection: wt };
+  expect(openComments(s)).toEqual({ worktree: wt, comments: [a, b] });
+});
+
+test("sending pastes the comments without Enter, shows the terminal and keeps them", async () => {
   const write = spyOn(transport, "writeTerminal");
   // Nothing to send; then a target whose terminal has no xterm: nothing happens.
-  sendReview();
+  sendOpenComments();
   useHive.setState({ ...ready, fileShown: true });
-  sendReview();
+  sendComments(wt, [a, b]);
   expect(write).not.toHaveBeenCalled();
-  expect(useHive.getState().comments[wt]).toHaveLength(2);
 
   useHive.setState({ tabs: [], activeTab: null });
   const host = document.body.appendChild(document.createElement("div"));
   const unmount = mountTerminals(host);
   const id = await act(() => openTerminal(wt));
   await act(() => new Promise((resolve) => setTimeout(resolve, 10)));
-  const other = { path: "b.ts", from: 1, to: 1, text: "kept" };
-  useHive.setState({
-    comments: { [wt]: [a, b], "/other": [other] },
-    fileShown: true,
-  });
-  sendReview();
+  useHive.setState({ fileShown: true });
+  sendComments(wt, [a, b]);
   // Not in bracketed paste mode, xterm turns newlines into carriage returns, as for Ctrl+Shift+V.
   expect(write).toHaveBeenCalledWith(id, reviewText([a, b]).replace("\n", "\r"));
   expect(write).not.toHaveBeenCalledWith(id, expect.stringContaining("typo\r"));
   expect(useHive.getState()).toMatchObject({
     fileShown: false,
-    comments: { [wt]: [], "/other": [other] },
+    comments: { [wt]: [a, b, resolved, outdated] },
   });
   expect(document.activeElement).toBe(terminal(id)?.textarea as Element);
   write.mockRestore();
@@ -124,6 +147,7 @@ test("sending pastes the review without Enter, shows the terminal and drops the 
 });
 
 test("the input saves on Enter and cancels on Escape, only for its own file", () => {
+  const add = spyOn(transport, "addComment").mockImplementation(async () => {});
   useHive.setState({ commenting: { worktree: wt, path: "src/a.ts", from: 3, to: 5 } });
   const { rerender } = render(<CommentInput worktree={wt} path="src/b.ts" />);
   expect(screen.queryByRole("textbox")).toBeNull();
@@ -138,41 +162,98 @@ test("the input saves on Enter and cancels on Escape, only for its own file", ()
   fireEvent.keyDown(input, { key: "Enter", isComposing: true });
   fireEvent.keyDown(input, { key: "Escape", isComposing: true });
   fireEvent.keyDown(input, { key: "Enter", keyCode: 229 });
-  expect(useHive.getState().comments).toEqual({});
+  expect(add).not.toHaveBeenCalled();
   expect(useHive.getState().commenting).not.toBeNull();
   fireEvent.keyDown(input, { key: "Enter" });
-  expect(useHive.getState()).toMatchObject({ commenting: null, comments: { [wt]: [a] } });
+  expect(add).toHaveBeenCalledWith(wt, "src/a.ts", 3, 5, "why?");
+  expect(useHive.getState().commenting).toBeNull();
 
   act(() => useHive.setState({ commenting: { worktree: wt, path: "src/a.ts", from: 9, to: 9 } }));
   const one = screen.getByLabelText("Line 9") as HTMLInputElement;
   fireEvent.change(one, { target: { value: "dropped" } });
   fireEvent.keyDown(one, { key: "Escape" });
-  expect(useHive.getState()).toMatchObject({ commenting: null, comments: { [wt]: [a] } });
+  expect(add).toHaveBeenCalledTimes(1);
+  expect(useHive.getState().commenting).toBeNull();
   expect(screen.queryByRole("textbox")).toBeNull();
+  add.mockRestore();
 });
 
-test("the list shows the comments, deletes them, and sends them when it can", () => {
-  const { rerender } = render(<ReviewList worktree={wt} />);
-  expect(screen.queryByRole("region", { name: "Review comments" })).toBeNull();
-  act(() => useHive.setState({ comments: { [wt]: [a, b] } }));
-  const list = screen.getByRole("region", { name: "Review comments" });
-  expect([...list.querySelectorAll("li")].map((li) => li.textContent)).toEqual([
-    "src/a.ts:3–5why?",
-    "docs/my notes.md:7typo",
-  ]);
-  const send = screen.getByRole("button", { name: "Send review (2)" }) as HTMLButtonElement;
-  expect(send.disabled).toBe(true);
-  expect(send.title).toBe("No comments to send");
-  act(() => useHive.setState(ready));
-  expect(send.disabled).toBe(false);
-  expect(send.title).toBe("Paste the comments into the terminal, without Enter");
+test("the list groups the comments and sends, resolves, reopens and deletes them", () => {
+  const resolve = spyOn(transport, "resolveComment").mockImplementation(async () => {});
+  const remove = spyOn(transport, "deleteComment").mockImplementation(async () => {});
+  render(<CommentsView worktree={wt} />);
+  expect(
+    screen.getByText("No comments. Select lines of a file and press Comment (Ctrl+Shift+M)."),
+  ).toBeTruthy();
+  act(() => useHive.setState({ comments: { [wt]: [a, b, resolved, outdated] } }));
+  const group = (name: string) => screen.getByRole("region", { name });
+  const items = (name: string) =>
+    [...group(name).querySelectorAll("li")].map(
+      (li) => li.querySelector(".comment-body")?.textContent,
+    );
+  expect(screen.getByText("Open (2)")).toBeTruthy();
+  expect(items("Open")).toEqual(["why?", "typo"]);
+  expect(items("Outdated")).toEqual(["gone"]);
+  expect(items("Resolved")).toEqual(["done"]);
+  const first = within(group("Open")).getAllByRole("listitem")[0] as HTMLElement;
+  expect(within(first).getByText("src/a.ts:3–5")).toBeTruthy();
+  expect(within(first).getByText("ana · 5m ago")).toBeTruthy();
+  expect(first.querySelector(".comment-code")?.textContent).toBe("let a = 1;");
+  // A comment with no code shows none; an outdated one and a resolved one have no Send.
+  expect(
+    within(group("Open")).getAllByRole("listitem")[1]?.querySelector(".comment-code"),
+  ).toBeNull();
+  expect(within(group("Outdated")).queryByRole("button", { name: "Send" })).toBeNull();
+  expect(within(group("Resolved")).queryByRole("button", { name: "Send" })).toBeNull();
 
-  fireEvent.click(screen.getAllByRole("button", { name: "Delete comment" })[0] as HTMLElement);
-  expect(useHive.getState().comments[wt]).toEqual([b]);
-  screen.getByRole("button", { name: "Send review (1)" });
-  act(() => useHive.setState({ comments: { [wt]: [] } }));
-  rerender(<ReviewList worktree={wt} />);
-  expect(screen.queryByRole("region", { name: "Review comments" })).toBeNull();
+  // No terminal of the worktree: Send says why.
+  const all = screen.getByRole("button", { name: "Send all open (2)" }) as HTMLButtonElement;
+  const one = within(first).getByRole("button", { name: "Send" }) as HTMLButtonElement;
+  expect([all.disabled, all.title]).toEqual([true, "No terminal open"]);
+  expect([one.disabled, one.title]).toEqual([true, "No terminal open"]);
+  act(() => useHive.setState({ tabs: ready.tabs, activeTab: 2 }));
+  expect([all.disabled, all.title]).toEqual([
+    false,
+    "Paste the open comments into the terminal, without Enter",
+  ]);
+  expect(one.title).toBe("Paste the comment into the terminal, without Enter");
+  // No xterm in this test: nothing is pasted, nothing breaks.
+  fireEvent.click(all);
+  fireEvent.click(one);
+
+  fireEvent.click(within(first).getByRole("button", { name: "Resolve" }));
+  expect(resolve).toHaveBeenCalledWith(wt, 1, true);
+  fireEvent.click(within(group("Resolved")).getByRole("button", { name: "Reopen" }));
+  expect(resolve).toHaveBeenCalledWith(wt, 3, false);
+  fireEvent.click(within(group("Outdated")).getByRole("button", { name: "Delete comment" }));
+  expect(remove).toHaveBeenCalledWith(wt, 4);
+
+  // Its place opens the file there.
+  fireEvent.click(within(first).getByText("src/a.ts:3–5"));
+  expect(useHive.getState().openFile).toEqual({ worktree: wt, path: "src/a.ts" });
+  expect(within(group("Outdated")).getByText("src/a.ts:3–5").title).toBe(
+    "Its code is gone: where it was",
+  );
+  resolve.mockRestore();
+  remove.mockRestore();
+});
+
+test("comments added through the service are listed, moved and resolved", async () => {
+  const shop = Object.values(useHive.getState().projects ?? {});
+  expect(shop).toEqual([]);
+  // The mock's own worktree and file.
+  await transport.listProjects();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  const project = Object.values(useHive.getState().projects ?? {})[0] as Project;
+  const path = project.worktrees[0]?.path as string;
+  await transport.addComment(path, "README.md", 1, 1, "intro?");
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  const [added] = useHive.getState().comments[path] ?? [];
+  expect(added).toMatchObject({ id: 1, file: "README.md", from: 1, to: 1, body: "intro?" });
+  await transport.resolveComment(path, 1, true);
+  await transport.deleteComment(path, 1);
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  expect(useHive.getState().comments[path]).toEqual([]);
 });
 
 test("the Comment button needs selected lines and opens the input", () => {

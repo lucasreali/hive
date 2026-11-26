@@ -1,4 +1,5 @@
 import {
+  ChatTextIcon,
   ClockCounterClockwiseIcon,
   FilesIcon,
   GitPullRequestIcon,
@@ -73,7 +74,7 @@ import { openInEditor } from "../viewer/external";
 import { isPage, MediaView, PagePreview } from "../viewer/MediaView";
 import { useRenderedPlace } from "../viewer/place";
 import { referenceTarget, sendReference } from "../viewer/reference";
-import { CommentButton, CommentInput, ReviewList } from "../viewer/review";
+import { CommentButton, CommentInput, CommentsView } from "../viewer/review";
 import { TableView } from "../viewer/TableView";
 import { commandKey, isMac, keyText } from "../window";
 import { askDiscard } from "./ConfirmDialog";
@@ -313,16 +314,20 @@ function WorktreeInfo(props: { worktree: Worktree; children?: ReactNode }) {
 /**
  * The worktree the files views show (the selected worktree, or the selected agent's, or the
  * shown terminal's); its changes are asked for when it is shown and whenever it or its base
- * changes.
+ * changes, and its review comments (27.3) when it is shown.
  */
 function useShownWorktree() {
   const target = useHive(useShallow(panelWorktree));
+  const shown = target?.worktree.path;
   // A folder project's folder (23.1) has no changes.
-  const path = target?.project.folder ? undefined : target?.worktree.path;
+  const path = target?.project.folder ? undefined : shown;
   const base = useHive((s) => (path ? diffBase(s, path) : null));
   useEffect(() => {
     if (path && base) void transport.listChanges(path, base);
   }, [path, base]);
+  useEffect(() => {
+    if (shown) void transport.listComments(shown);
+  }, [shown]);
   return target;
 }
 
@@ -348,6 +353,13 @@ const VIEWS: PanelViewEntry[] = [
     label: "Diff",
     group: "worktree",
     icon: <PlusMinusIcon size={14} aria-hidden="true" />,
+  },
+  // 27.3.
+  {
+    view: "comments",
+    label: "Comments",
+    group: "worktree",
+    icon: <ChatTextIcon size={14} aria-hidden="true" />,
   },
   {
     view: "scripts",
@@ -454,6 +466,7 @@ function OpenView({ shown }: { shown: PanelViewEntry }) {
             {view === "changes" && <Summary worktree={target.worktree.path} />}
           </WorktreeInfo>
           {view === "files" && <FilesView worktree={target.worktree.path} />}
+          {view === "comments" && <CommentsView worktree={target.worktree.path} />}
           {view === "changes" && <FileTree worktree={target.worktree.path} changedOnly />}
           {view === "sessions" && <SessionsView worktree={target.worktree.id} />}
           {view === "pulls" && <PullsView project={target.project} worktree={target.worktree} />}
@@ -1420,7 +1433,6 @@ export function FileView(props: {
           </>
         )}
       </div>
-      {live && <ReviewList worktree={worktree} />}
     </section>
   );
 }

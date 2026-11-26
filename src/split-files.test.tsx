@@ -559,14 +559,6 @@ test("two file panes side by side, each with its own Save: only the focused one 
   // The bar's tab of the other one moves the keyboard to its editor.
   act(() => setOpenFile(b));
   expect(pane(b).contains(document.activeElement)).toBe(true);
-  // Review comments list once: under the focused pane.
-  act(() => {
-    useHive.setState({
-      comments: { [W]: [{ path: b.path, from: 1, to: 1, text: "note" }] },
-    });
-  });
-  expect(screen.getAllByRole("region", { name: "Review comments" }).length).toBe(1);
-  expect(inPane(b).getByRole("region", { name: "Review comments" })).toBeTruthy();
   // A Comment button of the pane without the focus does not count the other's selection.
   act(() => useHive.setState({ selectedLines: { from: 1, to: 1 } }));
   expect((inPane(a).getByRole("button", { name: "Comment" }) as HTMLButtonElement).disabled).toBe(
