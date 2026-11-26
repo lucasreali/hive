@@ -424,15 +424,23 @@ mod tests {
         // A name `--stdin-paths` cannot take: its size and time.
         // A leading `"` is C-unquoted by git: never sent (`"..\057x"` would be `../x`, `"bad`
         // would fail the whole batch).
-        for odd in ["odd\rname", "cr\r", "\"..\\057x\"", "\"bad"] {
-            repo.write(odd, "x");
-            let id = on_disk(&repo.dir, odd).unwrap_or_default();
-            assert!(id.starts_with("stat:1:"), "{id}");
-        }
+        let odd_names = ["odd\rname", "cr\r", "\"..\\057x\"", "\"bad"];
         #[cfg(unix)]
         {
+            for odd in odd_names {
+                repo.write(odd, "x");
+                let id = on_disk(&repo.dir, odd).unwrap_or_default();
+                assert!(id.starts_with("stat:1:"), "{id}");
+            }
             repo.write("odd\nname", "x");
             assert!(on_disk(&repo.dir, "odd\nname").is_some());
+        }
+        // Windows refuses these names (`"`, CR, LF), so no worktree there holds one: never on
+        // disk, never sent.
+        #[cfg(windows)]
+        for odd in odd_names.into_iter().chain(["odd\nname"]) {
+            assert!(std::fs::write(repo.dir.join(odd), "x").is_err(), "{odd:?}");
+            assert_eq!(on_disk(&repo.dir, odd), Some(NONE.to_owned()), "{odd:?}");
         }
         // At the cap, hashed.
         let at = std::fs::File::create(repo.dir.join("at")).unwrap();
