@@ -87,10 +87,10 @@ export function openPush(project: string, w: Place): void {
   void transport.getPushTarget(w.path);
 }
 
-/** Pushes `worktree`'s branch (the push dialog is the question). */
-export function push(worktree: string): void {
-  setGit(worktree, { busy: "push", error: null });
-  void transport.push(worktree);
+/** Pushes `worktree`'s branch to `target` as the push dialog showed it (the dialog asks). */
+export function push(target: PushTarget & { branch: string; target: string }): void {
+  setGit(target.worktree, { busy: "push", error: null });
+  void transport.push(target.worktree, target.branch, target.target);
 }
 
 /** Opens "Run workflow…" for `project`, its workflows as worktree `w`'s `HEAD` has them. */

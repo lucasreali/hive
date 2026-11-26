@@ -203,14 +203,14 @@ test("pull request actions call their commands", async () => {
   await tauriTransport.listPulls("/r", true);
   await tauriTransport.openPull("/r", 7);
   await tauriTransport.actOnPull("/r", 7, { kind: "close" });
-  await tauriTransport.createPull("/r/w", "T", "B", "main", true, false);
+  await tauriTransport.createPull("/r/w", "T", "B", "main", true, null);
   expect(calls).toEqual([
     ["list_pulls", { project: "/r", force: true }],
     ["open_pull", { project: "/r", number: 7 }],
     ["act_on_pull", { project: "/r", number: 7, action: { kind: "close" } }],
     [
       "create_pull",
-      { worktree: "/r/w", form: { title: "T", body: "B", base: "main", draft: true, push: false } },
+      { worktree: "/r/w", form: { title: "T", body: "B", base: "main", draft: true, push: null } },
     ],
   ]);
 });
@@ -315,4 +315,25 @@ test("requests about the shown host's data name it; this Mac's settings never do
     ["list_projects", undefined],
   ]);
   expect(calls.at(-2)?.[1]).toEqual({ byes: [["lab", false]] });
+});
+
+test("commit, push and workflow requests call their commands (27.6)", async () => {
+  const calls = record();
+  await tauriTransport.stageFiles("/r/w", ["a"], true);
+  await tauriTransport.commit("/r/w", "m");
+  await tauriTransport.getPushTarget("/r/w");
+  await tauriTransport.push("/r/w", "b", "origin/b");
+  await tauriTransport.listWorkflows("/r", "/r/w");
+  await tauriTransport.runWorkflow("/r", "ci.yml", "b", [{ name: "n", value: "v" }]);
+  expect(calls).toEqual([
+    ["stage_files", { worktree: "/r/w", paths: ["a"], staged: true }],
+    ["commit", { worktree: "/r/w", message: "m" }],
+    ["get_push_target", { worktree: "/r/w" }],
+    ["push", { worktree: "/r/w", branch: "b", target: "origin/b" }],
+    ["list_workflows", { project: "/r", worktree: "/r/w" }],
+    [
+      "run_workflow",
+      { project: "/r", workflow: "ci.yml", branch: "b", inputs: [{ name: "n", value: "v" }] },
+    ],
+  ]);
 });

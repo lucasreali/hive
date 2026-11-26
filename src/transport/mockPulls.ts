@@ -153,7 +153,7 @@ export function createMockPulls(
       _body: string,
       base: string,
       draft: boolean,
-      _push: boolean,
+      _push: string | null,
     ) {
       const project = holder(worktree) ?? "";
       const list = lists[project];

@@ -582,9 +582,10 @@ pub enum Control {
         body: String,
         base: String,
         draft: bool,
-        /// Push the branch first, as `Push` does (27.6), when it is not on GitHub yet.
+        /// Push the branch first, as `Push` does (27.6), to this target (`PushTarget`'s, as the
+        /// user confirmed it) when it is not on GitHub yet.
         #[serde(default)]
-        push: bool,
+        push: Option<String>,
     },
     /// An action on a pull request worked; `message` is shown as is.
     PullDone {
@@ -702,10 +703,13 @@ pub enum Control {
         ahead: Option<u64>,
         error: Option<String>,
     },
-    /// App → service: pushes the branch of `worktree` to `PushTarget`'s target, never forced.
+    /// App → service: pushes the branch of `worktree` to `PushTarget`'s target, never forced;
+    /// `branch` and `target` are what the user confirmed: refused when they changed since.
     /// Answered by `GitDone` or `GitFailed` (git's message, e.g. a rejected push).
     Push {
         worktree: String,
+        branch: String,
+        target: String,
     },
     /// A git action of the Changes panel worked; `message` is shown as is.
     GitDone {
@@ -1964,8 +1968,9 @@ pub struct PullForm {
     pub body: String,
     pub base: String,
     pub draft: bool,
+    /// The confirmed target to push to first (27.6); none: no push.
     #[serde(default)]
-    pub push: bool,
+    pub push: Option<String>,
 }
 
 /// Which git action of the Changes panel (27.6) a `GitDone` or `GitFailed` answers.
@@ -4295,7 +4300,7 @@ mod tests {
                 body: String::new(),
                 base: "main".into(),
                 draft: false,
-                push: true,
+                push: Some("origin/b".into()),
             },
             Control::PullDone {
                 project: "/r".into(),
@@ -4437,7 +4442,7 @@ mod tests {
             r#"{"type":"create_pull","worktree":"/r","title":"t","body":"","base":"main","draft":false}"#,
         )
         .unwrap();
-        assert!(matches!(old, Control::CreatePull { push: false, .. }));
+        assert!(matches!(old, Control::CreatePull { push: None, .. }));
         let file: ChangedFile = serde_json::from_str(
             r#"{"path":"a","status":"added","old_path":null,"added":null,"removed":null}"#,
         )
@@ -4488,6 +4493,8 @@ mod tests {
             },
             Control::Push {
                 worktree: "/r".into(),
+                branch: "b".into(),
+                target: "origin/b".into(),
             },
             Control::GitFailed {
                 worktree: "/r".into(),

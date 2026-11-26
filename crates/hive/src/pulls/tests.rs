@@ -797,7 +797,7 @@ fn only_followed_projects_are_asked_about() {
         body: String::new(),
         base: "main".into(),
         draft: false,
-        push: false,
+        push: None,
     };
     let message = format!("{other} is not a worktree of a followed project");
     assert_eq!(
@@ -1003,7 +1003,7 @@ fn a_pull_request_opens_from_the_worktree_branch() {
             body: body.into(),
             base: base.into(),
             draft,
-            push: false,
+            push: None,
         })
     };
     let replies = create(" --title x ", "-x\nbody", " main ", true);
@@ -1115,17 +1115,25 @@ fn a_pull_request_can_push_its_branch_first() {
         root,
         &["worktree", "add", "-q", wt.to_str().unwrap(), "topic"],
     );
-    let create = || {
+    let create = |to: &str| {
         setup.answer(Control::CreatePull {
             worktree: wt.display().to_string(),
             title: "t".into(),
             body: String::new(),
             base: "main".into(),
             draft: false,
-            push: true,
+            push: Some(to.into()),
         })
     };
-    let replies = create();
+    // An upstream of another name: the pull request's head would not be it.
+    let [Control::PullFailed { message, .. }] = &create("origin/other")[..] else {
+        panic!()
+    };
+    assert_eq!(
+        message,
+        "Its upstream has another name: push it in a terminal"
+    );
+    let replies = create("origin/topic");
     assert!(
         matches!(&replies[0], Control::PullDone { number: 42, .. }),
         "{replies:?}"
@@ -1147,7 +1155,7 @@ fn a_pull_request_can_push_its_branch_first() {
     // A push git refuses: no pull request, and git's message.
     git(root, &["config", &instead, "/nowhere/at/all"]);
     let calls = setup.calls().len();
-    let [Control::PullFailed { message, .. }] = &create()[..] else {
+    let [Control::PullFailed { message, .. }] = &create("origin/topic")[..] else {
         panic!()
     };
     assert!(message.starts_with("Could not push topic: "), "{message}");

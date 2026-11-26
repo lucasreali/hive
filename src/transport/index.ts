@@ -136,8 +136,8 @@ export interface Transport {
    */
   actOnPull(project: string, number: number, action: PullAction): Promise<void>;
   /**
-   * A pull request from `worktree`'s branch, pushed first when `push` (27.6); answered by
-   * `pull_done` or `pull_failed`.
+   * A pull request from `worktree`'s branch, pushed first to `push` (the target the user
+   * confirmed, 27.6) when not null; answered by `pull_done` or `pull_failed`.
    */
   createPull(
     worktree: string,
@@ -145,7 +145,7 @@ export interface Transport {
     body: string,
     base: string,
     draft: boolean,
-    push: boolean,
+    push: string | null,
   ): Promise<void>;
   /**
    * The workflows of `project` that can be run by hand, as `worktree`'s `HEAD` has them
@@ -168,8 +168,11 @@ export interface Transport {
   commit(worktree: string, message: string): Promise<void>;
   /** Where `push` would push `worktree`'s branch; answered by `push_target`. */
   getPushTarget(worktree: string): Promise<void>;
-  /** Pushes `worktree`'s branch, never forced (ask first); answered by `git_done` or `git_failed`. */
-  push(worktree: string): Promise<void>;
+  /**
+   * Pushes `worktree`'s branch, never forced, while it and its target are still `branch` and
+   * `target` (as shown to the user); answered by `git_done` or `git_failed`.
+   */
+  push(worktree: string, branch: string, target: string): Promise<void>;
   /**
    * The project's latest Actions runs (9.32), on `branch` only when not null; answered by
    * `runs`. Without `force` the service sends a list under 2 minutes old again.

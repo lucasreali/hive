@@ -76,8 +76,8 @@ test("the push dialog asks where the branch goes, pushes, and closes once pushed
   };
   apply({ type: "push_target", ...answer });
   expect(useHive.getState().pushTargets[w.path]).toEqual(answer);
-  push(w.path);
-  expect(send).toHaveBeenCalledWith(w.path);
+  push({ ...answer, branch: "topic", target: "origin/topic" });
+  expect(send).toHaveBeenCalledWith(w.path, "topic", "origin/topic");
   expect(useHive.getState().git[w.path]?.busy).toBe("push");
   apply({ type: "git_done", worktree: w.path, action: "push", message: "Pushed topic" });
   expect(useHive.getState().modal).toBeNull();

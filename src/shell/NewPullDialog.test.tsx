@@ -39,7 +39,7 @@ test("creates from the worktree's branch into the main worktree's by default", (
   fireEvent.change(within(dialog).getByLabelText("Description"), { target: { value: "Why" } });
   fireEvent.click(within(dialog).getByLabelText("Draft"));
   fireEvent.click(submit);
-  expect(create).toHaveBeenCalledWith(checkout.path, "Checkout", "Why", "develop", true, false);
+  expect(create).toHaveBeenCalledWith(checkout.path, "Checkout", "Why", "develop", true, null);
   expect(submit.textContent).toBe("Creating…");
   expect(submit.disabled).toBe(true);
 
@@ -100,7 +100,14 @@ test("a branch not on GitHub yet is pushed first, unless unticked (27.6)", () =>
   expect(first.checked).toBe(true);
   fireEvent.change(within(dialog).getByLabelText("Title"), { target: { value: "T" } });
   fireEvent.click(within(dialog).getByRole("button", { name: "Create" }));
-  expect(create).toHaveBeenLastCalledWith(checkout.path, "T", "", "main", false, true);
+  expect(create).toHaveBeenLastCalledWith(
+    checkout.path,
+    "T",
+    "",
+    "main",
+    false,
+    `origin/${checkout.branch}`,
+  );
   const pushFailed = "Could not push x: ! [rejected]";
   act(() => apply({ type: "pull_failed", project: shop.id, number: null, message: pushFailed }));
   expect(within(dialog).getByRole("alert").textContent).toBe(pushFailed);
@@ -111,7 +118,7 @@ test("a branch not on GitHub yet is pushed first, unless unticked (27.6)", () =>
   );
   fireEvent.click(ahead);
   fireEvent.click(within(dialog).getByRole("button", { name: "Create" }));
-  expect(create).toHaveBeenLastCalledWith(checkout.path, "T", "", "main", false, false);
+  expect(create).toHaveBeenLastCalledWith(checkout.path, "T", "", "main", false, null);
   act(() => apply({ type: "push_target", ...target, set_upstream: false, ahead: 1 }));
   expect(within(dialog).getByLabelText(/first \(1 commit not pushed\)/)).toBeTruthy();
   // Up to date, or not pushable (a detached HEAD): nothing to offer.

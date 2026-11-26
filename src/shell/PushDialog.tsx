@@ -28,7 +28,9 @@ export function PushDialog() {
       <form
         onSubmit={(e) => {
           e.preventDefault();
-          push(w.path);
+          if (target?.branch && target.target) {
+            push({ ...target, branch: target.branch, target: target.target });
+          }
         }}
       >
         <header>

@@ -119,7 +119,7 @@ export function createMockGit(
         error: null,
       });
     },
-    async push(worktree: string) {
+    async push(worktree: string, _branch: string, _target: string) {
       const branch = branchOf(worktree);
       const failed = (message: string) =>
         later({ type: "git_failed", worktree, action: "push", message });

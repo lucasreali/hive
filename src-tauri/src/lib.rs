@@ -2116,8 +2116,13 @@ impl Host {
     }
 
     /// The answer arrives as `git_done` or `git_failed`.
-    pub fn push(&self, worktree: String) -> Result<(), String> {
-        self.link().send(0, &Control::Push { worktree })
+    pub fn push(&self, worktree: String, branch: String, target: String) -> Result<(), String> {
+        let push = Control::Push {
+            worktree,
+            branch,
+            target,
+        };
+        self.link().send(0, &push)
     }
 
     /// The answer arrives as `scripts` (23.4).
@@ -2393,7 +2398,7 @@ impl Host {
         title: String,
         body: String,
         base: String,
-        (draft, push): (bool, bool),
+        (draft, push): (bool, Option<String>),
     ) -> Result<(), String> {
         let create = Control::CreatePull {
             worktree,
@@ -3817,8 +3822,10 @@ pub mod commands {
         hive: State<'_, Hive>,
         host: Option<String>,
         worktree: String,
+        branch: String,
+        target: String,
     ) -> Result<(), String> {
-        hive.on(host.as_deref())?.push(worktree)
+        hive.on(host.as_deref())?.push(worktree, branch, target)
     }
 
     #[tauri::command]

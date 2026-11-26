@@ -49,7 +49,8 @@ export function NewPullDialog() {
         onSubmit={(e) => {
           e.preventDefault();
           setPullBusy({ project: project.id, number: null, action: "create" });
-          void transport.createPull(w.path, title, body, base, draft, offer && push);
+          const to = offer && push ? (target?.target ?? null) : null;
+          void transport.createPull(w.path, title, body, base, draft, to);
         }}
       >
         <header>

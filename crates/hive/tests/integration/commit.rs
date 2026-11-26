@@ -112,6 +112,8 @@ async fn a_change_is_committed_as_the_space_and_pushed_never_forced() {
     );
     let push = Control::Push {
         worktree: root.clone(),
+        branch: "main".into(),
+        target: "origin/main".into(),
     };
     let pushed = Control::GitDone {
         worktree: root.clone(),

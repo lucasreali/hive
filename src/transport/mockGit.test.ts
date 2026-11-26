@@ -88,7 +88,7 @@ test("a partly staged file stays after a commit, unstaged; refusals outside a wo
   messages.length = 0;
   await transport.stageFiles("/nope", ["a"], true);
   await transport.commit("/nope", "m");
-  await transport.push("/nope");
+  await transport.push("/nope", "b", "origin/b");
   await transport.getPushTarget("/nope");
   await tick();
   const why = "/nope is not a worktree of a followed project";
@@ -101,8 +101,8 @@ test("a push goes to its upstream or origin; a moved remote branch is refused", 
   const { transport, messages } = await connected();
   await transport.getPushTarget(main.path);
   await transport.getPushTarget(login.path);
-  await transport.push(login.path);
-  await transport.push(refactor.path);
+  await transport.push(login.path, "b", "origin/b");
+  await transport.push(refactor.path, "b", "origin/b");
   await tick();
   expect(messages[0]).toEqual({
     type: "push_target",
@@ -135,7 +135,7 @@ test("a detached worktree has nothing to push", async () => {
   await tick();
   messages.length = 0;
   await transport.getPushTarget(detached.path);
-  await transport.push(detached.path);
+  await transport.push(detached.path, "b", "origin/b");
   await tick();
   const none = "This worktree is on no branch (a detached HEAD): nothing to push";
   expect(messages).toEqual([

@@ -65,9 +65,13 @@ pub fn answer(gh: &Gh, projects: &Projects, request: Control) -> Vec<Control> {
             let found = located(projects, &worktree).and_then(|(dir, _)| target(&dir));
             vec![target_message(worktree, found)]
         }
-        Control::Push { worktree } => {
+        Control::Push {
+            worktree,
+            branch,
+            target,
+        } => {
             let done = located(projects, &worktree)
-                .and_then(|(dir, env)| push(&dir, &remote_env(gh, &env)));
+                .and_then(|(dir, env)| push(&dir, &remote_env(gh, &env), (&branch, &target)));
             vec![reply(worktree, GitAction::Push, done)]
         }
         _ => Vec::new(),
@@ -345,9 +349,19 @@ pub fn push_args(target: &Target) -> Vec<String> {
 }
 
 /// Pushes the branch of the worktree at `dir` to its [`target`] with `env` (the space's,
-/// [`remote_env`]); a rejected push is git's message.
-pub fn push(dir: &Path, env: &[(&str, String)]) -> Result<String, String> {
+/// [`remote_env`]), only while the branch and its target are still the `confirmed` ones (the
+/// user saw them; something in the worktree may have switched the branch or changed its
+/// upstream since); a rejected push is git's message.
+pub fn push(dir: &Path, env: &[(&str, String)], confirmed: (&str, &str)) -> Result<String, String> {
     let target = target(dir)?;
+    if (target.branch.as_str(), target.shown().as_str()) != confirmed {
+        let (branch, to) = confirmed;
+        return Err(format!(
+            "{branch} → {to} changed since it was shown (now {} → {}): check again",
+            target.branch,
+            target.shown()
+        ));
+    }
     let args = push_args(&target);
     let args: Vec<&OsStr> = args.iter().map(OsStr::new).collect();
     run(dir, &args, &[], env, PUSH_TIME)?;

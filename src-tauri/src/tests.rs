@@ -1490,7 +1490,7 @@ async fn project_requests_go_to_the_service_and_answers_to_the_ui() {
         "t".into(),
         "b".into(),
         "main".into(),
-        (true, true),
+        (true, Some("origin/b".into())),
     )
     .unwrap();
     let create = Control::CreatePull {
@@ -1499,7 +1499,7 @@ async fn project_requests_go_to_the_service_and_answers_to_the_ui() {
         body: "b".into(),
         base: "main".into(),
         draft: true,
-        push: true,
+        push: Some("origin/b".into()),
     };
     assert_eq!(service.control().await, (0, create));
     hive.stage_files("/r/w".into(), vec!["a".into()], false)
@@ -1521,9 +1521,12 @@ async fn project_requests_go_to_the_service_and_answers_to_the_ui() {
         worktree: "/r/w".into(),
     };
     assert_eq!(service.control().await, (0, target));
-    hive.push("/r/w".into()).unwrap();
+    hive.push("/r/w".into(), "b".into(), "origin/b".into())
+        .unwrap();
     let push = Control::Push {
         worktree: "/r/w".into(),
+        branch: "b".into(),
+        target: "origin/b".into(),
     };
     assert_eq!(service.control().await, (0, push));
     hive.list_workflows("/r".into(), "/r/w".into()).unwrap();
@@ -2122,14 +2125,15 @@ async fn bridge_exit_ends_terminals_then_disconnects() {
         hive.act_on_pull("/r".into(), 1, PullAction::Ready),
         not_connected
     );
-    let flags = (false, false);
+    let flags = (false, None);
     let create = hive.create_pull("/r".into(), "t".into(), String::new(), "m".into(), flags);
     assert_eq!(create, not_connected);
     let stage = hive.stage_files("/r".into(), vec!["a".into()], true);
     assert_eq!(stage, not_connected);
     assert_eq!(hive.commit("/r".into(), "m".into()), not_connected);
     assert_eq!(hive.get_push_target("/r".into()), not_connected);
-    assert_eq!(hive.push("/r".into()), not_connected);
+    let push = hive.push("/r".into(), "b".into(), "origin/b".into());
+    assert_eq!(push, not_connected);
     assert_eq!(hive.list_workflows("/r".into(), "/r".into()), not_connected);
     let run = hive.run_workflow("/r".into(), "ci.yml".into(), "b".into(), Vec::new());
     assert_eq!(run, not_connected);
@@ -2549,6 +2553,7 @@ fn commands_reach_the_managed_hive() {
     let stage_files = json!({"worktree": "/r/w", "paths": ["a"], "staged": true});
     let commit = json!({"worktree": "/r/w", "message": "m"});
     let worktree = json!({"worktree": "/r/w"});
+    let push = json!({"worktree": "/r/w", "branch": "b", "target": "origin/b"});
     for (cmd, args) in [
         ("list_branches", &branches),
         ("validate_worktree_name", &validate),
@@ -2615,7 +2620,7 @@ fn commands_reach_the_managed_hive() {
         ("stage_files", &stage_files),
         ("commit", &commit),
         ("get_push_target", &worktree),
-        ("push", &worktree),
+        ("push", &push),
         ("open_settings_file", &json!({})),
         ("get_diagnostics", &json!({})),
         ("get_shared", &json!({})),
@@ -2711,7 +2716,7 @@ fn commands_reach_the_managed_hive() {
         ("stage_files", stage_files),
         ("commit", commit),
         ("get_push_target", worktree.clone()),
-        ("push", worktree),
+        ("push", push),
     ] {
         assert_eq!(invoke(&webview, cmd, args), Ok(Value::Null), "{cmd}");
     }

@@ -206,7 +206,7 @@ fn a_branch_without_upstream_goes_to_origin_and_gets_it() {
         }
     );
     assert_eq!(found.shown(), "origin/main");
-    let done = push(&dir, &env()).unwrap();
+    let done = push(&dir, &env(), ("main", "origin/main")).unwrap();
     assert_eq!(done, "Pushed main to origin/main, now its upstream");
     assert_eq!(
         git(&dir, &["config", "branch.main.merge"]),
@@ -220,7 +220,10 @@ fn a_branch_without_upstream_goes_to_origin_and_gets_it() {
     git(&dir, &["commit", "-q", "--allow-empty", "-m", "second"]);
     let found = target(&dir).unwrap();
     assert_eq!((found.set_upstream, found.ahead), (false, Some(1)));
-    assert_eq!(push(&dir, &env()).unwrap(), "Pushed main to origin/main");
+    assert_eq!(
+        push(&dir, &env(), ("main", "origin/main")).unwrap(),
+        "Pushed main to origin/main"
+    );
     assert_eq!(target(&dir).unwrap().ahead, Some(0));
 }
 
@@ -240,7 +243,13 @@ fn a_push_goes_to_the_upstreams_own_branch() {
     let found = target(&dir).unwrap();
     assert_eq!(found.shown(), "origin/remote-name");
     assert_eq!(found.ahead, Some(1));
-    push(&dir, &env()).unwrap();
+    // Its upstream changed since it was shown: refused, nothing pushed.
+    let changed = push(&dir, &env(), ("local", "origin/other")).unwrap_err();
+    assert_eq!(
+        changed,
+        "local → origin/other changed since it was shown (now local → origin/remote-name): check again"
+    );
+    push(&dir, &env(), ("local", "origin/remote-name")).unwrap();
     assert_eq!(
         git(&bare, &["rev-parse", "remote-name"]),
         git(&dir, &["rev-parse", "HEAD"])
@@ -250,7 +259,7 @@ fn a_push_goes_to_the_upstreams_own_branch() {
 #[test]
 fn a_rejected_push_is_gits_message_and_never_forced() {
     let (tmp, dir, bare) = with_origin();
-    push(&dir, &env()).unwrap();
+    push(&dir, &env(), ("main", "origin/main")).unwrap();
     // Someone else pushed meanwhile.
     let other = tmp.path().join("other");
     git(
@@ -261,7 +270,7 @@ fn a_rejected_push_is_gits_message_and_never_forced() {
     git(&other, &["push", "-q", "origin", "main"]);
     let theirs = git(&bare, &["rev-parse", "main"]);
     git(&dir, &["commit", "-q", "--allow-empty", "-m", "mine"]);
-    let err = push(&dir, &env()).unwrap_err();
+    let err = push(&dir, &env(), ("main", "origin/main")).unwrap_err();
     assert!(err.contains("[rejected]"), "{err}");
     assert!(!err.starts_with("git push"), "{err}");
     assert_eq!(git(&bare, &["rev-parse", "main"]), theirs);
@@ -315,7 +324,10 @@ fn a_push_is_refused_where_it_cannot_go() {
     git(&dir, &["switch", "-q", "--detach", head.trim()]);
     let detached = "This worktree is on no branch (a detached HEAD): nothing to push";
     assert_eq!(target(&dir).unwrap_err(), detached);
-    assert_eq!(push(&dir, &env()).unwrap_err(), detached);
+    assert_eq!(
+        push(&dir, &env(), ("main", "origin/main")).unwrap_err(),
+        detached
+    );
     git(&dir, &["switch", "-q", "main"]);
     git(&dir, &["config", "branch.main.remote", "."]);
     git(&dir, &["config", "branch.main.merge", "refs/heads/other"]);

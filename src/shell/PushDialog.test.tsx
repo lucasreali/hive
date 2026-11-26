@@ -51,7 +51,7 @@ test("says where the branch goes, then pushes once asked", () => {
   act(() => apply({ type: "push_target", ...target({ set_upstream: true, ahead: null }) }));
   expect(dialog.textContent).toContain(", and make it its upstream?");
   fireEvent.click(submit);
-  expect(push).toHaveBeenCalledWith(login.path);
+  expect(push).toHaveBeenCalledWith(login.path, login.branch, `origin/${login.branch}`);
   expect(submit.textContent).toBe("Pushing…");
   expect(submit.disabled).toBe(true);
   // Rejected: git's message as is, and Push again.
