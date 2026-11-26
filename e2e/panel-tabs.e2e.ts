@@ -1,7 +1,7 @@
 import { expect, type Page, test } from "@playwright/test";
 import { keyLabel, mac, mod } from "./host";
 
-const LABELS = ["Files", "Diff", "Scripts", "PRs", "Actions", "Sessions"];
+const LABELS = ["Files", "Diff", "Comments", "Scripts", "PRs", "Actions", "Sessions"];
 const RAIL_WIDTH = 36;
 
 const rightPanel = (page: Page) => page.getByRole("complementary", { name: "Side panel" });
@@ -60,6 +60,7 @@ const sideways = (page: Page) =>
 const CONTENT: Record<string, string> = {
   Files: '[role="treeitem"]',
   Diff: '[role="treeitem"]',
+  Comments: ".comments .hint",
   Scripts: ".scripts ul li",
   PRs: ".pull",
   Actions: ".session.run",
@@ -125,7 +126,7 @@ for (const panelWidth of [280, 320, 380, 400, 420, 440, 460, 520, 640]) {
     await expect(rail.locator(".panel-rail-separator")).toHaveCount(2);
     // Icons stay put whichever is selected.
     await rail.getByRole("tab", { name: "Files" }).click();
-    expect((await rail.getByRole("tab", { name: "Sessions" }).boundingBox())?.y).toBe(places[5]);
+    expect((await rail.getByRole("tab", { name: "Sessions" }).boundingBox())?.y).toBe(places[LABELS.indexOf("Sessions")]);
   });
 }
 
