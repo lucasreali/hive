@@ -49,6 +49,12 @@ export const SECTIONS = [
 ] as const;
 type Section = (typeof SECTIONS)[number];
 
+/** Opens Settings on `section` (27.8: the status bar's hosts popover opens Hosts). */
+export function openSettings(section: Section): void {
+  openModal("settings");
+  useHive.setState({ settingsSection: section });
+}
+
 const SECTION_ICON: Record<Section, Icon> = {
   Terminal: TerminalWindowIcon,
   Appearance: PaletteIcon,
@@ -1550,9 +1556,11 @@ function Content({ section, query }: { section: Section; query: string }) {
  * service's refusal shows at the top. Terminals and the theme follow the stored settings.
  */
 export function SettingsDialog() {
-  const [section, setSection] = useState<Section>(() =>
-    useHive.getState().modalProject ? "Projects" : "Terminal",
-  );
+  const [section, setSection] = useState<Section>(() => {
+    const s = useHive.getState();
+    const asked = SECTIONS.find((name) => name === s.settingsSection);
+    return asked ?? (s.modalProject ? "Projects" : "Terminal");
+  });
   const [query, setQuery] = useState("");
   const error = useHive((s) => s.settingsError);
   const remote = useHive(onRemote);

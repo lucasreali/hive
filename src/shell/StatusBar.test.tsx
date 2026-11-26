@@ -28,7 +28,7 @@ test("shows the version on macOS without the WSL part", () => {
   asMac();
   render(<StatusBar />);
   act(() => apply({ type: "welcome", version: "0.1.0", distro: null }));
-  expect(screen.getByRole("contentinfo").textContent).toBe(`macOSconnected${EMPTY}v${version}`);
+  expect(screen.getByRole("contentinfo").textContent).toBe(`This Macconnected${EMPTY}v${version}`);
 });
 
 test("shows Windows while the service runs on Windows itself (12.5.4)", () => {

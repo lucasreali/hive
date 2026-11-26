@@ -1,7 +1,13 @@
 import { afterEach, expect, test } from "bun:test";
 import type { HostMessage } from "../protocol";
 import { DEFAULT_SETTINGS, initialState, useHive } from "../store";
-import { createHostsTransport, MOCK_DROP_REASON, MOCK_HOST, MOCK_REMOTE_REPO } from "./mockHosts";
+import {
+  createHostsTransport,
+  MOCK_DROP_REASON,
+  MOCK_HOST,
+  MOCK_REMOTE_REPO,
+  mockHostName,
+} from "./mockHosts";
 
 // `?mock=remote` (26.18): this Mac's fake service and gpu-box's, linked as the app side links
 // a remote one.
@@ -12,9 +18,9 @@ const settle = async () => {
 
 afterEach(() => useHive.setState(initialState, true));
 
-async function linked() {
+async function linked(count = 1) {
   const got: HostMessage[] = [];
-  const transport = await createHostsTransport();
+  const transport = await createHostsTransport(null, count);
   await transport.connect((m) => got.push(m));
   await settle();
   return { transport, got };
@@ -121,4 +127,64 @@ test("the hosts follow this Mac's settings; quitting may end a host's terminals"
   await settle();
   expect(states(got, "lab")).toEqual(["connecting", "disconnected", "removed"]);
   expect(states(got)).toEqual(["removed", "connecting", "connected"]);
+});
+
+test("with a host count, fake hosts come in every state with their spaces (27.8)", async () => {
+  const { transport, got } = await linked(14);
+  const host = (i: number) => mockHostName(i);
+  expect(host(2)).toBe("build-02");
+  expect(states(got, host(2))).toEqual(["connected"]);
+  expect(got).toContainEqual({
+    type: "host_link",
+    host: host(3),
+    state: "reconnecting",
+    reason: "Connection to build-03 closed by remote host.",
+    retry_secs: 30,
+  });
+  expect(got).toContainEqual({
+    type: "host_link",
+    host: host(5),
+    state: "disconnected",
+    reason: "version",
+    kind: "version",
+    version: "0.29.0",
+    app_version: "0.30.0",
+    terminals: 2,
+  });
+  expect(got).toContainEqual({
+    type: "host_link",
+    host: host(8),
+    state: "disconnected",
+    reason: "Permission denied (publickey).",
+    kind: "auth",
+  });
+  const spaces = (i: number) =>
+    got.flatMap((m) =>
+      m.type === "spaces" && m.host === host(i) ? [m.spaces.map((s) => s.name)] : [],
+    );
+  expect(spaces(2)).toEqual([["Default"]]);
+  expect(spaces(3)).toEqual([["Default", "Work"]]);
+  // A fake host serves nothing.
+  got.length = 0;
+  useHive.setState({ host: host(2) });
+  await transport.listProjects();
+  await settle();
+  expect(got).toEqual([]);
+  // Reconnect or a restart links one; a linked one stays as it is.
+  await transport.reconnectHost(host(3));
+  await transport.restartRemote(host(5));
+  await transport.reconnectHost(host(2));
+  await settle();
+  expect(got.map((m) => m.type === "host_link" && [m.host, m.state])).toEqual([
+    [host(3), "connected"],
+    [host(5), "connected"],
+  ]);
+  // Not once it is removed.
+  got.length = 0;
+  useHive.setState({ host: null });
+  await transport.setSettings({ ...DEFAULT_SETTINGS, remote: { hosts: [], keep_minutes: 5 } });
+  await settle();
+  await transport.reconnectHost(host(8));
+  await settle();
+  expect(states(got, host(8))).toEqual(["removed"]);
 });

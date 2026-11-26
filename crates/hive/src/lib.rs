@@ -2,6 +2,7 @@
 
 pub mod actions;
 pub mod adapter;
+pub mod anchor;
 pub mod bridge;
 pub mod browser_cleanup;
 pub mod changes;
@@ -32,16 +33,19 @@ pub mod paths;
 pub mod power;
 pub mod procs;
 pub mod projects;
+pub mod provenance;
 pub mod pulls;
 pub mod registry;
 pub mod review;
 pub mod ring;
 pub mod scripts;
 pub mod search;
+pub mod seen;
 pub mod session_watch;
 pub mod sessions;
 pub mod settings;
 pub mod shared;
+pub mod slim;
 pub mod spaces;
 pub mod states;
 pub mod statusline;
@@ -55,6 +59,7 @@ pub mod watch;
 pub mod windows;
 pub mod workbook;
 pub mod worktree;
+pub mod worktree_store;
 pub mod wrapper;
 
 /// Binary version, compared with the app's in the handshake.

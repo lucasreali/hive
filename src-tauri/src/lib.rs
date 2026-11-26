@@ -18,8 +18,8 @@ use std::time::{Duration, Instant};
 use futures_util::{FutureExt, SinkExt, Stream, StreamExt};
 use hive_protocol::{
     AccountDir, AgentState, Control, DiffBase, Frame, FrameCodec, FrameError, FrameType, GhAccount,
-    PullAction, Role, RunAction, SessionTarget, Settings, SpaceEnv, TableEdit, MAX_PAYLOAD,
-    PROTOCOL_VERSION, READ_LIMIT,
+    LineSide, PullAction, Role, RunAction, SessionTarget, Settings, SpaceEnv, TableEdit,
+    MAX_PAYLOAD, PROTOCOL_VERSION, READ_LIMIT,
 };
 use serde_json::{json, Value};
 use tauri::http::Response;
@@ -2122,6 +2122,23 @@ impl Host {
         self.link().send(0, &Control::ListChanges { path, base })
     }
 
+    /// Marks files seen in the diff, or not (27.1); the answer arrives as `changes`.
+    pub fn mark_seen(
+        &self,
+        path: String,
+        base: DiffBase,
+        files: Vec<String>,
+        seen: bool,
+    ) -> Result<(), String> {
+        let mark = Control::MarkSeen {
+            path,
+            base,
+            files,
+            seen,
+        };
+        self.link().send(0, &mark)
+    }
+
     /// The answer arrives as `scripts` (23.4).
     pub fn list_scripts(&self, path: String) -> Result<(), String> {
         self.link().send(0, &Control::ListScripts { path })
@@ -2141,6 +2158,30 @@ impl Host {
     /// The answer arrives as `session_deleted` or `delete_session_failed`.
     pub fn delete_session(&self, id: String) -> Result<(), String> {
         self.link().send(0, &Control::DeleteSession { id })
+    }
+
+    /// Who wrote a line (27.5). The answer arrives as `line_author`.
+    pub fn who_wrote(
+        &self,
+        worktree: String,
+        path: String,
+        line: u32,
+        side: LineSide,
+        base: DiffBase,
+    ) -> Result<(), String> {
+        let ask = Control::WhoWrote {
+            worktree,
+            path,
+            line,
+            side,
+            base,
+        };
+        self.link().send(0, &ask)
+    }
+
+    /// The files a session changed (27.5). The answer arrives as `session_files`.
+    pub fn list_session_files(&self, id: String) -> Result<(), String> {
+        self.link().send(0, &Control::ListSessionFiles { id })
     }
 
     /// The answer arrives as `session_moved` or `move_session_failed`.
@@ -2941,6 +2982,8 @@ const REMOTE_TO_UI: &[&str] = &[
     "sessions",
     "session_deleted",
     "delete_session_failed",
+    "line_author",
+    "session_files",
     "files",
     "changes",
     "scripts",
@@ -3385,6 +3428,29 @@ pub mod commands {
     }
 
     #[tauri::command]
+    pub fn who_wrote(
+        hive: State<'_, Hive>,
+        host: Option<String>,
+        worktree: String,
+        path: String,
+        line: u32,
+        side: LineSide,
+        base: DiffBase,
+    ) -> Result<(), String> {
+        hive.on(host.as_deref())?
+            .who_wrote(worktree, path, line, side, base)
+    }
+
+    #[tauri::command]
+    pub fn list_session_files(
+        hive: State<'_, Hive>,
+        host: Option<String>,
+        id: String,
+    ) -> Result<(), String> {
+        hive.on(host.as_deref())?.list_session_files(id)
+    }
+
+    #[tauri::command]
     pub fn move_session(
         hive: State<'_, Hive>,
         host: Option<String>,
@@ -3460,6 +3526,18 @@ pub mod commands {
         base: DiffBase,
     ) -> Result<(), String> {
         hive.on(host.as_deref())?.list_changes(path, base)
+    }
+
+    #[tauri::command]
+    pub fn mark_seen(
+        hive: State<'_, Hive>,
+        host: Option<String>,
+        path: String,
+        base: DiffBase,
+        files: Vec<String>,
+        seen: bool,
+    ) -> Result<(), String> {
+        hive.on(host.as_deref())?.mark_seen(path, base, files, seen)
     }
 
     #[tauri::command]

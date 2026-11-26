@@ -48,6 +48,9 @@ mod locale;
 mod projects;
 #[cfg(unix)]
 #[cfg(test)]
+mod provenance;
+#[cfg(unix)]
+#[cfg(test)]
 mod pulls;
 #[cfg(unix)]
 #[cfg(test)]

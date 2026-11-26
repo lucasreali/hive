@@ -9,6 +9,8 @@ import type {
   FileStatus,
   FileText,
   GhLogin,
+  LineOrigin,
+  LineSide,
   ProgressState,
   Project,
   ReviewCommit,
@@ -16,6 +18,7 @@ import type {
   Script,
   ServiceMessage,
   Session,
+  SessionFile,
   Settings,
   Space,
   SpaceEnv,
@@ -466,6 +469,40 @@ export function mockDirs(
 }
 
 const MINUTE = 60_000;
+const HOUR = 60 * MINUTE;
+const SHOP = "/home/user/projects/shop";
+const FIX_LOGIN = `${SHOP}/.claude/worktrees/fix-login`;
+
+/** The files Hive recorded each fake session changing (27.5), the most recent first. */
+export function mockSessionFiles(id: string): SessionFile[] {
+  const file = (worktree: string, path: string, edits: number, lines: number, hours: number) => ({
+    worktree,
+    path,
+    edits,
+    lines_now: lines,
+    first_line: lines > 0 ? 39 : null,
+    last_ms: Date.now() - hours * HOUR,
+  });
+  if (id.endsWith("0001")) {
+    return [
+      file(FIX_LOGIN, "src/auth/session.ts", 3, 3, 3),
+      file(SHOP, "src/auth/login.ts", 1, 0, 4),
+    ];
+  }
+  if (id.endsWith("0004")) {
+    return [
+      file(
+        "/home/user/projects/api/.claude/worktrees/refactor-auth",
+        "src/auth/session.ts",
+        2,
+        3,
+        200,
+      ),
+    ];
+  }
+  return [];
+}
+
 const session = (
   id: string,
   cwd: string,
@@ -501,6 +538,7 @@ const session = (
     running,
     config_dir: null,
     resume_command: `cd '${cwd}' && claude --resume ${id}`,
+    files_changed: mockSessionFiles(id).length,
     log: `/home/user/.claude/projects/${cwd.replaceAll(/[^A-Za-z0-9]/g, "-")}/${id}.jsonl`,
   };
 };
@@ -545,6 +583,60 @@ export const MOCK_SESSIONS: Session[] = [
     "error",
   ),
 ];
+
+/** The commit `git blame` gives the fake service for a line it has no live record of. */
+export const MOCK_BLAME = {
+  id: "4f2a9c1e8b7d6a5f4e3d2c1b0a9f8e7d6c5b4a39",
+  author: "Ada Lovelace",
+  ms: Date.now() - 2 * 24 * HOUR,
+  summary: "Keep sessions in the store",
+};
+
+/**
+ * Who wrote a line, as the fake service recorded it (27.5), in `src/auth/session.ts` only: the
+ * `rememberMe` lines (39–41) by a session of the worktree (else the first session, in
+ * fix-login), line 2 in Hive's editor, line 1 probably by a subagent, the diff's old side
+ * probably by "Checkout totals"; any other line through its commit alone.
+ */
+export function mockAuthor(
+  sessions: Session[],
+  worktree: string,
+  path: string,
+  line: number,
+  side: LineSide,
+): LineOrigin {
+  if (path !== "src/auth/session.ts") return { kind: "unknown", commit: null };
+  const edit = (x: Session, ms: number, start: number, len: number) => ({
+    session: x.id,
+    title: x.title,
+    deleted: false,
+    project: x.project,
+    worktree,
+    agent: null,
+    agent_type: null,
+    tool: "Edit",
+    tool_use_id: "toolu_mock",
+    ms,
+    user_modified: false,
+    start,
+    len,
+  });
+  const [first, checkout, , auth] = MOCK_SESSIONS;
+  if (side === "base") {
+    return { kind: "session", edit: edit(checkout, MOCK_BLAME.ms, line, 1), commit: MOCK_BLAME };
+  }
+  if (line >= 39 && line <= 41) {
+    const own = sessions.find((x) => x.worktree === worktree) ?? first;
+    const live = { ...edit(own, Date.now() - 3 * HOUR, 39, 3), user_modified: true };
+    return { kind: "session", edit: live, commit: null };
+  }
+  if (line === 2) return { kind: "editor", ms: Date.now() - 10 * MINUTE };
+  if (line === 1) {
+    const sub = { ...edit(auth, MOCK_BLAME.ms, 1, 1), agent: "a1", agent_type: "general-purpose" };
+    return { kind: "session", edit: sub, commit: MOCK_BLAME };
+  }
+  return { kind: "unknown", commit: MOCK_BLAME };
+}
 
 /** The fake GitHub issues, by number: the worktree (and branch) the service names for each. */
 export const MOCK_ISSUES: Record<number, string> = {
@@ -627,7 +719,11 @@ const mockFiles = (worktree: Worktree) =>
 const NO_BRANCH = "No branch to compare with: this is the main worktree, or it is detached";
 
 /** A stand-in for `hive::changes::answer`: the fake worktree's changes, or why not. */
-function changes(projects: Project[], path: string, asked: DiffBase): ServiceMessage {
+function changes(
+  projects: Project[],
+  path: string,
+  asked: DiffBase,
+): Extract<ServiceMessage, { type: "changes" }> {
   const project = projects.find((p) => p.worktrees.some((w) => w.path === path));
   if (!project) {
     const error = `${path} is not a worktree of a followed project`;
@@ -1173,7 +1269,21 @@ export function createMockTransport(
     const listed = files.get(path) as string[];
     later({ type: "files", path, files: listed, ignored: ignored.sort(), truncated: false });
     // A folder project's folder has no changes (23.1).
-    if (!holder(path)?.folder) later(changes(projects, path, watchedBase));
+    if (!holder(path)?.folder) later(markedChanges(path, watchedBase));
+  };
+  // A stand-in for `hive::seen` (27.1): by `<worktree>\n<base>`, each marked file's text when
+  // marked (its diff's identity here); a file written since is changed since seen.
+  const seenMarks = new Map<string, Map<string, string>>();
+  const textOf = (worktree: string, path: string) => written.get(`${worktree}/${path}`) ?? "";
+  const markedChanges = (path: string, asked: DiffBase) => {
+    const listed = changes(projects, path, asked);
+    const marks = seenMarks.get(`${path}\n${listed.base}`) ?? new Map<string, string>();
+    const files = listed.files.map((f): ChangedFile => {
+      const mark = marks.get(f.path);
+      if (mark === undefined) return f;
+      return { ...f, seen: mark === textOf(path, f.path) ? "seen" : "changed" };
+    });
+    return { ...listed, files };
   };
   // A stand-in for an agent writing a file: `touch <name>` in a worktree's terminal.
   const touch = (cwd: string, name: string) => {
@@ -1786,7 +1896,18 @@ export function createMockTransport(
       later({ type: "worktree_renamed", project: updated, from: path, path: renamed.path });
     },
     async listChanges(path, base) {
-      later(changes(projects, path, base));
+      later(markedChanges(path, base));
+    },
+    async markSeen(path, base, paths, seen) {
+      const listed = changes(projects, path, base);
+      const key = `${path}\n${listed.base}`;
+      const marks = seenMarks.get(key) ?? new Map<string, string>();
+      for (const f of listed.files.filter((f) => paths.includes(f.path))) {
+        if (seen) marks.set(f.path, textOf(path, f.path));
+        else marks.delete(f.path);
+      }
+      seenMarks.set(key, marks);
+      later(markedChanges(path, base));
     },
     async listScripts(path) {
       scriptsAsked = holder(path) ? path : null;
@@ -1812,6 +1933,13 @@ export function createMockTransport(
       later({ type: "session_deleted", id });
       // As the service does when a log goes (D19.4).
       listSessions();
+    },
+    async whoWrote(worktree, path, line, side) {
+      const origin = mockAuthor(sessions, worktree, path, line, side);
+      later({ type: "line_author", worktree, path, line, side, origin });
+    },
+    async listSessionFiles(id) {
+      later({ type: "session_files", id, files: mockSessionFiles(id), truncated: false });
     },
     async moveSession(id, config_dir) {
       const found = sessions.find((x) => x.id === id);

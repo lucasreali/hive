@@ -74,11 +74,14 @@ sort! {
         | ExpandIgnored
         | View
         | ListChanges
+        | MarkSeen
         | ListScripts
         | ListSessions
         | LocateSession
         | DeleteSession
         | MoveSession
+        | WhoWrote
+        | ListSessionFiles
         | SearchFiles
         | ListDirs
         | OpenFile
@@ -170,6 +173,8 @@ sort! {
         | DeleteSessionFailed
         | SessionMoved
         | MoveSessionFailed
+        | LineAuthor
+        | SessionFiles
         | SearchResults
         | Dirs
         | File
@@ -536,8 +541,15 @@ fn samples() -> Vec<Control> {
             base: DiffBase::Head,
             branch: None,
             base_error: None,
-            files: vec![],
-            added: 0,
+            files: vec![ChangedFile {
+                path: s("a"),
+                status: FileStatus::Modified,
+                old_path: None,
+                added: Some(1),
+                removed: Some(0),
+                seen: Some(SeenMark::Seen),
+            }],
+            added: 1,
             removed: 0,
             error: None,
         },
@@ -575,6 +587,47 @@ fn samples() -> Vec<Control> {
         MoveSessionFailed {
             id: s("s"),
             message: m(),
+        },
+        LineAuthor {
+            worktree: s("/r"),
+            path: s("a.rs"),
+            line: 3,
+            side: LineSide::Worktree,
+            origin: LineOrigin::Session {
+                edit: Box::new(LineEdit {
+                    session: s("s"),
+                    title: Some(s("t")),
+                    deleted: false,
+                    project: Some(s("/r")),
+                    worktree: s("/r"),
+                    agent: Some(s("a1")),
+                    agent_type: Some(s("general-purpose")),
+                    tool: s("Edit"),
+                    tool_use_id: Some(s("toolu_1")),
+                    ms: 5,
+                    user_modified: true,
+                    start: 2,
+                    len: 3,
+                }),
+                commit: Some(LineCommit {
+                    id: s("abc"),
+                    author: s("A"),
+                    ms: 6,
+                    summary: s("fix"),
+                }),
+            },
+        },
+        SessionFiles {
+            id: s("s"),
+            files: vec![SessionFile {
+                worktree: s("/r"),
+                path: s("a.rs"),
+                edits: 2,
+                lines_now: 3,
+                first_line: Some(4),
+                last_ms: 5,
+            }],
+            truncated: false,
         },
         SearchResults {
             worktree: s("/r"),

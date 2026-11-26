@@ -32,6 +32,9 @@ import type {
   GhAccounts,
   GhIdentity,
   HostLink,
+  LineEdit,
+  LineOrigin,
+  LineSide,
   NameCheck,
   NotificationPermission,
   ProgressState,
@@ -39,6 +42,7 @@ import type {
   ProjectScripts,
   SearchResults,
   Session,
+  SessionFile,
   SessionWindow,
   Settings,
   Shared,
@@ -166,6 +170,18 @@ export type FileDialog = FileTarget & { kind: FileDialogKind; error: string | nu
 
 /** A 1-based, inclusive range of lines. */
 export type Lines = { from: number; to: number };
+
+/**
+ * "Who wrote this line?" (27.5): a line of a worktree's file on its `side`, and where on screen
+ * its answer shows (by the line, or the gutter menu's pointer).
+ */
+export type LineAsk = OpenFile & { line: number; side: LineSide; x: number; y: number };
+/** The last line asked about, with the service's answer once it came (null until then). */
+export type Provenance = LineAsk & { origin: LineOrigin | null };
+/** The edit the Sessions view shows (27.5): its session's row, with file `path` highlighted. */
+export type SessionFocus = { edit: LineEdit; path: string };
+/** A session's changed files, as the service last listed them (27.5). */
+export type SessionFiles = { files: SessionFile[]; truncated: boolean };
 
 /** A review comment (6.7) on lines of a worktree's file (new-file numbers). */
 export type ReviewComment = Lines & { path: string; text: string };
@@ -333,6 +349,16 @@ export type HiveState = {
   projectMenu: ProjectMenu | null;
   sessionMenu: SessionMenu | null;
   fileMenu: (FileTarget & { x: number; y: number }) | null;
+  /** The editor's line number menu (27.5), at the pointer. */
+  lineMenu: LineAsk | null;
+  /** The last "Who wrote this line?" (27.5): its popover shows the answer that is not a row. */
+  provenance: Provenance | null;
+  /** The session edit the Sessions view shows (27.5), until another is asked. */
+  sessionFocus: SessionFocus | null;
+  /** The session rows whose "Files changed" list is open (27.5). */
+  openSessionFiles: string[];
+  /** Each session's changed files, by session id, once asked (27.5). */
+  sessionFiles: Record<string, SessionFiles>;
   fileDialog: FileDialog | null;
   /**
    * Folders created from the tree, by worktree: git lists no empty folder, so the tree shows
@@ -490,6 +516,8 @@ export type HiveState = {
   claudeLogins: ClaudeLogin[] | null;
   /** The project a dialog opened for (e.g. the row's "New worktree"). */
   modalProject: string | null;
+  /** The section Settings opens on (27.8: the hosts popover opens Hosts); null: its default. */
+  settingsSection: string | null;
   /** The worktree a dialog opened for (its row's menu). */
   modalWorktree: string | null;
   worktreeDialog: WorktreeDialog;
@@ -518,6 +546,8 @@ export type HiveState = {
   changesSeen: Record<string, number>;
   /** By worktree path: the base picked in the Changes panel (UI state, this run only). */
   diffBases: Record<string, DiffBase>;
+  /** The Diff view lists only the files not marked seen (27.1; UI state, this run only). */
+  unseenOnly: boolean;
   /** The last `file` the service sent; shown only while it is the open file. */
   file: FileText | null;
   /** The last `table` the service sent (23.6); shown only while it is the open file's. */
@@ -632,6 +662,7 @@ export const initialState: HiveState = {
   ghIdentity: null,
   claudeLogins: null,
   modalProject: null,
+  settingsSection: null,
   modalWorktree: null,
   worktreeDialog: {
     branches: null,
@@ -655,6 +686,7 @@ export const initialState: HiveState = {
   scriptRuns: {},
   changesSeen: {},
   diffBases: {},
+  unseenOnly: false,
   file: null,
   table: null,
   tableAsks: [],
@@ -668,6 +700,11 @@ export const initialState: HiveState = {
   sessions: null,
   sessionsError: null,
   sessionsTruncated: false,
+  lineMenu: null,
+  provenance: null,
+  sessionFocus: null,
+  openSessionFiles: [],
+  sessionFiles: {},
   gotoLine: null,
   pulls: {},
   openPull: null,
@@ -698,6 +735,11 @@ export const HOST_FIELDS = [
   "sessions",
   "sessionsError",
   "sessionsTruncated",
+  "sessionFiles",
+  "sessionFocus",
+  "openSessionFiles",
+  "provenance",
+  "lineMenu",
   "sessionUsage",
   "weekUsage",
   "usageLimits",
@@ -912,6 +954,7 @@ export const openModal = (
   useHive.setState({
     modal,
     modalProject,
+    settingsSection: null,
     modalWorktree,
     addProjectError: null,
     projectCreated: null,

@@ -298,7 +298,7 @@ test("clicking a file opens it in a tab; folders collapse; the tab's close close
   expect(screen.getByRole("tab", { name: "token.ts" }).getAttribute("aria-selected")).toBe("true");
   const view = screen.getByRole("region", { name: "src/auth/token.ts" });
   expect(view.querySelector(".file-view-bar")?.textContent).toBe(
-    "Rsrc/auth/token.ts+2−1EditComment",
+    "Rsrc/auth/token.ts+2−1EditCommentSeen",
   );
   expect(view.textContent).not.toContain("No changes in this file.");
   // Nothing selected yet: the reference cannot be sent, and the button says why.
@@ -1501,4 +1501,73 @@ test("the tree's active row follows a renamed or moved entry once it is listed",
   // A moved file too.
   act(() => apply({ type: "file_renamed", worktree: fixLogin.path, path: "a", to: "README.md" }));
   expect(tree().getAttribute("aria-activedescendant")).toBe(treeRow(/^README/).id);
+});
+
+test("each changed file has a seen box at its row's end, counted and filtered (27.1)", () => {
+  panel();
+  const marked = spyOn(transport, "markSeen").mockImplementation(async () => {});
+  act(() => select(fixLogin.id));
+  const files = [
+    { ...file("a.ts"), seen: "seen" as const },
+    { ...file("b.ts"), seen: "changed" as const },
+    file("c.ts"),
+  ];
+  act(() => apply({ type: "changes", ...changes(fixLogin.path, files) }));
+  const seenLine = () => document.querySelector(".files-seen")?.firstChild?.textContent;
+  expect(seenLine()).toBe("1 of 3 seen");
+  const box = (name: string) =>
+    screen.getByRole("checkbox", { name: `Seen: ${name}` }) as HTMLInputElement;
+  expect(["a.ts", "b.ts", "c.ts"].map((n) => box(n).checked)).toEqual([true, false, false]);
+  // The box is the row's last element, out of the tab order (the tree has the keys).
+  expect(treeRow("c.ts").lastElementChild).toBe(box("c.ts"));
+  expect(box("c.ts").tabIndex).toBe(-1);
+  // Changed since seen: a dot says so.
+  const dot = (name: string) => treeRow(name).querySelector(".seen-changed");
+  expect(dot("b.ts")?.getAttribute("title")).toBe("Changed since seen");
+  expect(dot("a.ts")).toBeNull();
+
+  // A box marks its file, or unmarks it, and opens nothing.
+  fireEvent.click(box("c.ts"));
+  fireEvent.doubleClick(box("c.ts"));
+  fireEvent.click(box("a.ts"));
+  expect(marked.mock.calls).toEqual([
+    [fixLogin.path, "head", ["c.ts"], true],
+    [fixLogin.path, "head", ["a.ts"], false],
+  ]);
+  expect(useHive.getState().openFile).toBeNull();
+  // A click elsewhere on the row still opens it.
+  fireEvent.click(treeRow("c.ts"));
+  expect(useHive.getState().openFile?.path).toBe("c.ts");
+
+  // "Unseen only" leaves out the seen files, changed ones kept.
+  const filter = () => screen.getByRole("button", { name: "Unseen only" });
+  fireEvent.click(filter());
+  expect(filter().getAttribute("aria-pressed")).toBe("true");
+  expect(rows().map(([name]) => name)).toEqual(["b.ts+1M", "c.ts+1M"]);
+  act(() => apply({ type: "changes", ...changes(fixLogin.path, [files[0]]) }));
+  expect(screen.getByText("Every changed file is seen.")).toBeDefined();
+  fireEvent.click(filter());
+  expect(rows().map(([name]) => name)).toEqual(["a.ts+1M"]);
+  // No changes: no count, no filter.
+  act(() => apply({ type: "changes", ...changes(fixLogin.path, []) }));
+  expect(document.querySelector(".files-seen")).toBeNull();
+});
+
+test("the diff's header has the open file's seen box at its right end (27.1)", () => {
+  panel();
+  const marked = spyOn(transport, "markSeen").mockImplementation(async () => {});
+  act(() => select(fixLogin.id));
+  const changed = { ...file("a.ts"), seen: "changed" as const };
+  act(() => apply({ type: "changes", ...changes(fixLogin.path, [changed, file("b.ts")]) }));
+  act(() => setOpenFile({ worktree: fixLogin.path, path: "a.ts" }));
+  const bar = document.querySelector(".file-view-bar") as HTMLElement;
+  const seen = screen.getByRole("checkbox", { name: "Seen" }) as HTMLInputElement;
+  expect(bar.lastElementChild?.contains(seen)).toBe(true);
+  expect([seen.checked, seen.tabIndex]).toEqual([false, 0]);
+  expect(bar.querySelector(".seen-changed")).not.toBeNull();
+  fireEvent.click(seen);
+  expect(marked).toHaveBeenCalledWith(fixLogin.path, "head", ["a.ts"], true);
+  // A file not among the changes has no box.
+  act(() => setOpenFile({ worktree: fixLogin.path, path: "README.md" }));
+  expect(screen.queryByRole("checkbox", { name: "Seen" })).toBeNull();
 });

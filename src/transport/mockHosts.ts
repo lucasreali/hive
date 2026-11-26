@@ -1,5 +1,5 @@
 import { REMOTE_TYPES } from "../hosts";
-import type { HostLink, HostMessage, ServiceMessage, Settings } from "../protocol";
+import type { HostLink, HostMessage, ServiceMessage, Settings, Space } from "../protocol";
 import { DEFAULT_SETTINGS, useHive } from "../store";
 import type { Transport } from ".";
 
@@ -15,6 +15,35 @@ export const MOCK_REMOTE_REPO = "/home/dev/models";
 
 /** Why the fake link dropped (`drop-link` typed in a terminal). */
 export const MOCK_DROP_REASON = "Connection to gpu-box closed by remote host.";
+
+/** The name of the `i`-th fake host after gpu-box (27.8, `&hosts=<n>`): `build-02` and on. */
+export const mockHostName = (i: number) => `build-${String(i).padStart(2, "0")}`;
+
+/**
+ * The link of the `i`-th fake host (27.8): connected, but every few one reconnecting, of
+ * another version, or refused, so that many hosts show every state.
+ */
+export function mockLink(i: number): HostLink {
+  if (i % 7 === 3) {
+    const reason = `Connection to ${mockHostName(i)} closed by remote host.`;
+    return { state: "reconnecting", reason, retry_secs: 30 };
+  }
+  if (i % 11 === 5) {
+    const versions = { version: "0.29.0", app_version: "0.30.0", terminals: 2 };
+    return { state: "disconnected", reason: "version", kind: "version", ...versions };
+  }
+  if (i % 13 === 8) {
+    return { state: "disconnected", reason: "Permission denied (publickey).", kind: "auth" };
+  }
+  return { state: "connected" };
+}
+
+/** The spaces of the `i`-th fake host: "Default", and "Work" on every third one. */
+export function mockSpaces(i: number): Space[] {
+  const env = { git_name: null, git_email: null, gh_account: null, claude_account: null };
+  const names = i % 3 === 0 ? ["Default", "Work"] : ["Default"];
+  return names.map((name) => ({ id: name.toLowerCase(), name, projects: [], env }));
+}
 
 /**
  * The requests that go to the shown host's service (`HiveState.host`), as the app side routes
@@ -58,10 +87,13 @@ const HOSTED = [
   "expandIgnored",
   "setView",
   "listChanges",
+  "markSeen",
   "listScripts",
   "listSessions",
   "locateSession",
   "deleteSession",
+  "whoWrote",
+  "listSessionFiles",
   "moveSession",
   "searchFiles",
   "openFile",
@@ -88,8 +120,13 @@ const TERMINAL = [
 /**
  * This Mac's fake service and `gpu-box`'s. Typed in any terminal, `drop-link` drops the link
  * (`reconnecting`, until Reconnect) and `stop-link` stops it (`disconnected`, a network failure).
+ * With `count` above 1 (27.8), fake hosts `build-02` and on up to `count`, each linked in its
+ * `mockLink` state with its `mockSpaces`, serving nothing else; Reconnect or a restart links one.
  */
-export async function createHostsTransport(cast: string | null = null): Promise<Transport> {
+export async function createHostsTransport(
+  cast: string | null = null,
+  count = 1,
+): Promise<Transport> {
   // Loaded as `index.ts` loads it: the fake service stays a chunk of its own (9.24).
   const { createMockTransport, mockProject } = await import("./mock");
   const repos = [mockProject(MOCK_REMOTE_REPO, "models", ["train-run"])];
@@ -102,9 +139,14 @@ export async function createHostsTransport(cast: string | null = null): Promise<
     if (line === "drop-link" && up) drop("reconnecting");
     if (line === "stop-link" && up) drop("disconnected");
   };
+  /** The fake hosts after gpu-box, by name, with their link and spaces. */
+  const seeded = new Map<string, { link: HostLink; spaces: Space[] }>();
+  for (let i = 2; i <= count; i++) {
+    seeded.set(mockHostName(i), { link: mockLink(i), spaces: mockSpaces(i) });
+  }
   const settings: Settings = {
     ...DEFAULT_SETTINGS,
-    remote: { hosts: [MOCK_HOST], keep_minutes: 1440 },
+    remote: { hosts: [MOCK_HOST, ...seeded.keys()], keep_minutes: 1440 },
   };
   const local = createMockTransport(null, cast, { ids, settings, onLine });
   const remote = createMockTransport(null, null, { ids, repos, onLine });
@@ -153,8 +195,12 @@ export async function createHostsTransport(cast: string | null = null): Promise<
       status(host, { state: "removed" });
     }
     for (const host of next.filter((h) => !hosts.includes(h))) {
+      const fake = seeded.get(host);
       if (host === MOCK_HOST) void connectRemote(false);
-      else {
+      else if (fake) {
+        status(host, fake.link);
+        later({ type: "spaces", spaces: fake.spaces, current: "default", host });
+      } else {
         status(host, { state: "connecting" });
         const reason = `ssh: Could not resolve hostname ${host}: nodename nor servname provided, or not known`;
         status(host, { state: "disconnected", reason, kind: "network" });
@@ -163,13 +209,25 @@ export async function createHostsTransport(cast: string | null = null): Promise<
     hosts = next;
   };
   const shown = () => useHive.getState().host === MOCK_HOST;
+  // A fake host after gpu-box serves nothing: its requests go nowhere.
+  const nowhere = async () => {};
   const hosted = Object.fromEntries(
     HOSTED.map((name) => [
       name,
-      (...args: unknown[]) =>
-        ((shown() ? remote : local)[name] as (...args: unknown[]) => Promise<void>)(...args),
+      (...args: unknown[]) => {
+        const host = useHive.getState().host;
+        if (host !== null && seeded.has(host)) return nowhere();
+        return ((shown() ? remote : local)[name] as (...args: unknown[]) => Promise<void>)(...args);
+      },
     ]),
   );
+  /** Links fake host `host` again (Reconnect, or a restart of its service). */
+  const relink = (host: string) => {
+    const fake = seeded.get(host);
+    if (!fake || !hosts.includes(host) || fake.link.state === "connected") return;
+    fake.link = { state: "connected" };
+    status(host, fake.link);
+  };
   const terminal = Object.fromEntries(
     TERMINAL.map((name) => [
       name,
@@ -200,8 +258,11 @@ export async function createHostsTransport(cast: string | null = null): Promise<
     },
     async reconnectHost(host) {
       if (host === MOCK_HOST && !up && hosts.includes(host)) await connectRemote(true);
+      relink(host);
     },
-    async restartRemote() {},
+    async restartRemote(host) {
+      relink(host);
+    },
     async byeHosts(byes) {
       if (!byes.some(([host, end]) => host === MOCK_HOST && end)) return;
       for (const channel of remoteIds) await remote.closeTerminal(channel);

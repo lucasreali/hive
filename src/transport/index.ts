@@ -4,6 +4,7 @@ import type {
   AppMode,
   DiffBase,
   GhAccount,
+  LineSide,
   ServiceMessage,
   SessionTarget,
   Settings,
@@ -216,6 +217,11 @@ export interface Transport {
   setView(terminal: number | null, focused: boolean, visible: boolean): Promise<void>;
   /** What differs from `base` in the worktree at `path`; answered by `changes`. */
   listChanges(path: string, base: DiffBase): Promise<void>;
+  /**
+   * Marks `files` of the worktree at `path` as seen in its diff against `base`, or not (27.1);
+   * answered by `changes`, or `error` when the marks cannot be kept.
+   */
+  markSeen(path: string, base: DiffBase, files: string[], seen: boolean): Promise<void>;
   /** The scripts of the worktree at `path` (23.4); answered by `scripts`. */
   listScripts(path: string): Promise<void>;
   /** Claude sessions of the followed projects; answered by `sessions`. */
@@ -224,6 +230,19 @@ export interface Transport {
   locateSession(id: string, target: SessionTarget): Promise<void>;
   /** Deletes a session's log; answered by `session_deleted` or `delete_session_failed`. */
   deleteSession(id: string): Promise<void>;
+  /**
+   * Who wrote `line` (1-based) of `path` in the worktree (27.5), on its `side`: the file as it
+   * is, or the diff's old side at `base`; answered by `line_author`.
+   */
+  whoWrote(
+    worktree: string,
+    path: string,
+    line: number,
+    side: LineSide,
+    base: DiffBase,
+  ): Promise<void>;
+  /** The files the session `id` changed, as Hive recorded (27.5); answered by `session_files`. */
+  listSessionFiles(id: string): Promise<void>;
   /**
    * Moves a session's log into the Claude account `configDir`'s folder (null: the default
    * one); answered by `session_moved` or `move_session_failed`.
@@ -363,7 +382,8 @@ export interface Transport {
  * The Tauri transport inside the app; the in-browser fake service otherwise or with `?mock`.
  * `?mock=mismatch` / `?mock=disconnected` make the fake service fail the connection;
  * `?mock=empty` starts it with no projects; `?mock=remote` links it to a second fake service, the
- * remote host `gpu-box` (26.18, `mockHosts.ts`); `?mock=choose` first asks where the service runs (12.5.4); `?mock=update` offers an update that fails; `?mock=states` adds agents in every state;
+ * remote host `gpu-box` (26.18, `mockHosts.ts`), and `&hosts=<n>` adds fake hosts up to n in
+ * every link state (27.8); `?mock=choose` first asks where the service runs (12.5.4); `?mock=update` offers an update that fails; `?mock=states` adds agents in every state;
  * `?mock=load[&cast=<url>]` replays a recording into
  * every terminal (the load test, 1.11). The fake service is a chunk of its own, loaded only
  * then (9.24): the app's startup bundle does not carry it.
@@ -377,7 +397,7 @@ export async function pickTransport(
   if (tauri && mock === null) return tauriTransport;
   if (mock === "remote") {
     const { createHostsTransport } = await import("./mockHosts");
-    return createHostsTransport(params.get("cast"));
+    return createHostsTransport(params.get("cast"), Number(params.get("hosts") ?? 1));
   }
   const { createMockTransport } = await import("./mock");
   return createMockTransport(mock, params.get("cast"));

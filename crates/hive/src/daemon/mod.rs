@@ -152,9 +152,11 @@ pub async fn run(paths: &Paths) -> io::Result<()> {
     let places = None;
     // What a service before 26.11 left, gone before this one's first terminal.
     crate::browser_cleanup::clean(&paths.bin_dir(), &paths.runtime);
+    let provenance = crate::provenance::Provenance::new(Some(paths.data.join("provenance")));
     let state = Arc::new(State {
         warning,
         places,
+        provenance,
         ..state
     });
     serve(listener, hold, terminated, state).await
@@ -244,6 +246,7 @@ async fn serve(
     let health = tokio::spawn(watch_health(state.clone(), every));
     let registry = tokio::spawn(watch_registry(state.clone(), Registry::new()));
     let logs = tokio::spawn(watch_sessions(state.clone(), session_watch::Watch::new()));
+    let provenance = tokio::spawn(keep_provenance(state.clone()));
     let mut check = tokio::time::interval(CLAIM_CHECK);
     tokio::pin!(terminated);
     // When the terminals kept after the app dropped end, unless an app is back by then.
@@ -288,8 +291,15 @@ async fn serve(
     drop(listener);
     hold.release();
     let files = state.watching.lock().await.take().map(|files| files.task);
-    for task in [watcher, health, registry, logs].into_iter().chain(files) {
+    for task in [watcher, health, registry, logs, provenance]
+        .into_iter()
+        .chain(files)
+    {
         stop(task).await;
+    }
+    // What changed since the last write; nothing when Hive is being uninstalled.
+    if state.uninstalling().is_none() {
+        tokio::task::block_in_place(|| state.provenance.flush());
     }
     let uninstall = state.uninstalling().clone();
     // Before the terminals end (and their sessions with them): what to resume next time;
@@ -314,6 +324,16 @@ async fn serve(
     }
     // The lock goes last, with `hold`.
     ended
+}
+
+/// Writes the line provenance store's changes every [`PROVENANCE_FLUSH`] (27.5).
+async fn keep_provenance(state: Arc<State>) {
+    let mut every = tokio::time::interval(PROVENANCE_FLUSH);
+    // Stopped before an uninstall removes Hive's folder, so nothing is written after it.
+    loop {
+        every.tick().await;
+        tokio::task::block_in_place(|| state.provenance.flush());
+    }
 }
 
 /// Stops a background task and waits until it has. One caught in blocking work
@@ -370,6 +390,8 @@ struct State {
     ports: Ports,
     /// The pull requests already offered for removing their worktree (17.27).
     offers: crate::offers::Offers,
+    /// The files marked seen in each worktree's diff (27.1).
+    seen: crate::seen::Seen,
     restore: Restore,
     /// The worktree statuses the app has, so only changes are sent.
     sent: std::sync::Mutex<health::Sent>,
@@ -414,6 +436,8 @@ struct State {
     warning: Option<String>,
     /// Where Hive's things are, for uninstalling it (23.5); `None` without a `HOME`.
     places: Option<uninstall::Places>,
+    /// Which session wrote each line (27.5).
+    provenance: crate::provenance::Provenance,
     /// What to uninstall, once the app asked (`uninstall`): the service then ignores the app
     /// and ends ([`State::ending`]).
     uninstalling: std::sync::Mutex<Option<uninstall::Choice>>,
@@ -440,6 +464,9 @@ struct Restore {
     /// Read at start, sent to the first app that connects.
     pending: Mutex<Vec<OpenSession>>,
 }
+
+/// How often the line provenance store writes what changed (27.5).
+const PROVENANCE_FLUSH: Duration = Duration::from_secs(2);
 
 impl State {
     fn new(
@@ -468,6 +495,8 @@ impl State {
             settings,
             ports,
             offers,
+            // In Hive's folder, with the open sessions: `<data>/seen.json`.
+            seen: crate::seen::Seen::new(restore.file.with_file_name("seen.json")),
             restore,
             sent: Default::default(),
             listed: Default::default(),
@@ -487,6 +516,7 @@ impl State {
             tick: Default::default(),
             warning: None,
             places: None,
+            provenance: Default::default(),
             uninstalling: Default::default(),
             ending: Default::default(),
         }
@@ -810,14 +840,18 @@ impl State {
         let shell = Some(self.settings.get().0.terminal.shell);
         #[cfg(not(windows))]
         let shell = None;
+        let state = self.clone();
         // Hive's terminals: their hooks name their sessions.
         self.sessions(move |projects, sessions, mut running| {
+            let provenance = &state.provenance;
             // Claude keeps a record of each running `claude` beside its projects folder.
             let records = sessions.records();
             running.extend(procs::claude_sessions(procs::Source::System, &records));
             let (mut sessions, truncated, error) = sessions.list(projects, &running);
+            let changed = provenance.files_changed(projects, hook::now_ms());
             for session in &mut sessions {
                 session.resume_command = crate::sessions::resume_command(session, shell);
+                session.files_changed = changed.get(&session.id).copied().unwrap_or(0);
             }
             Control::Sessions {
                 sessions,
@@ -1092,9 +1126,17 @@ impl State {
         }
     }
 
+    /// Drops the seen marks (27.1) of `worktrees`, removed.
+    fn forget_seen(&self, worktrees: &[String]) {
+        if let Err(err) = self.seen.forget(worktrees) {
+            eprintln!("hive: warning: cannot drop the seen marks of removed worktrees: {err}");
+        }
+    }
+
     /// Stops following the project `id` (9.28), a group with its repositories (14.1), unless a
     /// process of Hive's terminals (their `sessions`) works in it; their settings and their
-    /// worktrees' port blocks go with them. A group's repositories are removed before it.
+    /// worktrees' port blocks and seen marks (27.1) go with them. A group's repositories are
+    /// removed before it.
     async fn remove_project(&self, id: String, sessions: &HashSet<i32>) {
         let removed = tokio::task::block_in_place(|| {
             self.projects.remove(&id, procs::Source::System, sessions)
@@ -1110,9 +1152,11 @@ impl State {
         };
         self.refollow.notify_one();
         self.to_app(0, &self.projects.spaces_message()).await;
+        tokio::task::block_in_place(|| self.provenance.project_removed(&id));
         if let Err(err) = tokio::task::block_in_place(|| self.ports.forget(&worktrees)) {
             eprintln!("hive: warning: cannot free the ports of {id}: {err}");
         }
+        tokio::task::block_in_place(|| self.forget_seen(&worktrees));
         for id in inside.into_iter().chain([id]) {
             let reply = match tokio::task::block_in_place(|| self.settings.forget(&id)) {
                 Ok(settings) => settings.map(|settings| Control::Settings { settings }),
@@ -1243,7 +1287,7 @@ impl State {
         // `git status` both the changes and the status's count (9.14).
         let (changes, statuses) = tokio::task::block_in_place(|| {
             let projects = self.projects.list();
-            let (changes, totals) = changes::answer(&projects, path.to_owned(), base);
+            let (changes, totals) = changes::answer(&projects, path.to_owned(), base, &self.seen);
             (
                 changes,
                 self.health_changed(&projects, Some((path, totals))),
@@ -1456,6 +1500,23 @@ fn test_state_with(dir: &Path, power: Option<Box<dyn power::Power>>) -> Arc<Stat
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn seen_marks_that_cannot_be_dropped_are_only_a_warning() {
+        let tmp = tempfile::tempdir().unwrap();
+        let state = test_state(tmp.path());
+        let worktree = tmp.path().join("w").display().to_string();
+        let file = tmp.path().join("seen.json");
+        let marks = serde_json::json!({ &worktree: { "head": { "a": "x" } } }).to_string();
+        std::fs::write(&file, &marks).unwrap();
+        // The temporary file of the save is taken: nothing is saved.
+        std::fs::create_dir_all(tmp.path().join("seen.tmp/x")).unwrap();
+        state.forget_seen(std::slice::from_ref(&worktree));
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), marks);
+        std::fs::remove_dir_all(tmp.path().join("seen.tmp")).unwrap();
+        state.forget_seen(&[worktree]);
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), "{}");
+    }
 
     #[test]
     fn terminals_are_kept_for_at_most_seven_days() {
