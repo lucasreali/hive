@@ -79,6 +79,11 @@ fn a_snapshot_holds_the_worktree_with_untracked_files_and_without_ignored_ones()
     assert_eq!((turn.n, turn.late, turn.started_ms), (1, false, 1000));
     let since = snapshots.since(&root, &id(&root), "s-1").unwrap();
     assert_eq!(since.turn, turn);
+    // The same base found again is equal; another turn's is not.
+    let mut other = snapshots.since(&root, &id(&root), "s-1").unwrap();
+    assert_eq!(other, since);
+    other.turn.n = 9;
+    assert_ne!(other, since);
     assert_eq!(tree_files(&since), [".gitignore", "a", "new"]);
     assert_eq!(content(&since, "a").as_deref(), Some("a2"));
     assert_eq!(content(&since, "gone"), None);

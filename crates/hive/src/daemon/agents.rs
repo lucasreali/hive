@@ -138,7 +138,8 @@ impl State {
                             .take(&dir, &worktree, &id, started)
                             .map(|_| worktree)
                     });
-                    match taken.await.unwrap_or_else(|err| Err(io::Error::other(err))) {
+                    let taken = taken.await.map_err(io::Error::other);
+                    match taken.and_then(std::convert::identity) {
                         Ok(worktree) => state.rewatch(Some(&worktree)).await,
                         Err(err) => eprintln!("hive: warning: no snapshot of this turn: {err}"),
                     }

@@ -1169,12 +1169,8 @@ impl State {
     /// (27.2).
     async fn titles(&self) -> HashMap<String, String> {
         let agents = self.agents.lock().await;
-        let titled = agents
-            .iter()
-            .filter_map(|(id, agent)| Some((id, agent.title.as_ref()?)));
-        titled
-            .map(|(id, title)| (id.clone(), title.clone()))
-            .collect()
+        let titled = |(id, agent): (&String, &Agent)| Some((id.clone(), agent.title.clone()?));
+        agents.iter().filter_map(titled).collect()
     }
 
     /// Answers `list_changes` off the frame loop.

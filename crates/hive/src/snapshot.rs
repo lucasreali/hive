@@ -586,10 +586,9 @@ impl Store {
         self.refresh(worktree, repo, index)?;
         let out = self.work(worktree, index, &args(&["write-tree"]))?;
         let tree = String::from_utf8_lossy(out.trim_ascii()).into_owned();
-        if tree.is_empty() || !tree.bytes().all(|b| b.is_ascii_hexdigit()) {
-            return Err(io::Error::other("git wrote no tree"));
-        }
-        Ok(tree)
+        // Git's own output, checked as a stored one is.
+        let written = object_id(&tree).then_some(tree);
+        written.ok_or_else(|| io::Error::other("git wrote no tree"))
     }
 
     /// The ref keeping `turn`'s tree.
@@ -629,14 +628,13 @@ impl Store {
         let mut size = 0;
         let mut folders = vec![self.objects()];
         while let Some(folder) = folders.pop() {
-            let Ok(entries) = std::fs::read_dir(&folder) else {
-                continue;
-            };
-            for entry in entries.filter_map(Result::ok) {
-                match entry.metadata() {
-                    Ok(meta) if meta.is_dir() => folders.push(entry.path()),
-                    Ok(meta) => size += meta.len(),
-                    Err(_) => {}
+            let entries = std::fs::read_dir(&folder).into_iter().flatten().flatten();
+            let entries = entries.filter_map(|e| Some((e.path(), e.metadata().ok()?)));
+            for (path, meta) in entries {
+                if meta.is_dir() {
+                    folders.push(path);
+                } else {
+                    size += meta.len();
                 }
             }
         }
@@ -647,11 +645,9 @@ impl Store {
     /// could not have been written by Hive (the file edited by hand) is left out.
     fn read(&self) -> Record {
         let mut record = self.read_whole().unwrap_or_default();
-        record.turns.retain(|t| {
-            let tree =
-                matches!(t.tree.len(), 40 | 64) && t.tree.bytes().all(|b| b.is_ascii_hexdigit());
-            valid(&t.session).is_ok() && tree
-        });
+        record
+            .turns
+            .retain(|t| valid(&t.session).is_ok() && object_id(&t.tree));
         record
     }
 
@@ -718,6 +714,11 @@ fn filters(dir: &Path) -> io::Result<Vec<String>> {
         }
     }
     Ok(options)
+}
+
+/// Whether `text` is an object id: 40 or 64 hex digits.
+fn object_id(text: &str) -> bool {
+    matches!(text.len(), 40 | 64) && text.bytes().all(|b| b.is_ascii_hexdigit())
 }
 
 /// An error once `seen` nested repositories are more than [`NESTED`].

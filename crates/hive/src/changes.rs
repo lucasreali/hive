@@ -1165,16 +1165,9 @@ garbage\0\
         std::fs::remove_dir_all(&objects).unwrap();
         std::fs::create_dir_all(objects.join("info")).unwrap();
         let (listed, totals) = answer(&projects, &snapshots, path.clone(), &base, &titles);
-        let Control::Changes {
-            base: used,
-            base_error,
-            ..
-        } = listed
-        else {
-            unreachable!()
-        };
-        assert_eq!(used, DiffBase::Head);
-        let error = base_error.unwrap_or_default();
+        let listed = serde_json::to_value(&listed).unwrap();
+        assert_eq!(listed["base"], "head");
+        let error = listed["base_error"].as_str().unwrap_or_default();
         assert!(
             error.starts_with("The snapshot of this turn is no longer complete: "),
             "{error}"
@@ -1212,16 +1205,8 @@ garbage\0\
             &["worktree", "add", "-q", "-b", "w", w.to_str().unwrap()],
         );
         commit(&w, "b");
-        let path = w.display().to_string();
-        let Control::Commits {
-            commits: listed,
-            truncated: false,
-            error: None,
-            ..
-        } = commits(&projects, path.clone())
-        else {
-            unreachable!()
-        };
+        let (listed, truncated) = log(&w, Some("main".into()), COMMITS).unwrap();
+        assert!(!truncated);
         let got: Vec<_> = listed
             .iter()
             .map(|c| {
@@ -1244,12 +1229,7 @@ garbage\0\
         assert_eq!(listed[0].id, rev(&w));
         assert_eq!(listed[0].short, &listed[0].id[..listed[0].short.len()]);
         // The main worktree has no branch: none is its own.
-        let Control::Commits {
-            commits: listed, ..
-        } = commits(&projects, main.clone())
-        else {
-            unreachable!()
-        };
+        let (listed, _) = log(&root, None, COMMITS).unwrap();
         assert!(listed.iter().all(|c| !c.on_branch) && listed.len() == 2);
         // Over the cap: cut, and said; the branch's first.
         let (listed, truncated) = log(&w, Some("main".into()), 1).unwrap();
@@ -1259,20 +1239,17 @@ garbage\0\
         assert_eq!((listed.len(), truncated), (3, false));
         // A main branch git cannot read: no commit is the branch's.
         projects[0].worktrees[0].branch = Some("gone".into());
-        let Control::Commits {
-            commits: listed, ..
-        } = commits(&projects, path)
-        else {
-            unreachable!()
-        };
+        let (listed, _) = log(&w, Some("gone".into()), COMMITS).unwrap();
         assert!(listed.iter().all(|c| !c.on_branch));
         // Only a followed worktree.
-        let Control::Commits { error, .. } = commits(&projects, "/nope".into()) else {
-            unreachable!()
-        };
         assert_eq!(
-            error.as_deref(),
-            Some("/nope is not a worktree of a followed project")
+            commits(&projects, "/nope".into()),
+            Control::Commits {
+                path: "/nope".into(),
+                commits: vec![],
+                truncated: false,
+                error: Some("/nope is not a worktree of a followed project".into()),
+            }
         );
     }
 
