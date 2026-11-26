@@ -883,6 +883,22 @@ fn at_most_five_hundred_files_are_listed() {
     assert_eq!(files.len(), FILES_LIMIT);
     assert_eq!(files[0].path, format!("f{FILES_LIMIT}"));
     assert_eq!((files[0].lines_now, files[0].first_line), (0, None));
+    // Exactly at the cap: all listed.
+    store
+        .inner()
+        .repos
+        .get_mut("/p")
+        .unwrap()
+        .edits
+        .truncate(FILES_LIMIT);
+    let Control::SessionFiles {
+        files, truncated, ..
+    } = store.session_files(&projects, "s1".into(), T0)
+    else {
+        panic!()
+    };
+    assert!(!truncated);
+    assert_eq!(files.len(), FILES_LIMIT);
 }
 
 #[test]
@@ -1364,6 +1380,7 @@ fn the_caps_are_the_approved_ones() {
     assert_eq!(REPO_BYTES, 8_388_608);
     assert_eq!(TOTAL_BYTES, 67_108_864);
     assert_eq!(COMMIT_SLACK_MS, 300_000);
+    assert_eq!(STORE_READ, 16_777_216);
 }
 
 #[test]
@@ -1412,4 +1429,77 @@ fn a_file_rewritten_to_the_same_size_is_seen_by_its_time() {
         .unwrap();
     store.saw(&repo.projects, &stop, T0 + 4000);
     assert_eq!(origins(&store, &repo, "a.txt"), [E(0), Unknown]);
+    // Another size at the stored time: seen, exactly a second after the last look.
+    let modified = std::fs::metadata(&file).unwrap().modified().unwrap();
+    repo.write("a.txt", &["new first line", LONG_A, LONG_B]);
+    std::fs::File::options()
+        .write(true)
+        .open(&file)
+        .unwrap()
+        .set_modified(modified)
+        .unwrap();
+    store.saw(&repo.projects, &stop, T0 + 5000);
+    // The session's two lines are back together: its own again.
+    assert_eq!(origins(&store, &repo, "a.txt"), [Unknown, E(0), E(0)]);
+}
+
+#[test]
+fn a_records_ids_and_folder_are_checked_again_in_the_service() {
+    let repo = Repo_::new();
+    let store = Provenance::default();
+    let file = repo.root.join("a.txt");
+    repo.write("a.txt", &[LONG_A]);
+    let mut event = created("s1", &file, &format!("{LONG_A}\n"));
+    // A frame not from `hive hook`: its id is not slimmed.
+    event.raw["tool_use_id"] = json!("toolu bad");
+    event.cwd = Some(repo.worktree());
+    store.saw(&repo.projects, &event, T0);
+    let e = edit_of(&store, &repo);
+    assert_eq!((e.tool_use_id, e.cwd), (None, None));
+    // A live line past the file's end goes through blame (uncommitted: unknown).
+    assert_eq!(
+        ask(&store, &repo, "a.txt", 2, LineSide::Worktree),
+        LineOrigin::Unknown { commit: None }
+    );
+}
+
+#[test]
+fn text_from_another_file_or_worktree_is_never_reclaimed() {
+    let repo = Repo_::new();
+    let other = Repo_::new();
+    let mut projects = repo.projects.clone();
+    projects[0]
+        .worktrees
+        .push(crate::health::tests::worktree(&other.root, None, false));
+    let store = Provenance::default();
+    // An edit of b.txt, and of a.txt in another worktree, both writing LONG_A, LONG_B.
+    let text = format!("{LONG_A}\n{LONG_B}\n");
+    repo.write("b.txt", &[LONG_A, LONG_B]);
+    store.saw(
+        &projects,
+        &created("s1", &repo.root.join("b.txt"), &text),
+        T0,
+    );
+    other.write("a.txt", &[LONG_A, LONG_B]);
+    store.saw(
+        &projects,
+        &created("s2", &other.root.join("a.txt"), &text),
+        T0,
+    );
+    // a.txt here is followed, then a shell puts the same text in it.
+    repo.write("a.txt", &["x"]);
+    store.saved(&projects, &repo.worktree(), "a.txt", T0);
+    repo.write("a.txt", &["x", LONG_A, LONG_B]);
+    let _ = ask(&store, &repo, "a.txt", 1, LineSide::Worktree);
+    assert_eq!(origins(&store, &repo, "a.txt"), [Before, Unknown, Unknown]);
+    // An agent edit of it: the history is a.txt's of this worktree only.
+    repo.write("a.txt", &["y", LONG_A, LONG_B]);
+    let hunk = json!({"oldStart": 1, "oldLines": 1, "newStart": 1, "newLines": 1,
+        "lines": ["-x", "+y"]});
+    store.saw(
+        &projects,
+        &edited("s3", &repo.root.join("a.txt"), hunk, ""),
+        T0,
+    );
+    assert_eq!(origins(&store, &repo, "a.txt"), [E(2), Unknown, Unknown]);
 }

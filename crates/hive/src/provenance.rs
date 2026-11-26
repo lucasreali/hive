@@ -46,6 +46,8 @@ pub const MAX_AGE_MS: u64 = 90 * 24 * 3600 * 1000;
 /// Largest repository file: past it the line maps of the files untouched longest go, then the
 /// oldest records.
 pub const REPO_BYTES: usize = 8 << 20;
+/// Largest repository file read back (twice [`REPO_BYTES`]: a file over its cap is still read).
+const STORE_READ: u64 = 2 * REPO_BYTES as u64;
 /// Largest total of the repository files: past it the least recently written goes.
 pub const TOTAL_BYTES: u64 = 64 << 20;
 /// Most runs of an edit believed.
@@ -606,13 +608,11 @@ impl Provenance {
         let look = look(Path::new(&worktree), &rel)
             .map_err(|err| io::Error::other(format!("{}: {err}", shown())))?;
         let agent = event.subagent.as_ref();
-        let tool_use_id = event.raw.get("tool_use_id").and_then(Value::as_str);
-        let tool_use_id = tool_use_id.filter(|id| {
-            (1..=64).contains(&id.len())
-                && id
-                    .bytes()
-                    .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
-        });
+        let tool_use_id = event
+            .raw
+            .get("tool_use_id")
+            .filter(|id| crate::slim::plain_id(id));
+        let tool_use_id = tool_use_id.and_then(Value::as_str);
         let cwd = event
             .cwd
             .clone()
@@ -782,13 +782,13 @@ impl Provenance {
         };
         let Some(dir) = &self.dir else { return empty };
         let path = dir.join(format!("{}.json", key(project)));
-        let bytes = match std::fs::File::open(&path)
-            .and_then(|mut f| git::read_limited(&mut f, 2 * REPO_BYTES as u64))
-        {
-            Ok(bytes) => bytes,
-            Err(err) if err.kind() == io::ErrorKind::NotFound => return empty,
-            Err(_) => Vec::new(),
-        };
+        if std::fs::symlink_metadata(&path).is_err() {
+            return empty;
+        }
+        // Unreadable (a folder, too large) is set aside like malformed.
+        let bytes = std::fs::File::open(&path)
+            .and_then(|mut f| git::read_limited(&mut f, STORE_READ))
+            .unwrap_or_default();
         let stored = serde_json::from_slice::<Stored>(&bytes)
             .ok()
             .filter(|s| s.version == VERSION && s.project == project);
@@ -984,7 +984,7 @@ impl Provenance {
         let mut inner = self.inner();
         let repo = self.repo(&mut inner, &project.id, now_ms);
         let until = blamed.committed_ms.saturating_add(COMMIT_SLACK_MS);
-        let named = |p: &String| *p == blamed.path || p == rel || renamed.as_ref() == Some(p);
+        let named = |p: &String| *p == blamed.path || renamed.as_ref() == Some(p);
         let best = repo
             .edits
             .iter()

@@ -110,7 +110,7 @@ fn fitting(mut slimmed: Map<String, Value>) -> Value {
 }
 
 /// `[A-Za-z0-9_-]{1,64}`, as Claude's `toolu_…` ids are.
-fn plain_id(id: &Value) -> bool {
+pub(crate) fn plain_id(id: &Value) -> bool {
     id.as_str().is_some_and(|id| {
         (1..=64).contains(&id.len())
             && id
