@@ -358,7 +358,8 @@ export interface Transport {
  * The Tauri transport inside the app; the in-browser fake service otherwise or with `?mock`.
  * `?mock=mismatch` / `?mock=disconnected` make the fake service fail the connection;
  * `?mock=empty` starts it with no projects; `?mock=remote` links it to a second fake service, the
- * remote host `gpu-box` (26.18, `mockHosts.ts`); `?mock=choose` first asks where the service runs (12.5.4); `?mock=update` offers an update that fails; `?mock=states` adds agents in every state;
+ * remote host `gpu-box` (26.18, `mockHosts.ts`), and `&hosts=<n>` adds fake hosts up to n in
+ * every link state (27.8); `?mock=choose` first asks where the service runs (12.5.4); `?mock=update` offers an update that fails; `?mock=states` adds agents in every state;
  * `?mock=load[&cast=<url>]` replays a recording into
  * every terminal (the load test, 1.11). The fake service is a chunk of its own, loaded only
  * then (9.24): the app's startup bundle does not carry it.
@@ -372,7 +373,7 @@ export async function pickTransport(
   if (tauri && mock === null) return tauriTransport;
   if (mock === "remote") {
     const { createHostsTransport } = await import("./mockHosts");
-    return createHostsTransport(params.get("cast"));
+    return createHostsTransport(params.get("cast"), Number(params.get("hosts") ?? 1));
   }
   const { createMockTransport } = await import("./mock");
   return createMockTransport(mock, params.get("cast"));
