@@ -32,7 +32,7 @@ pub fn line_hash(line: &[u8]) -> u64 {
     let line = line.strip_suffix(b"\r").unwrap_or(line);
     let hash = fnv(FNV_OFFSET, line);
     let solid = line.iter().filter(|b| !b.is_ascii_whitespace()).count();
-    (hash & !1) | u64::from(solid >= SIGNIFICANT)
+    (hash & !1) + u64::from(solid >= SIGNIFICANT)
 }
 
 fn fnv(seed: u64, bytes: &[u8]) -> u64 {
@@ -156,7 +156,7 @@ fn myers(a: &[u64], b: &[u64]) -> Option<Vec<(usize, usize)>> {
     let (n, m) = (a.len() as isize, b.len() as isize);
     let limit = (a.len() + b.len()).min(MAX_EDITS) as isize;
     let off = limit + 1;
-    let mut v = vec![0isize; (2 * limit + 3) as usize];
+    let mut v = vec![0isize; 2 * off as usize + 1];
     // Before each step d, the diagonals -(d+1)..=d+1 it reads.
     let mut trace: Vec<Vec<isize>> = Vec::new();
     for d in 0..=limit {
@@ -244,6 +244,16 @@ impl Anchor {
 /// by the earlier place. `None`: the text is gone (outdated), or the anchor is
 /// [trivial](Anchor::trivial).
 pub fn relocate(anchor: &Anchor, file: &[u64], hint: usize) -> Option<Range<usize>> {
+    relocate_scored(anchor, file, hint).map(|(range, _)| range)
+}
+
+/// [`relocate`], with the number of context lines that matched there, to rank places found
+/// in different files.
+pub fn relocate_scored(
+    anchor: &Anchor,
+    file: &[u64],
+    hint: usize,
+) -> Option<(Range<usize>, usize)> {
     let len = anchor.lines.len();
     if len == 0 || anchor.trivial() || len > file.len() {
         return None;
@@ -260,7 +270,7 @@ pub fn relocate(anchor: &Anchor, file: &[u64], hint: usize) -> Option<Range<usiz
         .filter(|&at| file[at..at + len] == anchor.lines[..])
         .map(|at| (score(at), at))
         .min_by_key(|&(score, at)| (std::cmp::Reverse(score), at.abs_diff(hint), at))
-        .map(|(_, at)| at..at + len)
+        .map(|(score, at)| (at..at + len, score))
 }
 
 /// Packs hashes as base64 (standard alphabet, padded) of their little-endian bytes, for a
@@ -272,7 +282,7 @@ pub fn pack(hashes: &[u64]) -> String {
         let word = chunk
             .iter()
             .enumerate()
-            .fold(0u32, |w, (i, &b)| w | u32::from(b) << (16 - 8 * i));
+            .fold(0u32, |w, (i, &b)| w + (u32::from(b) << (16 - 8 * i)));
         for i in 0..4 {
             if i <= chunk.len() {
                 out.push(char::from(B64[(word >> (18 - 6 * i) & 63) as usize]));
@@ -298,7 +308,7 @@ pub fn unpack(text: &str) -> Option<Vec<u64>> {
         }
         let mut word = 0u32;
         for &c in &chunk[..4 - pad] {
-            word = word << 6 | u32::from(B64.iter().position(|&b| b == c)? as u8);
+            word = (word << 6) + u32::from(B64.iter().position(|&b| b == c)? as u8);
         }
         word <<= 6 * pad as u32;
         bytes.extend_from_slice(&word.to_be_bytes()[1..4 - pad]);
@@ -334,12 +344,18 @@ mod tests {
         assert_ne!(line_hash(b"let x = compute()\r;"), plain);
     }
 
+    /// FNV-1a 64 of "abcdefgh" (computed apart, in Python), whose lowest bit is already set.
+    const HASH_ABCDEFGH: u64 = 0x25da_8c18_36a8_d66d;
+
     #[test]
     fn the_hash_is_fnv_1a_with_the_significance_bit() {
         // FNV-1a 64 of "a" is 0xaf63dc4c8601ec8c; "a" is not significant.
         assert_eq!(line_hash(b"a"), 0xaf63_dc4c_8601_ec8c);
         assert_eq!(line_hash(b""), FNV_OFFSET & !1);
         assert_eq!(fnv(FNV_OFFSET, b"a"), 0xaf63_dc4c_8601_ec8c);
+        // "abcdefgh" is significant: its FNV-1a 64 with the lowest bit set.
+        assert_eq!(line_hash(b"abcdefgh"), fnv(FNV_OFFSET, b"abcdefgh") | 1);
+        assert_eq!(line_hash(b"abcdefgh"), HASH_ABCDEFGH);
     }
 
     #[test]
@@ -465,14 +481,20 @@ mod tests {
     fn past_the_edit_cap_every_line_in_between_counts_as_replaced() {
         // Interleaved: every other line differs, so the edits double the length.
         let old: Vec<u64> = (0..MAX_EDITS as u64 + 2).map(|i| i * 2).collect();
-        let mut new: Vec<u64> = old.iter().map(|&x| if x % 4 == 0 { x } else { x + 1 }).collect();
+        let mut new: Vec<u64> = old
+            .iter()
+            .map(|&x| if x % 4 == 0 { x } else { x + 1 })
+            .collect();
         new.insert(0, 999_999);
         new.push(999_998);
         let map = diff(&old, &new);
         assert!(lines(&map).iter().all(Option::is_none), "{map:?}");
         // At the cap it still finds them: half the lines changed, MAX_EDITS edits in all.
         let old: Vec<u64> = (0..MAX_EDITS as u64).collect();
-        let new: Vec<u64> = old.iter().map(|&x| if x % 2 == 0 { x } else { x + 10_000 }).collect();
+        let new: Vec<u64> = old
+            .iter()
+            .map(|&x| if x % 2 == 0 { x } else { x + 10_000 })
+            .collect();
         let map = diff(&old, &new);
         assert_eq!(map.line(0), Some(0));
         assert_eq!(map.line(1), None);
@@ -540,7 +562,10 @@ mod tests {
         assert_eq!((clamped.start, clamped.lines), (5, vec![6]));
         assert_eq!(clamped.after, Vec::<u64>::new());
         let past = Anchor::at(&file, 8..9, 2);
-        assert_eq!((past.start, past.lines.len(), past.before), (6, 0, vec![5, 6]));
+        assert_eq!(
+            (past.start, past.lines.len(), past.before),
+            (6, 0, vec![5, 6])
+        );
     }
 
     const S: u64 = 1; // significant
@@ -572,6 +597,7 @@ mod tests {
             after: vec![s(4)],
         };
         assert_eq!(relocate(&anchor, &file, 0), Some(5..6));
+        assert_eq!(relocate_scored(&anchor, &file, 0), Some((5..6, 2)));
         let no_context = Anchor {
             before: vec![],
             after: vec![],
@@ -594,14 +620,14 @@ mod tests {
             before: vec![s(1), s(2), s(4)],
             after: vec![],
         };
-        assert_eq!(relocate(&deep, &file, 0), Some(7..8));
+        assert_eq!(relocate_scored(&deep, &file, 0), Some((7..8, 3)));
         let after = Anchor {
             start: 0,
             lines: vec![s(1)],
             before: vec![],
             after: vec![s(2), s(4)],
         };
-        assert_eq!(relocate(&after, &file, 0), Some(4..5));
+        assert_eq!(relocate_scored(&after, &file, 0), Some((4..5, 2)));
     }
 
     #[test]
@@ -616,14 +642,27 @@ mod tests {
         assert_eq!(relocate(&anchor(vec![S + 8]), &file, 0), None);
         assert_eq!(relocate(&anchor(vec![]), &file, 0), None);
         assert_eq!(relocate(&anchor(vec![T]), &file, 0), None);
-        assert_eq!(relocate(&anchor(vec![S, T, S + 4, T + 4, S]), &file, 0), None);
+        assert_eq!(
+            relocate(&anchor(vec![S, T, S + 4, T + 4, S]), &file, 0),
+            None
+        );
         assert_eq!(relocate(&anchor(vec![S + 4, T + 4]), &file, 0), Some(2..4));
-        assert_eq!(relocate(&anchor(vec![S, T, S + 4, T + 4]), &file, 9), Some(0..4));
+        assert_eq!(
+            relocate(&anchor(vec![S, T, S + 4, T + 4]), &file, 9),
+            Some(0..4)
+        );
     }
 
     #[test]
     fn hashes_pack_and_unpack() {
-        for hashes in [vec![], vec![0], vec![u64::MAX, 1, 0x0123_4567_89ab_cdef]] {
+        let max = u64::MAX;
+        for hashes in [
+            vec![],
+            vec![0],
+            vec![max],
+            vec![max, max],
+            vec![max, 1, 0x0123_4567_89ab_cdef],
+        ] {
             let packed = pack(&hashes);
             assert_eq!(packed.len(), (hashes.len() * 8).div_ceil(3) * 4);
             assert_eq!(unpack(&packed), Some(hashes));

@@ -908,6 +908,34 @@ pub enum Control {
         id: String,
         message: String,
     },
+    /// App → service (27.5): who wrote `line` (1-based) of `path` in the followed `worktree`, on
+    /// its `side`: the file as it is now, or the diff's old side at `base`. Answered by
+    /// `LineAuthor`. What Hive recorded is advisory, never proof.
+    WhoWrote {
+        worktree: String,
+        path: String,
+        line: u32,
+        side: LineSide,
+        base: DiffBase,
+    },
+    LineAuthor {
+        worktree: String,
+        path: String,
+        line: u32,
+        side: LineSide,
+        origin: LineOrigin,
+    },
+    /// App → service (27.5): the files the session `id` changed, as Hive recorded its edits.
+    /// Answered by `SessionFiles`.
+    ListSessionFiles {
+        id: String,
+    },
+    /// The most recently changed first, at most the service's cap (`truncated` when more).
+    SessionFiles {
+        id: String,
+        files: Vec<SessionFile>,
+        truncated: bool,
+    },
     /// App → service: the lines of a followed worktree's files holding `query` (fixed string,
     /// any case; ignored and binary files skipped), answered by `SearchResults`.
     SearchFiles {
@@ -2021,6 +2049,9 @@ pub struct Session {
     /// folders.
     #[serde(default)]
     pub resume_command: Option<String>,
+    /// The files Hive recorded it changing (27.5), 0 when none.
+    #[serde(default)]
+    pub files_changed: u64,
 }
 
 /// A Claude account's usage window (`rate_limits.five_hour` of Claude Code's statusline input,
@@ -2069,6 +2100,87 @@ pub struct OpenSession {
 pub enum SessionRole {
     User,
     Assistant,
+}
+
+/// Which side of a file a line number counts on (27.5).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LineSide {
+    /// The file as it is in the worktree: the editor, or the diff's new side.
+    Worktree,
+    /// The diff's old side, the file at the diff's base.
+    Base,
+}
+
+/// Who wrote a line, as far as Hive recorded (27.5).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum LineOrigin {
+    /// An agent's `Edit` or `Write`. `commit`: found through `git blame`'s commit, so only
+    /// probable; `None`: followed live in the file.
+    Session {
+        edit: Box<LineEdit>,
+        commit: Option<LineCommit>,
+    },
+    /// The user, in Hive's editor, at `ms` (since the Unix epoch).
+    Editor { ms: u64 },
+    /// No session recorded for it: changed outside an agent's `Edit`/`Write`, or before Hive
+    /// recorded the file. `commit`: the commit `git blame` gives, when it is committed.
+    Unknown { commit: Option<LineCommit> },
+}
+
+/// The recorded edit that wrote a line.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LineEdit {
+    /// The session id.
+    pub session: String,
+    /// Its name, as the sessions list shows it, when its log is found.
+    pub title: Option<String>,
+    /// Its log is gone (deleted in the Sessions view): the record stays.
+    pub deleted: bool,
+    /// The followed project and worktree its edit was in.
+    pub project: Option<String>,
+    pub worktree: String,
+    /// The subagent that made the edit, if any.
+    pub agent: Option<String>,
+    pub agent_type: Option<String>,
+    /// `Edit`, `Write`, `MultiEdit`.
+    pub tool: String,
+    pub tool_use_id: Option<String>,
+    /// When it was recorded, in milliseconds since the Unix epoch.
+    pub ms: u64,
+    /// The user changed the edit before accepting it.
+    pub user_modified: bool,
+    /// The lines (1-based) around the asked one that are still from this edit; for a probable
+    /// answer, the asked line.
+    pub start: u32,
+    pub len: u32,
+}
+
+/// A commit, as `git blame` names it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LineCommit {
+    pub id: String,
+    pub author: String,
+    /// Its author time, in milliseconds since the Unix epoch.
+    pub ms: u64,
+    pub summary: String,
+}
+
+/// A file a session changed (27.5).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SessionFile {
+    pub worktree: String,
+    /// Relative to the worktree.
+    pub path: String,
+    /// The session's recorded edits of it.
+    pub edits: u32,
+    /// How many of its lines are still the session's, as Hive last looked.
+    pub lines_now: u32,
+    /// The first of those lines (1-based), to open the file at.
+    pub first_line: Option<u32>,
+    /// The last edit, in milliseconds since the Unix epoch.
+    pub last_ms: u64,
 }
 
 /// What of a session to locate for Windows.
@@ -3235,6 +3347,7 @@ mod tests {
             running: false,
             config_dir: Some("/c".into()),
             resume_command: Some("cd '/r/src' && claude --resume s".into()),
+            files_changed: 2,
         };
         let sessions = Control::Sessions {
             sessions: vec![session],
@@ -3243,7 +3356,7 @@ mod tests {
         };
         assert_eq!(
             &Frame::control(0, &sessions).payload[..],
-            br#"{"type":"sessions","sessions":[{"id":"s","project":"/r","worktree":"/r","cwd":"/r/src","title":"t","last_role":"assistant","last_text":"done","messages":2,"model":null,"branch":"main","context_tokens":3,"output_tokens":4,"updated_ms":5,"log":"/c/s.jsonl","state":"ended","running":false,"config_dir":"/c","resume_command":"cd '/r/src' && claude --resume s"}],"error":null,"truncated":true}"#
+            br#"{"type":"sessions","sessions":[{"id":"s","project":"/r","worktree":"/r","cwd":"/r/src","title":"t","last_role":"assistant","last_text":"done","messages":2,"model":null,"branch":"main","context_tokens":3,"output_tokens":4,"updated_ms":5,"log":"/c/s.jsonl","state":"ended","running":false,"config_dir":"/c","resume_command":"cd '/r/src' && claude --resume s","files_changed":2}],"error":null,"truncated":true}"#
         );
         let usage = Control::AgentUsage {
             id: "s".into(),
