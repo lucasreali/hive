@@ -97,7 +97,7 @@ fn reply(worktree: String, action: GitAction, done: Result<String, String>) -> C
 /// The folder of `path`, a worktree of a followed git project (a folder project's folder,
 /// 23.1, is none), and its space's environment.
 fn located(projects: &Projects, path: &str) -> Result<(PathBuf, SpaceEnv), String> {
-    let (_, worktree) = projects.holding(path).map_err(|err| err.to_string())?;
+    let (_, worktree) = projects.holding(path).map_err(text)?;
     Ok((PathBuf::from(worktree.path), projects.space_env(path)))
 }
 
@@ -108,6 +108,11 @@ pub fn remote_env(gh: &Gh, env: &SpaceEnv) -> Vec<(&'static str, String)> {
     let mut vars = spaces::vars(env);
     vars.extend(gh.vars(env).unwrap_or_default());
     vars
+}
+
+/// An error as shown (one function for every call: an error path git rarely takes).
+fn text(err: io::Error) -> String {
+    err.to_string()
 }
 
 /// Git's message from `err`: what it (and its hooks) printed, without the command; else the
@@ -127,7 +132,7 @@ fn run(
     env: &[(&str, String)],
     time: Duration,
 ) -> Result<Vec<u8>, String> {
-    let mut command = git::command(dir).map_err(|err| err.to_string())?;
+    let mut command = git::command(dir).map_err(text)?;
     worktree::quiet(command.args(args), env);
     let shown = [OsStr::new(verb)];
     git::limited(command, "git", &shown, input, &[0], OUTPUT, Some(time))
@@ -162,7 +167,7 @@ pub fn stage(dir: &Path, paths: &[String], staged: bool) -> Result<String, Strin
     check_paths(paths)?;
     let mut all: Vec<String> = paths.to_vec();
     if !staged {
-        let out = git::output(dir, &changes::STATUS, &[0]).map_err(|err| err.to_string())?;
+        let out = git::output(dir, &changes::STATUS, &[0]).map_err(text)?;
         let renamed = changes::parse_status(&out).into_iter().filter_map(|entry| {
             let (path, status, from) = entry;
             let path = String::from_utf8_lossy(&path).into_owned();
@@ -252,7 +257,7 @@ impl Target {
 /// branch of its remote, and with no upstream nor `origin`.
 pub fn target(dir: &Path) -> Result<Target, String> {
     let read = |args: &[&str]| {
-        let out = git::output(dir, args, &[0, 1]).map_err(|err| err.to_string())?;
+        let out = git::output(dir, args, &[0, 1]).map_err(text)?;
         Ok::<_, String>(String::from_utf8_lossy(out.trim_ascii()).into_owned())
     };
     let head = read(&["symbolic-ref", "--quiet", "HEAD"])?;

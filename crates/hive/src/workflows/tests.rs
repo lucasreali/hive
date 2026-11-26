@@ -275,6 +275,12 @@ fn the_workflows_are_read_from_the_worktrees_head() {
     std::fs::write(flows.join("-odd.yml"), "on: workflow_dispatch\n").unwrap();
     std::fs::write(flows.join("big.yml"), "#".repeat(FILE_LIMIT as usize + 1)).unwrap();
     std::fs::write(flows.join("a.yaml"), "on: workflow_dispatch\n").unwrap();
+    // Two of one name: by file then.
+    std::fs::write(
+        flows.join("r2.yml"),
+        "name: Release\non: workflow_dispatch\n",
+    )
+    .unwrap();
     git(root, &["add", "-A"]);
     git(root, &["commit", "-q", "-m", "flows"]);
     // Not committed: not on GitHub either.
@@ -282,7 +288,10 @@ fn the_workflows_are_read_from_the_worktrees_head() {
     // Sorted by name: `a.yaml` is named by its file.
     assert_eq!(
         listed(list()),
-        (vec!["release.yml".into(), "a.yaml".into()], None)
+        (
+            vec!["r2.yml".into(), "release.yml".into(), "a.yaml".into()],
+            None
+        )
     );
     // A worktree of another project, or none.
     let other = Control::ListWorkflows {
