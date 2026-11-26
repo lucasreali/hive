@@ -795,22 +795,20 @@ garbage\0\
         let modified = file("a", FileStatus::Modified, (Some(2), Some(1)));
         let untracked = file("u", FileStatus::Untracked, (Some(1), Some(0)));
         // The status counts only against HEAD: not the branch's commits.
+        let on_branch = changes(
+            &path,
+            DiffBase::Branch,
+            None,
+            vec![
+                modified.clone(),
+                file("b", FileStatus::Added, (Some(1), Some(0))),
+                renamed,
+                untracked.clone(),
+            ],
+        );
         assert_eq!(
             answer(&projects, path.clone(), DiffBase::Branch, &seen),
-            (
-                changes(
-                    &path,
-                    DiffBase::Branch,
-                    None,
-                    vec![
-                        modified.clone(),
-                        file("b", FileStatus::Added, (Some(1), Some(0))),
-                        renamed,
-                        untracked.clone(),
-                    ]
-                ),
-                None
-            )
+            (on_branch.clone(), None)
         );
         // Against HEAD, only what is not committed.
         assert_eq!(
@@ -838,13 +836,9 @@ garbage\0\
             mark(&projects, path.clone(), DiffBase::Head, &seen, (&a, true)),
             changes(&path, DiffBase::Head, None, vec![seen_a, untracked.clone()])
         );
-        let reply = format!(
-            "{:?}",
-            answer(&projects, path.clone(), DiffBase::Branch, &seen).0
-        );
-        assert!(
-            reply.contains("seen: None") && !reply.contains("seen: Some"),
-            "{reply}"
+        assert_eq!(
+            answer(&projects, path.clone(), DiffBase::Branch, &seen).0,
+            on_branch
         );
         // Marks that cannot be saved say why, and nothing is marked.
         let capped = Seen::with_limit(top.join("hive/capped.json"), 2);
@@ -891,10 +885,20 @@ garbage\0\
         std::fs::remove_file(w.join(".git")).unwrap();
         let (reply, totals) = answer(&projects, path.clone(), DiffBase::Head, &seen);
         assert_eq!(totals, None);
-        let reply = format!("{reply:?}");
-        assert!(
-            reply.contains("files: [], ") && reply.contains("error: Some("),
-            "{reply}"
+        let why = list(&w, None).unwrap_err().to_string();
+        assert!(why.starts_with("git status --porcelain=v2"), "{why}");
+        assert_eq!(
+            reply,
+            Control::Changes {
+                path: path.clone(),
+                base: DiffBase::Head,
+                branch: Some("gone".into()),
+                base_error: None,
+                files: vec![],
+                added: 0,
+                removed: 0,
+                error: Some(why),
+            }
         );
 
         // Only a followed worktree.

@@ -173,7 +173,9 @@ fn identities(against: &Against, files: &[&ChangedFile]) -> io::Result<HashMap<S
 /// What stands for the file `path` of the worktree at `dir` on disk, or `None` when git is to
 /// hash it: a regular file of at most [`HASH_LIMIT`] bytes whose name `--stdin-paths` can take.
 /// A link is its target (never followed: a link to a FIFO would block git), a larger file (or
-/// one named with a line break) its size and time, anything else none.
+/// one whose name `--stdin-paths` would read otherwise: a line break, or a leading `"`, which
+/// git C-unquotes, so `"..\057x"` would name another file) its size and time, anything else
+/// none.
 fn on_disk(dir: &Path, path: &str) -> Option<String> {
     let full = dir.join(path);
     let Ok(meta) = full.symlink_metadata() else {
@@ -186,7 +188,8 @@ fn on_disk(dir: &Path, path: &str) -> Option<String> {
     if !meta.is_file() {
         return Some(NONE.to_owned());
     }
-    let hashable = meta.len() <= HASH_LIMIT && !path.contains(['\n', '\r']);
+    let plain = !path.contains(['\n', '\r']) && !path.starts_with('"');
+    let hashable = meta.len() <= HASH_LIMIT && plain;
     if hashable {
         return None;
     }
@@ -419,7 +422,9 @@ mod tests {
         assert_eq!(on_disk(&repo.dir, "gone"), Some(NONE.to_owned()));
         assert_eq!(on_disk(&repo.dir, ".git"), Some(NONE.to_owned()));
         // A name `--stdin-paths` cannot take: its size and time.
-        for odd in ["odd\rname", "cr\r"] {
+        // A leading `"` is C-unquoted by git: never sent (`"..\057x"` would be `../x`, `"bad`
+        // would fail the whole batch).
+        for odd in ["odd\rname", "cr\r", "\"..\\057x\"", "\"bad"] {
             repo.write(odd, "x");
             let id = on_disk(&repo.dir, odd).unwrap_or_default();
             assert!(id.starts_with("stat:1:"), "{id}");
