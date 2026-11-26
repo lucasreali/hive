@@ -1252,6 +1252,9 @@ async fn project_requests_go_to_the_service_and_answers_to_the_ui() {
         base: DiffBase::Branch,
     };
     assert_eq!(service.control().await, (0, changes));
+    hive.list_commits("/r".into()).unwrap();
+    let commits = Control::ListCommits { path: "/r".into() };
+    assert_eq!(service.control().await, (0, commits));
     hive.list_scripts("/r".into()).unwrap();
     let scripts = Control::ListScripts { path: "/r".into() };
     assert_eq!(service.control().await, (0, scripts));
@@ -2002,6 +2005,7 @@ async fn bridge_exit_ends_terminals_then_disconnects() {
         hive.list_changes("/r".into(), DiffBase::Head),
         not_connected
     );
+    assert_eq!(hive.list_commits("/r".into()), not_connected);
     assert_eq!(hive.list_scripts("/r".into()), not_connected);
     assert_eq!(
         hive.open_file("/r".into(), "a".into(), DiffBase::Head),
@@ -2340,6 +2344,7 @@ fn commands_reach_the_managed_hive() {
             expand_ignored,
             set_view,
             list_changes,
+            list_commits,
             list_scripts,
             open_file,
             open_table,
@@ -2491,6 +2496,7 @@ fn commands_reach_the_managed_hive() {
         ("expand_ignored", &expand),
         ("set_view", &view),
         ("list_changes", &changes),
+        ("list_commits", &scripts),
         ("list_scripts", &scripts),
         ("open_file", &file),
         ("open_table", &table),

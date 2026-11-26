@@ -133,8 +133,13 @@ fn list(kind: &str, field: &str, len: usize) -> Value {
 }
 
 #[test]
-fn projects_sessions_and_any_list_are_capped() {
-    for (kind, most) in [("projects", PROJECTS), ("sessions", SESSIONS)] {
+fn projects_sessions_commits_and_any_list_are_capped() {
+    let lists = [
+        ("projects", PROJECTS),
+        ("sessions", SESSIONS),
+        ("commits", COMMITS),
+    ];
+    for (kind, most) in lists {
         assert_eq!(check(&mut list(kind, kind, most)), Ok(()));
         let over = format!("sent {} {kind}, over the {most} the app takes", most + 1);
         assert_eq!(check(&mut list(kind, kind, most + 1)), Err(over));
@@ -157,7 +162,10 @@ fn projects_sessions_and_any_list_are_capped() {
     let mut checked = fine.clone();
     assert_eq!(check(&mut checked), Ok(()));
     assert_eq!(checked, fine);
-    assert_eq!((PROJECTS, SESSIONS, LIST), (1000, 1000, 50_000));
+    assert_eq!(
+        (PROJECTS, SESSIONS, COMMITS, LIST),
+        (1000, 1000, 1000, 50_000)
+    );
 }
 
 #[test]
