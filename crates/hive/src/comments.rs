@@ -36,6 +36,11 @@ pub const FILE_LINES: usize = 50_000;
 /// Most lines of a file whose hashes are kept to diff it at its next change; a longer file's
 /// comments are only looked for by their text.
 const SNAPSHOT_LINES: usize = 10_000;
+/// Most bytes of commented files one request reads; the files past it keep their comments where
+/// they were until the next one.
+const READ_BUDGET: u64 = 64 << 20; // 64 MiB
+/// Largest JSON of a worktree's comments sent to the app, under a frame's 4 MiB.
+const LIST_LIMIT: usize = 3 << 20; // 3 MiB
 /// Lines of context kept on each side of a comment's lines.
 const CONTEXT: usize = 3;
 /// Most lines of a comment's own text kept to show.
@@ -54,6 +59,10 @@ struct Kept {
     /// By file: its line hashes ([`anchor::pack`]) when its comments were last placed, kept
     /// while it has a comment that is not outdated and at most [`SNAPSHOT_LINES`] lines.
     files: BTreeMap<String, String>,
+    /// By commented file: the [`anchor::digest`] of its line hashes when its comments were last
+    /// placed, so an unchanged file costs no search.
+    #[serde(default)]
+    digests: BTreeMap<String, u64>,
 }
 
 /// A comment as kept: what the app gets, and its anchor's line hashes (packed).
@@ -98,11 +107,13 @@ impl<'a> Lines<'a> {
     }
 }
 
-/// A line to show: lossy UTF-8, without a trailing `\r`, cut at [`QUOTE_CHARS`] characters.
+/// A line to show: lossy UTF-8, without a trailing `\r` or control characters (a tab aside), cut
+/// at [`QUOTE_CHARS`] characters.
 fn shown(line: &[u8]) -> String {
     let line = line.strip_suffix(b"\r").unwrap_or(line);
     String::from_utf8_lossy(line)
         .chars()
+        .filter(|&c| c == '\t' || !c.is_control())
         .take(QUOTE_CHARS)
         .collect()
 }
@@ -137,6 +148,10 @@ pub struct Comments {
     lock: Mutex<()>,
     /// Most comments in one worktree: [`MOST`].
     most: usize,
+    /// Most bytes of files one request reads: [`READ_BUDGET`].
+    budget: u64,
+    /// Largest JSON of the comments answered: [`LIST_LIMIT`].
+    list_limit: usize,
 }
 
 impl Comments {
@@ -150,6 +165,8 @@ impl Comments {
             store: WorktreeStore::new(file, limit),
             lock: Mutex::new(()),
             most,
+            budget: READ_BUDGET,
+            list_limit: LIST_LIMIT,
         }
     }
 
@@ -182,11 +199,16 @@ impl Comments {
             .iter()
             .map(|c| c.comment.file.clone())
             .collect();
+        let mut spent = 0u64;
         for file in &files {
+            if spent >= self.budget {
+                break;
+            }
             // A file that cannot be read now (too large, not a regular file) keeps its comments
             // where they were: whether its code is gone cannot be told.
             match read(file) {
                 Ok(Some(bytes)) => {
+                    spent += bytes.len() as u64;
                     if let Some(now) = Lines::of(&bytes) {
                         follow(&mut kept, file, &now);
                     }
@@ -198,7 +220,11 @@ impl Comments {
         let list = matches!(request, Request::List);
         apply(&mut kept, read, request, self.most)?;
         if kept.comments.is_empty() {
-            kept = Kept::default();
+            // The last id stays: a late request about a deleted comment never hits a new one.
+            kept = Kept {
+                next: kept.next,
+                ..Kept::default()
+            };
         }
         if kept != before {
             let saved = self.store.update(worktree, |data| *data = kept.clone());
@@ -208,7 +234,14 @@ impl Comments {
                 eprintln!("hive: warning: cannot save where the review comments moved: {err}");
             }
         }
-        Ok(kept.comments.into_iter().map(|c| c.comment).collect())
+        let comments: Vec<ReviewComment> = kept.comments.into_iter().map(|c| c.comment).collect();
+        let size = serde_json::to_vec(&comments).map_or(0, |json| json.len());
+        if size > self.list_limit {
+            return Err(io::Error::other(
+                "the comments are too long to list: delete some",
+            ));
+        }
+        Ok(comments)
     }
 
     fn lock(&self) -> std::sync::MutexGuard<'_, ()> {
@@ -236,8 +269,9 @@ fn apply(kept: &mut Kept, read: Read<'_>, request: Request, most: usize) -> io::
         Request::Delete { id } => {
             kept.comments.retain(|c| c.comment.id != id);
             let comments = &kept.comments;
-            kept.files
-                .retain(|file, _| comments.iter().any(|c| &c.comment.file == file));
+            let commented = |file: &String| comments.iter().any(|c| &c.comment.file == file);
+            kept.files.retain(|file, _| commented(file));
+            kept.digests.retain(|file, _| commented(file));
         }
     }
     Ok(())
@@ -311,13 +345,13 @@ fn add(
 
 /// Moves the comments on `file` to where their code is in `now`, or marks them outdated.
 fn follow(kept: &mut Kept, file: &str, now: &Lines) {
+    if kept.digests.get(file) == Some(&anchor::digest(&now.hashes)) {
+        return;
+    }
     let old = kept
         .files
         .get(file)
         .and_then(|packed| anchor::unpack(packed));
-    if old.as_deref() == Some(&now.hashes[..]) {
-        return;
-    }
     let map = old.map(|old| anchor::diff(&old, &now.hashes));
     for stored in kept.comments.iter_mut().filter(|c| c.comment.file == file) {
         match found(stored, map.as_ref(), &now.hashes) {
@@ -369,9 +403,11 @@ fn place(stored: &mut Stored, now: &Lines, range: Range<usize>) {
     comment.after = now.quote(range.end..range.end + anchor.after.len());
 }
 
-/// Keeps `now`'s hashes for `file` while a comment there is placed on them and the file is
-/// short enough; drops them otherwise.
+/// Keeps `now`'s digest for `file`, and its hashes while a comment there is placed on them and
+/// the file is short enough (dropped otherwise).
 fn snapshot(kept: &mut Kept, file: &str, now: &Lines) {
+    let digest = anchor::digest(&now.hashes);
+    kept.digests.insert(file.to_owned(), digest);
     let placed = kept
         .comments
         .iter()

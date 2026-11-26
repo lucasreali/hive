@@ -308,9 +308,14 @@ fn resolved_comments_stay_listed_and_deleted_ones_go() {
     );
     assert!(fx.handle(Request::Delete { id: 1 }).unwrap().is_empty());
     assert!(!fx.comments.has(&fx.worktree));
-    assert_eq!(std::fs::read_to_string(fx.store()).unwrap(), "{}");
-    // Ids start again once none is left.
-    assert_eq!(fx.add("a.rs", 1, 1, "again").unwrap()[0].id, 1);
+    // Only the last id is left: a late request about a deleted comment never hits a new one.
+    let empty = serde_json::json!({ &fx.worktree: { "next": 2, "comments": [], "files": {}, "digests": {} } });
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&std::fs::read_to_string(fx.store()).unwrap())
+            .unwrap(),
+        empty
+    );
+    assert_eq!(fx.add("a.rs", 1, 1, "again").unwrap()[0].id, 3);
     fx.comments
         .forget(std::slice::from_ref(&fx.worktree))
         .unwrap();
@@ -364,6 +369,10 @@ fn comments_have_limits() {
 #[test]
 fn shown_lines_are_cut_and_crlf_files_match_lf_ones() {
     let fx = Fixture::new();
+    // Control characters are left out of the shown text, a tab is kept.
+    let ctl = Fixture::new();
+    ctl.files.set("ctl.txt", "a\u{1b}[31m\tb\u{7}\n");
+    assert_eq!(ctl.add("ctl.txt", 1, 1, "c").unwrap()[0].code, ["a[31m\tb"]);
     let wide = "x".repeat(QUOTE_CHARS + 50);
     fx.files
         .set("a.txt", &format!("{wide}\r\nsecond line here\r\n"));
@@ -435,4 +444,70 @@ fn files_are_read_inside_the_worktree_only() {
     assert!(read_file(tmp.path(), "../x").is_err());
     std::fs::write(tmp.path().join("big"), vec![b'x'; READ_LIMIT as usize + 1]).unwrap();
     assert!(read_file(tmp.path(), "big").is_err());
+    // A link out of the worktree, and a FIFO, are refused (without blocking).
+    let outside = tempfile::tempdir().unwrap();
+    std::fs::write(outside.path().join("secret"), "s\n").unwrap();
+    #[cfg(unix)]
+    {
+        std::os::unix::fs::symlink(outside.path().join("secret"), tmp.path().join("link")).unwrap();
+        assert!(read_file(tmp.path(), "link").is_err());
+        let fifo = tmp.path().join("fifo");
+        let made = std::process::Command::new("mkfifo")
+            .arg(&fifo)
+            .status()
+            .unwrap();
+        assert!(made.success());
+        assert!(read_file(tmp.path(), "fifo").is_err());
+    }
+}
+
+#[test]
+fn an_unchanged_file_is_not_searched_again() {
+    let fx = Fixture::new();
+    fx.files.set("a.rs", &text(&numbered(5)));
+    fx.add("a.rs", 2, 2, "x").unwrap();
+    // Marked outdated by hand: the file did not change, so nothing looks for it again.
+    let saved = std::fs::read_to_string(fx.store()).unwrap();
+    let edited = saved.replace("\"outdated\":false", "\"outdated\":true");
+    std::fs::write(fx.store(), edited).unwrap();
+    assert_eq!(fx.places(), [(2, 2, true)]);
+    // Once it changes, it is.
+    fx.files
+        .set("a.rs", &format!("top\n{}", text(&numbered(5))));
+    assert_eq!(fx.places(), [(3, 3, false)]);
+}
+
+#[test]
+fn one_request_reads_so_many_bytes_of_files() {
+    let mut fx = Fixture::new();
+    let lines = numbered(5);
+    fx.files.set("a.rs", &text(&lines));
+    fx.files.set("b.rs", &text(&lines));
+    fx.add("a.rs", 2, 2, "a").unwrap();
+    fx.add("b.rs", 2, 2, "b").unwrap();
+    let moved = format!("top\n{}", text(&lines));
+    fx.files.set("a.rs", &moved);
+    fx.files.set("b.rs", &moved);
+    // `a.rs` is read first, and uses the whole budget: `b.rs` waits for the next request.
+    fx.comments.budget = moved.len() as u64;
+    assert_eq!(fx.places(), [(3, 3, false), (2, 2, false)]);
+    fx.comments.budget = READ_BUDGET;
+    assert_eq!(fx.places(), [(3, 3, false), (3, 3, false)]);
+}
+
+#[test]
+fn comments_too_long_to_list_are_refused() {
+    let mut fx = Fixture::new();
+    fx.files.set("a.rs", &text(&numbered(5)));
+    let listed = fx.add("a.rs", 2, 2, "x").unwrap();
+    let size = serde_json::to_vec(&listed).unwrap().len();
+    fx.comments.list_limit = size;
+    assert_eq!(fx.list(), listed);
+    fx.comments.list_limit = size - 1;
+    let err = fx.handle(Request::List).unwrap_err();
+    assert_eq!(
+        err.to_string(),
+        "the comments are too long to list: delete some"
+    );
+    assert_eq!((READ_BUDGET, LIST_LIMIT), (64 << 20, 3 << 20));
 }
