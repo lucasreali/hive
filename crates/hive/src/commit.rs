@@ -168,13 +168,12 @@ pub fn stage(dir: &Path, paths: &[String], staged: bool) -> Result<String, Strin
     let mut all: Vec<String> = paths.to_vec();
     if !staged {
         let out = git::output(dir, &changes::STATUS, &[0]).map_err(text)?;
-        let renamed = changes::parse_status(&out).into_iter().filter_map(|entry| {
-            let (path, status, from) = entry;
-            let path = String::from_utf8_lossy(&path).into_owned();
-            let from = from.filter(|_| status == FileStatus::Renamed && paths.contains(&path))?;
-            Some(String::from_utf8_lossy(&from).into_owned())
-        });
-        all.extend(renamed.collect::<Vec<_>>());
+        for (path, status, from) in changes::parse_status(&out) {
+            let asked = paths.contains(&String::from_utf8_lossy(&path).into_owned());
+            if let (true, FileStatus::Renamed, Some(from)) = (asked, status, from) {
+                all.push(String::from_utf8_lossy(&from).into_owned());
+            }
+        }
     }
     let input: Vec<u8> = all
         .iter()

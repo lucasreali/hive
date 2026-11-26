@@ -445,4 +445,62 @@ fn the_service_answers_only_its_git_requests_and_never_for_a_folder_project() {
         }]
     );
     assert_eq!(answer(&gh, &projects, Control::ListProjects), []);
+    // A repository's worktree: each request answers as its function does.
+    let (_repo, dir) = repo(true);
+    let root = projects.add(&dir.display().to_string()).unwrap().id;
+    std::fs::write(Path::new(&root).join("a.txt"), "b\n").unwrap();
+    let ask = |request| answer(&gh, &projects, request);
+    let stage = Control::StageFiles {
+        worktree: root.clone(),
+        paths: vec!["a.txt".into()],
+        staged: true,
+    };
+    assert_eq!(
+        ask(stage),
+        [Control::GitDone {
+            worktree: root.clone(),
+            action: GitAction::Stage,
+            message: "Staged a.txt".into(),
+        }]
+    );
+    let commit = Control::Commit {
+        worktree: root.clone(),
+        message: " ".into(),
+    };
+    assert_eq!(
+        ask(commit),
+        [Control::GitFailed {
+            worktree: root.clone(),
+            action: GitAction::Commit,
+            message: "A commit message is needed".into(),
+        }]
+    );
+    let none = "main has no upstream and this repository has no remote origin";
+    let target = Control::GetPushTarget {
+        worktree: root.clone(),
+    };
+    assert_eq!(
+        ask(target),
+        [Control::PushTarget {
+            worktree: root.clone(),
+            branch: None,
+            target: None,
+            set_upstream: false,
+            ahead: None,
+            error: Some(none.into()),
+        }]
+    );
+    let push = Control::Push {
+        worktree: root.clone(),
+        branch: "main".into(),
+        target: "origin/main".into(),
+    };
+    assert_eq!(
+        ask(push),
+        [Control::GitFailed {
+            worktree: root.clone(),
+            action: GitAction::Push,
+            message: none.into(),
+        }]
+    );
 }
