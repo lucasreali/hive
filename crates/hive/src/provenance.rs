@@ -830,6 +830,10 @@ impl Provenance {
     /// Writes the repositories changed since the last call (atomically, 0600), then keeps the
     /// files within [`TOTAL_BYTES`].
     pub fn flush(&self) {
+        self.flush_within(TOTAL_BYTES);
+    }
+
+    fn flush_within(&self, total: u64) {
         let Some(dir) = &self.dir else { return };
         let mut inner = self.inner();
         if inner.dirty.is_empty() {
@@ -841,20 +845,16 @@ impl Provenance {
             eprintln!("hive: warning: cannot keep line provenance: {err}");
             return;
         }
-        let dirty: Vec<String> = inner.dirty.drain().collect();
+        let Inner { repos, dirty } = &mut *inner;
         let mut written = HashSet::new();
-        for project in dirty {
-            let Some(repo) = inner.repos.get_mut(&project) else {
-                continue;
-            };
-            let name = format!("{}.json", key(&project));
+        for (project, repo) in repos.iter_mut().filter(|(p, _)| dirty.contains(*p)) {
+            let name = format!("{}.json", key(project));
             let path = dir.join(&name);
             let written_ok = if repo.edits.is_empty() && repo.maps.values().all(BTreeMap::is_empty)
             {
-                std::fs::remove_file(&path).or_else(|e| match e.kind() {
-                    io::ErrorKind::NotFound => Ok(()),
-                    _ => Err(e),
-                })
+                // Already gone is as good.
+                let _ = std::fs::remove_file(&path);
+                Ok(())
             } else {
                 crate::wrapper::write_atomic(&path, &fit(repo), 0o600)
             };
@@ -865,7 +865,8 @@ impl Provenance {
                 Err(err) => eprintln!("hive: warning: cannot keep line provenance: {err}"),
             }
         }
-        for gone in evict_files(dir, &written, TOTAL_BYTES) {
+        dirty.clear();
+        for gone in evict_files(dir, &written, total) {
             inner.repos.retain(|project, _| key(project) != gone);
         }
     }
@@ -957,10 +958,13 @@ impl Provenance {
         }
         let rev = match side {
             LineSide::Worktree => None,
-            LineSide::Base => match crate::changes::against(projects, worktree, *base) {
-                Ok(against) => Some(against.commit.unwrap_or_else(|| "HEAD".to_owned())),
-                Err(_) => return unknown,
-            },
+            // The worktree is followed (checked above): its base is known.
+            LineSide::Base => Some(
+                crate::changes::against(projects, worktree, *base)
+                    .ok()
+                    .and_then(|against| against.commit)
+                    .unwrap_or_else(|| "HEAD".to_owned()),
+            ),
         };
         let dir = Path::new(worktree);
         let Some(blamed) = blame(dir, rel, line, rev.as_deref()) else {
@@ -1147,14 +1151,12 @@ fn fit_within(repo: &mut Repo, most: usize) -> Vec<u8> {
             // A tenth of them, the untouched longest, per pass.
             maps.sort();
             let drop = (maps.len() / 10).max(1);
-            for (_, worktree, rel) in maps.drain(..drop) {
-                if let Some(files) = repo.maps.get_mut(&worktree) {
-                    files.remove(&rel);
-                    if files.is_empty() {
-                        repo.maps.remove(&worktree);
-                    }
-                }
+            let gone: HashSet<(String, String)> =
+                maps.drain(..drop).map(|(_, w, rel)| (w, rel)).collect();
+            for (worktree, files) in &mut repo.maps {
+                files.retain(|rel, _| !gone.contains(&(worktree.clone(), rel.clone())));
             }
+            repo.maps.retain(|_, files| !files.is_empty());
         } else if !repo.edits.is_empty() {
             let drop = (repo.edits.len() / 10).max(1);
             repo.edits.drain(..drop);

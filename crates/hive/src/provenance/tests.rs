@@ -1184,3 +1184,172 @@ fn an_edit_searches_for_at_most_so_many_runs_away_from_their_line() {
     assert_eq!(back[1..=RECLAIM_RUNS], vec![E(1); RECLAIM_RUNS]);
     assert_eq!(back[RECLAIM_RUNS + 1], Unknown);
 }
+
+#[test]
+fn renames_are_read_from_name_status() {
+    let out = b"M\0a.txt\0R087\0old.txt\0new.txt\0C100\0src.txt\0copy.txt\0";
+    assert_eq!(parse_renames(out, "new.txt").as_deref(), Some("old.txt"));
+    assert_eq!(parse_renames(out, "copy.txt").as_deref(), Some("src.txt"));
+    assert_eq!(parse_renames(out, "a.txt"), None);
+    assert_eq!(parse_renames(out, "old.txt"), None);
+    assert_eq!(parse_renames(b"R087\0old.txt", "new.txt"), None);
+    assert_eq!(parse_renames(b"M", "a.txt"), None);
+}
+
+#[test]
+fn a_worktree_with_nothing_followed_has_nothing_to_look_at() {
+    let store = Provenance::default();
+    store.touch("/p", "/p", T0);
+    let inner = store.inner();
+    assert_eq!(inner.repos["/p"].touched["/p"], T0);
+    assert!(inner.repos["/p"].maps.is_empty());
+}
+
+#[test]
+fn an_unreadable_store_file_is_set_aside() {
+    let home = tempfile::tempdir().unwrap();
+    let dir = home.path().join("provenance");
+    let named = dir.join(format!("{}.json", key("/p")));
+    std::fs::create_dir_all(&named).unwrap();
+    let store = Provenance::new(Some(dir));
+    assert!(
+        store
+            .files_changed(&[project(Path::new("/p"), &[])], T0)
+            .is_empty()
+    );
+    assert!(named.with_extension("json.bad").is_dir());
+}
+
+#[cfg(unix)]
+#[test]
+fn a_store_that_cannot_be_written_keeps_its_records_in_memory() {
+    use std::os::unix::fs::PermissionsExt;
+    let repo = Repo_::new();
+    let home = tempfile::tempdir().unwrap();
+    let file = repo.root.join("a.txt");
+    repo.write("a.txt", &[LONG_A]);
+    // Its folder cannot be made: a file is in the way.
+    std::fs::write(home.path().join("blocked"), "").unwrap();
+    let blocked = Provenance::new(Some(home.path().join("blocked/provenance")));
+    blocked.saw(
+        &repo.projects,
+        &created("s1", &file, &format!("{LONG_A}\n")),
+        T0,
+    );
+    blocked.flush();
+    assert!(blocked.inner().dirty.contains(&repo.worktree()));
+    // Its folder cannot be written.
+    let dir = home.path().join("provenance");
+    std::fs::create_dir(&dir).unwrap();
+    std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o500)).unwrap();
+    let read_only = Provenance::new(Some(dir.clone()));
+    read_only.saw(
+        &repo.projects,
+        &created("s1", &file, &format!("{LONG_A}\n")),
+        T0,
+    );
+    read_only.flush();
+    std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700)).unwrap();
+    assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 0);
+    assert_eq!(read_only.files_changed(&repo.projects, T0)["s1"], 1);
+}
+
+#[test]
+fn past_the_total_cap_a_loaded_repository_is_dropped_from_memory_too() {
+    let repo = Repo_::new();
+    let home = tempfile::tempdir().unwrap();
+    let dir = home.path().join("provenance");
+    let store = Provenance::new(Some(dir.clone()));
+    let file = repo.root.join("a.txt");
+    repo.write("a.txt", &[LONG_A]);
+    store.saw(
+        &repo.projects,
+        &created("s1", &file, &format!("{LONG_A}\n")),
+        T0,
+    );
+    store.flush();
+    let older = dir.join(format!("{}.json", key(&repo.worktree())));
+    let at = std::time::SystemTime::now() - Duration::from_secs(60);
+    std::fs::File::options()
+        .write(true)
+        .open(&older)
+        .unwrap()
+        .set_modified(at)
+        .unwrap();
+    // Another repository written now pushes the older one out.
+    {
+        let mut inner = store.inner();
+        store
+            .repo(&mut inner, "/other", T0)
+            .edits
+            .push(edit(1, &[]));
+        inner.dirty.insert("/other".into());
+    }
+    store.flush_within(1);
+    assert!(!older.exists());
+    let inner = store.inner();
+    assert!(!inner.repos.contains_key(&repo.worktree()));
+    assert!(inner.repos.contains_key("/other"));
+}
+
+#[test]
+fn a_live_line_without_its_record_or_from_before_goes_through_blame() {
+    let repo = Repo_::new();
+    repo.write("a.txt", &["head"]);
+    repo.commit("first");
+    let store = Provenance::default();
+    let file = repo.root.join("a.txt");
+    repo.write("a.txt", &["head", LONG_A]);
+    let hunk = json!({"oldStart": 1, "oldLines": 1, "newStart": 1, "newLines": 2,
+        "lines": [" head", "+".to_owned() + LONG_A]});
+    store.saw(&repo.projects, &edited("s1", &file, hunk, "head\n"), T0);
+    // Before Hive followed the file: the commit.
+    let LineOrigin::Unknown { commit: Some(c) } =
+        ask(&store, &repo, "a.txt", 1, LineSide::Worktree)
+    else {
+        panic!()
+    };
+    assert_eq!(c.summary, "first");
+    // Its record went (age): not committed, so unknown.
+    store
+        .inner()
+        .repos
+        .get_mut(&repo.worktree())
+        .unwrap()
+        .edits
+        .clear();
+    assert_eq!(
+        ask(&store, &repo, "a.txt", 2, LineSide::Worktree),
+        LineOrigin::Unknown { commit: None }
+    );
+}
+
+#[test]
+fn a_file_too_large_at_its_commit_is_matched_on_the_line_alone() {
+    let repo = Repo_::new();
+    let filler = "x".repeat(100);
+    let mut lines: Vec<&str> = vec![&filler; (FILE_BYTES as usize) / 100];
+    lines.push(LONG_A);
+    repo.write("big.txt", &lines);
+    repo.commit("big");
+    let store = Provenance::default();
+    {
+        let mut inner = store.inner();
+        let r = store.repo(&mut inner, &repo.worktree(), T0);
+        r.edits.push(Edit {
+            path: "big.txt".into(),
+            worktree: repo.worktree(),
+            ..edit(0, &[(lines.len(), &[LONG_A])])
+        });
+    }
+    let line = lines.len() as u32;
+    let LineOrigin::Session { edit, commit } =
+        ask(&store, &repo, "big.txt", line, LineSide::Worktree)
+    else {
+        panic!()
+    };
+    assert_eq!(
+        (edit.start, commit.map(|c| c.summary)),
+        (line, Some("big".into()))
+    );
+}
