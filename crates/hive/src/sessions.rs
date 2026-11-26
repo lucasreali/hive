@@ -631,6 +631,7 @@ impl Sessions {
             running: false,
             config_dir: log.config_dir,
             resume_command: None,
+            files_changed: 0,
         };
         Some((session, end))
     }
@@ -1589,6 +1590,7 @@ not json
             running: false,
             config_dir: dir.map(Into::into),
             resume_command: None,
+            files_changed: 0,
         };
         let line = |session: &Session, shell| resume_command(session, shell);
         // POSIX shells and fish (WSL, Linux, macOS), and Git Bash.
@@ -1647,6 +1649,7 @@ not json
             main,
             claude: !main,
             status: None,
+            review_of: None,
         };
         Project {
             id: path.into(),

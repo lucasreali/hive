@@ -20,7 +20,7 @@ use super::{Gone, State};
 use crate::VERSION;
 use crate::adapter::{self, Adapter, ClaudeCode};
 use crate::terminal::Input;
-use crate::{changes, dirs, file, procs, table, table_edit, uninstall, worktree};
+use crate::{changes, dirs, file, procs, review, table, table_edit, uninstall, worktree};
 
 /// Longest `hive badge` label, in characters.
 const MAX_BADGE: usize = 40;
@@ -161,6 +161,13 @@ async fn hook_connection<R: AsyncRead + Unpin>(
         }) => {
             // The payload stays here: the app gets only what the service makes of it.
             let event = ClaudeCode.translate(&event, terminal_id, payload);
+            // Its edit, and the files of its worktree changed since (27.5).
+            tokio::task::block_in_place(|| {
+                let projects = state.projects.list();
+                state
+                    .provenance
+                    .saw(&projects, &event, crate::hook::now_ms());
+            });
             state.saw(&event, sent_ns).await;
             // An agent detected or ended: whether its session runs changed.
             if let EventKind::SessionStarted | EventKind::SessionEnded { .. } = event.kind {
@@ -624,7 +631,14 @@ async fn app_frame(
             state.change_worktrees(move |projects| {
                 let archive = |root: &str| archiving.archive(root, &path);
                 match projects.remove_worktree(&path, force, procs::Source::System, archive) {
-                    Ok(project) => Control::WorktreeRemoved { project, path },
+                    Ok(project) => {
+                        let now = crate::hook::now_ms();
+                        archiving
+                            .provenance
+                            .worktree_removed(&project.id, &path, now);
+                        archiving.forget_seen(std::slice::from_ref(&path));
+                        Control::WorktreeRemoved { project, path }
+                    }
                     Err(err) => Control::RemoveWorktreeFailed {
                         path,
                         message: err.to_string(),
@@ -646,14 +660,120 @@ async fn app_frame(
                 },
             }
         }),
-        Ok(Control::ListChanges { path, base }) => {
-            state.projects(move |projects| changes::answer(&projects.list(), path, base).0)
+        Ok(Control::CreateReview { path }) => {
+            state.change_worktrees(move |projects| match review::create(projects, &path) {
+                Ok((project, created)) => Control::WorktreeCreated {
+                    project,
+                    path: created.path.to_string_lossy().into_owned(),
+                    notes: created.notes,
+                },
+                Err(err) => Control::CreateWorktreeFailed {
+                    project: projects
+                        .holding(&path)
+                        .map(|(p, _)| p.id)
+                        .unwrap_or_default(),
+                    name: path,
+                    message: err.to_string(),
+                },
+            })
         }
+        Ok(Control::PlanBringBack { path }) => state.projects(move |projects| {
+            let plan = review::plan(projects, &path);
+            Control::BringBackPlan {
+                path,
+                error: plan.as_ref().err().map(ToString::to_string),
+                plan: plan.ok(),
+            }
+        }),
+        Ok(Control::BringBack {
+            path,
+            into,
+            base,
+            tip,
+        }) => {
+            // The merge commit has the space's git identity (21.5), as its terminals would.
+            let space = tokio::task::block_in_place(|| state.projects.space_env(&path));
+            let env = crate::spaces::vars(&space);
+            state.change_worktrees(move |projects| {
+                let shown = review::Shown {
+                    into: &into,
+                    base: &base,
+                    tip: &tip,
+                };
+                match review::bring_back(projects, &path, shown, &env) {
+                    Ok((project, commits, fast_forward)) => Control::BroughtBack {
+                        project,
+                        path,
+                        commits,
+                        fast_forward,
+                    },
+                    Err(err) => Control::BringBackFailed {
+                        path,
+                        message: err.to_string(),
+                    },
+                }
+            })
+        }
+        Ok(Control::DiscardReview { path, force }) => {
+            let archiving = state.clone();
+            state.change_worktrees(move |projects| {
+                let archive = |root: &str| archiving.archive(root, &path);
+                match review::discard(projects, &path, force, procs::Source::System, archive) {
+                    Ok(project) => Control::WorktreeRemoved { project, path },
+                    Err(err) => Control::RemoveWorktreeFailed {
+                        path,
+                        message: err.to_string(),
+                    },
+                }
+            })
+        }
+        Ok(Control::ListChanges { path, base }) => state.list_changes(path, base),
+        Ok(Control::ListCommits { path }) => {
+            state.projects(move |projects| changes::commits(&projects.list(), path))
+        }
+        Ok(Control::MarkSeen {
+            path,
+            base,
+            files,
+            seen,
+        }) => state.mark_seen(path, base, (files, seen)),
         Ok(Control::ListScripts { path }) => state.list_scripts(path),
         Ok(Control::ListSessions) => {
             // The accounts' folders may have changed: watched again.
             state.sessions_follow.notify_one();
             state.list_sessions();
+        }
+        Ok(Control::WhoWrote {
+            worktree,
+            path,
+            line,
+            side,
+            base,
+        }) => {
+            let asked = crate::provenance::Asked {
+                worktree,
+                path,
+                line,
+                side,
+                base,
+            };
+            let state2 = state.clone();
+            state.sessions(move |projects, sessions, _| {
+                let title = |id: &str, cwd: &str| {
+                    let title = sessions.title(id, cwd);
+                    let deleted = sessions.log(id, cwd).is_none();
+                    (title, deleted)
+                };
+                let now = crate::hook::now_ms();
+                state2.provenance.who_wrote(projects, &title, asked, now)
+            })
+        }
+        Ok(Control::ListSessionFiles { id }) => {
+            let state2 = state.clone();
+            state.projects(move |projects| {
+                let now = crate::hook::now_ms();
+                state2.provenance.session_files(&projects.list(), id, now)
+            })
         }
         Ok(Control::LocateSession { id, target }) => {
             state.sessions(move |projects, sessions, _| {
@@ -733,7 +853,12 @@ async fn app_frame(
             worktree,
             path,
             base,
-        }) => state.projects(move |projects| file::answer::open(projects, worktree, path, base)),
+        }) => {
+            let snapshots = state.snapshots.clone();
+            state.projects(move |projects| {
+                file::answer::open(projects, &snapshots, worktree, path, &base)
+            })
+        }
         Ok(Control::ReadFile {
             id,
             token,
@@ -756,9 +881,21 @@ async fn app_frame(
             path,
             content,
             version,
-        }) => state.projects(move |projects| {
-            file::answer::save(projects, worktree, path, &content, version.as_deref())
-        }),
+        }) => {
+            let saving = state.clone();
+            state.projects(move |projects| {
+                let saved =
+                    file::answer::save(projects, worktree, path, &content, version.as_deref());
+                // The lines the user changed are the user's (27.5).
+                if let Control::FileSaved { worktree, path, .. } = &saved {
+                    let now = crate::hook::now_ms();
+                    saving
+                        .provenance
+                        .saved(&projects.list(), worktree, path, now);
+                }
+                saved
+            })
+        }
         Ok(Control::CreateFile {
             worktree,
             folder,

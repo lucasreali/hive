@@ -133,8 +133,13 @@ fn list(kind: &str, field: &str, len: usize) -> Value {
 }
 
 #[test]
-fn projects_sessions_and_any_list_are_capped() {
-    for (kind, most) in [("projects", PROJECTS), ("sessions", SESSIONS)] {
+fn projects_sessions_commits_and_any_list_are_capped() {
+    let lists = [
+        ("projects", PROJECTS),
+        ("sessions", SESSIONS),
+        ("commits", COMMITS),
+    ];
+    for (kind, most) in lists {
         assert_eq!(check(&mut list(kind, kind, most)), Ok(()));
         let over = format!("sent {} {kind}, over the {most} the app takes", most + 1);
         assert_eq!(check(&mut list(kind, kind, most + 1)), Err(over));
@@ -157,7 +162,10 @@ fn projects_sessions_and_any_list_are_capped() {
     let mut checked = fine.clone();
     assert_eq!(check(&mut checked), Ok(()));
     assert_eq!(checked, fine);
-    assert_eq!((PROJECTS, SESSIONS, LIST), (1000, 1000, 50_000));
+    assert_eq!(
+        (PROJECTS, SESSIONS, COMMITS, LIST),
+        (1000, 1000, 1000, 50_000)
+    );
 }
 
 #[test]
@@ -178,6 +186,10 @@ fn a_remote_s_titles_badges_and_errors_are_clipped() {
     let mut notification = json!({"type": "terminal_notification", "body": long});
     check(&mut notification).unwrap();
     assert_eq!(notification["body"], clipped);
+    // A commit's short id (27.2), at any depth of a `commits`.
+    let mut commits = json!({"type": "commits", "commits": [{"short": long}]});
+    check(&mut commits).unwrap();
+    assert_eq!(commits["commits"][0]["short"], clipped);
     let untouched = json!({"type": "pull", "body": long, "path": long, "title": 3, "text": null});
     let mut message = untouched.clone();
     check(&mut message).unwrap();

@@ -462,6 +462,65 @@ async fn an_agent_team_shows_its_teammates_under_its_lead() {
 }
 
 #[tokio::test]
+async fn a_subagent_that_fails_leaves_while_the_others_run_in_the_background() {
+    // Replays `fixtures/failed_subagent_synthetic.json`: synthetic, from the hooks docs (27.7).
+    let fixture: Value =
+        serde_json::from_str(include_str!("../fixtures/failed_subagent_synthetic.json")).unwrap();
+    assert!(fixture["note"].as_str().unwrap().starts_with("SYNTHETIC"));
+    let repo = Repo::new();
+    let root = repo.root.display().to_string();
+    let fake = repo.env.fake_claude("home/claude");
+    let mut daemon = repo.env.daemon();
+    let mut app = repo.env.connect(Role::App).await;
+    app.open_terminal(1, &repo.root).await;
+    app.input(1, &format!("echo stand-''in; '{}'\r", fake.display()))
+        .await;
+    printed(&mut app, 1, "stand-in").await;
+    let mut steps = Vec::new();
+    for call in fixture["calls"].as_array().unwrap() {
+        let event = call[0].as_str().unwrap();
+        let payload = merged(call[1].clone(), json!({"cwd": root}));
+        steps.push(hook(&repo, &mut app, "1", event, payload).await);
+    }
+    let lines = |step: &[(u32, Control)]| {
+        let last = step.iter().rev().find_map(|(_, message)| match message {
+            Control::AgentState {
+                state, subagents, ..
+            } => Some((*state, subagents.clone())),
+            _ => None,
+        });
+        let (state, subagents) = last.expect("an agent_state");
+        let subs = subagents
+            .iter()
+            .map(|s| (s.id.clone(), s.agent_type.clone(), s.state));
+        (state, subs.collect::<Vec<_>>())
+    };
+    let busy = |id: &str| (id.to_owned(), Some("general-purpose".to_owned()), Working);
+    let four = vec![busy("g1"), busy("g2"), busy("g3"), busy("g4")];
+    let mut five = four.clone();
+    five.push(("f5".into(), None, Working));
+    assert_eq!(lines(&steps[6]), (WithSubagents, five));
+    // Its failure takes it off the list, not the agent into error.
+    assert_eq!(lines(&steps[7]), (WithSubagents, four.clone()));
+    // The lead's turn ends with the four in the background: they stay listed, and it waits
+    // for you quietly (13.3), saying how many run.
+    assert_eq!(lines(&steps[8]), (WaitingYou, four));
+    assert!(matches!(
+        steps[8].as_slice(),
+        [(1, Control::AgentState { alert: None, activity: Some(doing), .. })]
+            if doing == "4 background tasks"
+    ));
+    assert!(
+        steps
+            .iter()
+            .flatten()
+            .all(|(_, m)| !matches!(m, Control::AgentState { state: Error, .. }))
+    );
+    drop(app);
+    assert!(daemon.wait_exit().success());
+}
+
+#[tokio::test]
 async fn clear_in_claude_ends_the_session_and_detects_the_new_one_in_the_same_terminal() {
     // `/clear` (20.3): Claude clears the screen and its scrollback, sends `SessionEnd`
     // ("clear") and then `SessionStart` ("clear") with a new session id, in the same process.

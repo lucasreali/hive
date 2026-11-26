@@ -145,16 +145,23 @@ pub async fn run(paths: &Paths) -> io::Result<()> {
         restore,
     )
     .with_power(power)
-    .with_usage(usage::Usage::load(paths.usage()));
+    .with_usage(usage::Usage::load(paths.usage()))
+    .with_snapshots(crate::snapshot::Snapshots::new(paths.snapshots()));
+    // Snapshots past their age, or of a worktree or repository that is gone (27.2), go now, in
+    // the background.
+    let snapshots = state.snapshots.clone();
+    std::thread::spawn(move || snapshots.sweep(crate::hook::now_ms()));
     #[cfg(unix)]
     let places = crate::uninstall::Places::from_env(paths);
     #[cfg(windows)]
     let places = None;
     // What a service before 26.11 left, gone before this one's first terminal.
     crate::browser_cleanup::clean(&paths.bin_dir(), &paths.runtime);
+    let provenance = crate::provenance::Provenance::new(Some(paths.data.join("provenance")));
     let state = Arc::new(State {
         warning,
         places,
+        provenance,
         ..state
     });
     serve(listener, hold, terminated, state).await
@@ -244,6 +251,7 @@ async fn serve(
     let health = tokio::spawn(watch_health(state.clone(), every));
     let registry = tokio::spawn(watch_registry(state.clone(), Registry::new()));
     let logs = tokio::spawn(watch_sessions(state.clone(), session_watch::Watch::new()));
+    let provenance = tokio::spawn(keep_provenance(state.clone()));
     let mut check = tokio::time::interval(CLAIM_CHECK);
     tokio::pin!(terminated);
     // When the terminals kept after the app dropped end, unless an app is back by then.
@@ -288,8 +296,15 @@ async fn serve(
     drop(listener);
     hold.release();
     let files = state.watching.lock().await.take().map(|files| files.task);
-    for task in [watcher, health, registry, logs].into_iter().chain(files) {
+    for task in [watcher, health, registry, logs, provenance]
+        .into_iter()
+        .chain(files)
+    {
         stop(task).await;
+    }
+    // What changed since the last write; nothing when Hive is being uninstalled.
+    if state.uninstalling().is_none() {
+        tokio::task::block_in_place(|| state.provenance.flush());
     }
     let uninstall = state.uninstalling().clone();
     // Before the terminals end (and their sessions with them): what to resume next time;
@@ -314,6 +329,16 @@ async fn serve(
     }
     // The lock goes last, with `hold`.
     ended
+}
+
+/// Writes the line provenance store's changes every [`PROVENANCE_FLUSH`] (27.5).
+async fn keep_provenance(state: Arc<State>) {
+    let mut every = tokio::time::interval(PROVENANCE_FLUSH);
+    // Stopped before an uninstall removes Hive's folder, so nothing is written after it.
+    loop {
+        every.tick().await;
+        tokio::task::block_in_place(|| state.provenance.flush());
+    }
 }
 
 /// Stops a background task and waits until it has. One caught in blocking work
@@ -370,6 +395,8 @@ struct State {
     ports: Ports,
     /// The pull requests already offered for removing their worktree (17.27).
     offers: crate::offers::Offers,
+    /// The files marked seen in each worktree's diff (27.1).
+    seen: crate::seen::Seen,
     restore: Restore,
     /// The worktree statuses the app has, so only changes are sent.
     sent: std::sync::Mutex<health::Sent>,
@@ -414,11 +441,15 @@ struct State {
     warning: Option<String>,
     /// Where Hive's things are, for uninstalling it (23.5); `None` without a `HOME`.
     places: Option<uninstall::Places>,
+    /// Which session wrote each line (27.5).
+    provenance: crate::provenance::Provenance,
     /// What to uninstall, once the app asked (`uninstall`): the service then ignores the app
     /// and ends ([`State::ending`]).
     uninstalling: std::sync::Mutex<Option<uninstall::Choice>>,
     /// Woken to end the service (an `uninstall`).
     ending: tokio::sync::Notify,
+    /// The worktrees' snapshots at each agent turn (27.2).
+    snapshots: Arc<crate::snapshot::Snapshots>,
 }
 
 /// The connected app's link (26.15): what its `hello` asked for.
@@ -441,6 +472,9 @@ struct Restore {
     pending: Mutex<Vec<OpenSession>>,
 }
 
+/// How often the line provenance store writes what changed (27.5).
+const PROVENANCE_FLUSH: Duration = Duration::from_secs(2);
+
 impl State {
     fn new(
         bin_dir: PathBuf,
@@ -451,6 +485,8 @@ impl State {
         offers: crate::offers::Offers,
         restore: Restore,
     ) -> Self {
+        // Hive's folder in production (`with_snapshots`), the test's folder in tests.
+        let bin_dir_snapshots = bin_dir.join("snapshots");
         Self {
             app: Mutex::new(None),
             link: Default::default(),
@@ -468,6 +504,8 @@ impl State {
             settings,
             ports,
             offers,
+            // In Hive's folder, with the open sessions: `<data>/seen.json`.
+            seen: crate::seen::Seen::new(restore.file.with_file_name("seen.json")),
             restore,
             sent: Default::default(),
             listed: Default::default(),
@@ -487,8 +525,10 @@ impl State {
             tick: Default::default(),
             warning: None,
             places: None,
+            provenance: Default::default(),
             uninstalling: Default::default(),
             ending: Default::default(),
+            snapshots: Arc::new(crate::snapshot::Snapshots::new(bin_dir_snapshots)),
         }
     }
 
@@ -510,6 +550,12 @@ impl State {
         (self.places.as_ref()).map_or_else(Vec::new, |places| {
             uninstall::remove(&plan, &places.paths, &uninstall::System)
         })
+    }
+
+    /// Keeps the turn snapshots in `snapshots` (27.2).
+    fn with_snapshots(mut self, snapshots: crate::snapshot::Snapshots) -> Self {
+        self.snapshots = Arc::new(snapshots);
+        self
     }
 
     /// Holds `power`'s assertion while agents work (17.17); none without it.
@@ -650,7 +696,8 @@ impl State {
             | Control::ProjectCreated { project, .. }
             | Control::WorktreeCreated { project, .. }
             | Control::WorktreeRemoved { project, .. }
-            | Control::WorktreeRenamed { project, .. } => (std::slice::from_mut(project), false),
+            | Control::WorktreeRenamed { project, .. }
+            | Control::BroughtBack { project, .. } => (std::slice::from_mut(project), false),
             _ => return,
         };
         for project in projects {
@@ -809,14 +856,18 @@ impl State {
         let shell = Some(self.settings.get().0.terminal.shell);
         #[cfg(not(windows))]
         let shell = None;
+        let state = self.clone();
         // Hive's terminals: their hooks name their sessions.
         self.sessions(move |projects, sessions, mut running| {
+            let provenance = &state.provenance;
             // Claude keeps a record of each running `claude` beside its projects folder.
             let records = sessions.records();
             running.extend(procs::claude_sessions(procs::Source::System, &records));
             let (mut sessions, truncated, error) = sessions.list(projects, &running);
+            let changed = provenance.files_changed(projects, hook::now_ms());
             for session in &mut sessions {
                 session.resume_command = crate::sessions::resume_command(session, shell);
+                session.files_changed = changed.get(&session.id).copied().unwrap_or(0);
             }
             Control::Sessions {
                 sessions,
@@ -1110,9 +1161,17 @@ impl State {
         }
     }
 
+    /// Drops the seen marks (27.1) of `worktrees`, removed.
+    fn forget_seen(&self, worktrees: &[String]) {
+        if let Err(err) = self.seen.forget(worktrees) {
+            eprintln!("hive: warning: cannot drop the seen marks of removed worktrees: {err}");
+        }
+    }
+
     /// Stops following the project `id` (9.28), a group with its repositories (14.1), unless a
     /// process of Hive's terminals (their `sessions`) works in it; their settings and their
-    /// worktrees' port blocks go with them. A group's repositories are removed before it.
+    /// worktrees' port blocks and seen marks (27.1) go with them. A group's repositories are
+    /// removed before it.
     async fn remove_project(&self, id: String, sessions: &HashSet<i32>) {
         let removed = tokio::task::block_in_place(|| {
             self.projects.remove(&id, procs::Source::System, sessions)
@@ -1128,9 +1187,11 @@ impl State {
         };
         self.refollow.notify_one();
         self.to_app(0, &self.projects.spaces_message()).await;
+        tokio::task::block_in_place(|| self.provenance.project_removed(&id));
         if let Err(err) = tokio::task::block_in_place(|| self.ports.forget(&worktrees)) {
             eprintln!("hive: warning: cannot free the ports of {id}: {err}");
         }
+        tokio::task::block_in_place(|| self.forget_seen(&worktrees));
         for id in inside.into_iter().chain([id]) {
             let reply = match tokio::task::block_in_place(|| self.settings.forget(&id)) {
                 Ok(settings) => settings.map(|settings| Control::Settings { settings }),
@@ -1155,6 +1216,53 @@ impl State {
             let (open, folders) = tokio::sync::watch::channel(Vec::new());
             let task = tokio::spawn(watch_files(self.clone(), path.clone(), base, folders));
             Watching { path, task, open }
+        });
+    }
+
+    /// Lists the watched worktree's files and changes again when it is `worktree` (any one when
+    /// `None`), e.g. once a turn's snapshot is taken (27.2).
+    pub(super) async fn rewatch(&self, worktree: Option<&str>) {
+        if let Some(watching) = self.watching.lock().await.as_ref()
+            && worktree.is_none_or(|w| w == watching.path)
+        {
+            watching.open.send_modify(|_| {});
+        }
+    }
+
+    /// Each agent's title by session, for the turns its worktree's changes can be compared with
+    /// (27.2).
+    async fn titles(&self) -> HashMap<String, String> {
+        let agents = self.agents.lock().await;
+        let titled = |(id, agent): (&String, &Agent)| Some((id.clone(), agent.title.clone()?));
+        agents.iter().filter_map(titled).collect()
+    }
+
+    /// Answers `list_changes` off the frame loop.
+    fn list_changes(self: &Arc<Self>, path: String, base: DiffBase) {
+        let state = self.clone();
+        tokio::spawn(async move {
+            let titles = state.titles().await;
+            let reply = tokio::task::block_in_place(|| {
+                let projects = state.projects.list();
+                let snapshots = &state.snapshots;
+                changes::answer(&projects, snapshots, path, &base, &titles, &state.seen).0
+            });
+            state.to_app(0, &reply).await;
+        });
+    }
+
+    /// Answers `mark_seen` (27.1) off the frame loop: the files marked, then the changes.
+    fn mark_seen(self: &Arc<Self>, path: String, base: DiffBase, files: (Vec<String>, bool)) {
+        let state = self.clone();
+        tokio::spawn(async move {
+            let titles = state.titles().await;
+            let reply = tokio::task::block_in_place(|| {
+                let projects = state.projects.list();
+                let turned = (state.snapshots.as_ref(), &titles);
+                let marks = (files.0.as_slice(), files.1);
+                changes::mark(&projects, turned, path, &base, &state.seen, marks)
+            });
+            state.to_app(0, &reply).await;
         });
     }
 
@@ -1244,7 +1352,7 @@ impl State {
     async fn worktree_changed(
         &self,
         path: &str,
-        base: Option<DiffBase>,
+        base: Option<&DiffBase>,
         listing: Option<&Listing>,
     ) {
         if let Some(listing) = listing {
@@ -1257,11 +1365,20 @@ impl State {
             self.to_app(0, &files).await;
         }
         let Some(base) = base else { return };
+        let titles = self.titles().await;
         // One listing of the projects gives both the changes' base and the status, and one
         // `git status` both the changes and the status's count (9.14).
         let (changes, statuses) = tokio::task::block_in_place(|| {
             let projects = self.projects.list();
-            let (changes, totals) = changes::answer(&projects, path.to_owned(), base);
+            let snapshots = &self.snapshots;
+            let (changes, totals) = changes::answer(
+                &projects,
+                snapshots,
+                path.to_owned(),
+                base,
+                &titles,
+                &self.seen,
+            );
             (
                 changes,
                 self.health_changed(&projects, Some((path, totals))),
@@ -1321,7 +1438,7 @@ async fn watch_files(
                 // app reads its open file again.
                 let changed = last.as_ref() != Some(&listing) || base.is_none();
                 state
-                    .worktree_changed(&path, base, changed.then_some(&listing))
+                    .worktree_changed(&path, base.as_ref(), changed.then_some(&listing))
                     .await;
                 last = Some(listing);
             }
@@ -1474,6 +1591,23 @@ fn test_state_with(dir: &Path, power: Option<Box<dyn power::Power>>) -> Arc<Stat
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn seen_marks_that_cannot_be_dropped_are_only_a_warning() {
+        let tmp = tempfile::tempdir().unwrap();
+        let state = test_state(tmp.path());
+        let worktree = tmp.path().join("w").display().to_string();
+        let file = tmp.path().join("seen.json");
+        let marks = serde_json::json!({ &worktree: { "head": { "a": "x" } } }).to_string();
+        std::fs::write(&file, &marks).unwrap();
+        // The temporary file of the save is taken: nothing is saved.
+        std::fs::create_dir_all(tmp.path().join("seen.tmp/x")).unwrap();
+        state.forget_seen(std::slice::from_ref(&worktree));
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), marks);
+        std::fs::remove_dir_all(tmp.path().join("seen.tmp")).unwrap();
+        state.forget_seen(&[worktree]);
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), "{}");
+    }
 
     #[test]
     fn terminals_are_kept_for_at_most_seven_days() {

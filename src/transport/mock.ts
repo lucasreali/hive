@@ -3,24 +3,30 @@ import type {
   Alert,
   AppMode,
   ChangedFile,
+  CommitInfo,
   DiffBase,
   Dirs,
   FileMedia,
   FileStatus,
   FileText,
   GhLogin,
+  LineOrigin,
+  LineSide,
   ProgressState,
   Project,
+  ReviewCommit,
   SaveError,
   Script,
   ServiceMessage,
   Session,
+  SessionFile,
   Settings,
   Space,
   SpaceEnv,
   Subagent,
   TableEdit,
   TableText,
+  TurnBase,
   UninstallList,
   Worktree,
 } from "../protocol";
@@ -474,6 +480,40 @@ export function mockDirs(
 }
 
 const MINUTE = 60_000;
+const HOUR = 60 * MINUTE;
+const SHOP = "/home/user/projects/shop";
+const FIX_LOGIN = `${SHOP}/.claude/worktrees/fix-login`;
+
+/** The files Hive recorded each fake session changing (27.5), the most recent first. */
+export function mockSessionFiles(id: string): SessionFile[] {
+  const file = (worktree: string, path: string, edits: number, lines: number, hours: number) => ({
+    worktree,
+    path,
+    edits,
+    lines_now: lines,
+    first_line: lines > 0 ? 39 : null,
+    last_ms: Date.now() - hours * HOUR,
+  });
+  if (id.endsWith("0001")) {
+    return [
+      file(FIX_LOGIN, "src/auth/session.ts", 3, 3, 3),
+      file(SHOP, "src/auth/login.ts", 1, 0, 4),
+    ];
+  }
+  if (id.endsWith("0004")) {
+    return [
+      file(
+        "/home/user/projects/api/.claude/worktrees/refactor-auth",
+        "src/auth/session.ts",
+        2,
+        3,
+        200,
+      ),
+    ];
+  }
+  return [];
+}
+
 const session = (
   id: string,
   cwd: string,
@@ -509,6 +549,7 @@ const session = (
     running,
     config_dir: null,
     resume_command: `cd '${cwd}' && claude --resume ${id}`,
+    files_changed: mockSessionFiles(id).length,
     log: `/home/user/.claude/projects/${cwd.replaceAll(/[^A-Za-z0-9]/g, "-")}/${id}.jsonl`,
   };
 };
@@ -553,6 +594,60 @@ export const MOCK_SESSIONS: Session[] = [
     "error",
   ),
 ];
+
+/** The commit `git blame` gives the fake service for a line it has no live record of. */
+export const MOCK_BLAME = {
+  id: "4f2a9c1e8b7d6a5f4e3d2c1b0a9f8e7d6c5b4a39",
+  author: "Ada Lovelace",
+  ms: Date.now() - 2 * 24 * HOUR,
+  summary: "Keep sessions in the store",
+};
+
+/**
+ * Who wrote a line, as the fake service recorded it (27.5), in `src/auth/session.ts` only: the
+ * `rememberMe` lines (39–41) by a session of the worktree (else the first session, in
+ * fix-login), line 2 in Hive's editor, line 1 probably by a subagent, the diff's old side
+ * probably by "Checkout totals"; any other line through its commit alone.
+ */
+export function mockAuthor(
+  sessions: Session[],
+  worktree: string,
+  path: string,
+  line: number,
+  side: LineSide,
+): LineOrigin {
+  if (path !== "src/auth/session.ts") return { kind: "unknown", commit: null };
+  const edit = (x: Session, ms: number, start: number, len: number) => ({
+    session: x.id,
+    title: x.title,
+    deleted: false,
+    project: x.project,
+    worktree,
+    agent: null,
+    agent_type: null,
+    tool: "Edit",
+    tool_use_id: "toolu_mock",
+    ms,
+    user_modified: false,
+    start,
+    len,
+  });
+  const [first, checkout, , auth] = MOCK_SESSIONS;
+  if (side === "base") {
+    return { kind: "session", edit: edit(checkout, MOCK_BLAME.ms, line, 1), commit: MOCK_BLAME };
+  }
+  if (line >= 39 && line <= 41) {
+    const own = sessions.find((x) => x.worktree === worktree) ?? first;
+    const live = { ...edit(own, Date.now() - 3 * HOUR, 39, 3), user_modified: true };
+    return { kind: "session", edit: live, commit: null };
+  }
+  if (line === 2) return { kind: "editor", ms: Date.now() - 10 * MINUTE };
+  if (line === 1) {
+    const sub = { ...edit(auth, MOCK_BLAME.ms, 1, 1), agent: "a1", agent_type: "general-purpose" };
+    return { kind: "session", edit: sub, commit: MOCK_BLAME };
+  }
+  return { kind: "unknown", commit: MOCK_BLAME };
+}
 
 /** The fake GitHub issues, by number: the worktree (and branch) the service names for each. */
 export const MOCK_ISSUES: Record<number, string> = {
@@ -633,6 +728,38 @@ const mockFiles = (worktree: Worktree) =>
 
 /** The service's reason a branch base falls back to HEAD without a branch to compare with. */
 const NO_BRANCH = "No branch to compare with: this is the main worktree, or it is detached";
+/** The service's reasons a turn or a commit base falls back to HEAD (27.2). */
+const NO_TURN = "No snapshot of this agent's last turn in this worktree";
+const NO_COMMIT = "This commit is not in the repository";
+
+/** The agents with a snapshot of their last turn in every fake worktree (27.2), latest first. */
+export const MOCK_TURNS: TurnBase[] = [
+  {
+    session: "mock-turn-1",
+    title: "fix login redirect",
+    started_ms: 1_700_000_300_000,
+    late: false,
+  },
+  { session: "mock-turn-2", title: "write the tests", started_ms: 1_700_000_100_000, late: true },
+];
+
+/** A fake worktree's last commits (27.2): two of its branch, then older ones. */
+export const MOCK_COMMITS: CommitInfo[] = [
+  ["a1b2c3d", "Fix the login redirect", true],
+  ["b2c3d4e", "Add the session store", true],
+  ["c3d4e5f", "Bump the dependencies", false],
+  ["d4e5f60", "Initial commit", false],
+].map(([short, subject, on_branch], i) => ({
+  id: `${short}${"0".repeat(33)}`,
+  short: short as string,
+  author: i % 2 ? "Ana Souza" : "Lucas",
+  time_ms: 1_700_000_000_000 - i * 86_400_000,
+  subject: subject as string,
+  on_branch: on_branch as boolean,
+}));
+
+/** What changed in a fake worktree since an agent's last turn: its last changed file. */
+const sinceTurn = (all: Record<string, ChangedFile[]>, path: string) => (all[path] ?? []).slice(-1);
 
 /**
  * A stand-in for `hive::changes::answer`: the fake worktree's changes (`all`, as staging and
@@ -643,28 +770,38 @@ function changes(
   path: string,
   asked: DiffBase,
   all: Record<string, ChangedFile[]> = MOCK_CHANGES,
-): ServiceMessage {
+): Extract<ServiceMessage, { type: "changes" }> {
   const project = projects.find((p) => p.worktrees.some((w) => w.path === path));
   if (!project) {
     const error = `${path} is not a worktree of a followed project`;
     const none = { base: "head", branch: null, base_error: null } as const;
-    return { type: "changes", path, ...none, files: [], added: 0, removed: 0, error };
+    return { type: "changes", path, ...none, files: [], added: 0, removed: 0, error, turns: [] };
   }
-  // The same files against either base: only the answer's base changes.
+  // The same files against HEAD, the branch or a commit: only the answer's base changes.
   const main = project.worktrees.find((w) => w.main);
   const branch = main && main.path !== path ? main.branch : null;
-  const fallback = asked === "branch" && !branch;
-  const files = all[path] ?? [];
+  const turn = typeof asked === "object" && "turn" in asked ? asked.turn.session : null;
+  const commit = typeof asked === "object" && "commit" in asked ? asked.commit.id : null;
+  const why =
+    asked === "branch" && !branch
+      ? NO_BRANCH
+      : turn !== null && !MOCK_TURNS.some((t) => t.session === turn)
+        ? NO_TURN
+        : commit !== null && !MOCK_COMMITS.some((c) => c.id === commit)
+          ? NO_COMMIT
+          : null;
+  const files = turn !== null && !why ? sinceTurn(all, path) : (all[path] ?? []);
   return {
     type: "changes",
     path,
-    base: fallback ? "head" : asked,
+    base: why ? "head" : asked,
     branch,
-    base_error: fallback ? NO_BRANCH : null,
+    base_error: why,
     files,
     added: sum(files, "added"),
     removed: sum(files, "removed"),
     error: null,
+    turns: MOCK_TURNS,
   };
 }
 
@@ -867,6 +1004,22 @@ function file(
 /** A stand-in for `hive::file::version`: the length and a 32-bit hash of the text. */
 export const mockVersion = (text: string) =>
   `${text.length}-${[...text].reduce((h, c) => (h * 31 + (c.codePointAt(0) ?? 0)) | 0, 0)}`;
+
+/**
+ * The commits a new review's reviewer made in the fake service (27.4): there is no git to make
+ * them, so every review starts with these.
+ */
+export const MOCK_REVIEW_COMMITS: ReviewCommit[] = [
+  { id: "9f1c2ab", summary: "Keep the redirect after a login" },
+  { id: "4d7e013", summary: "Test the expired session" },
+];
+
+/** The reviewed branch's commit in every fake plan. */
+export const MOCK_REVIEW_BASE = "77aa000";
+
+/** A stand-in for `hive::review::review_name`: `review-<name>`, any other character a `-`. */
+export const mockReviewName = (name: string) =>
+  `review-${name.toLowerCase().replace(/[^a-z0-9_]+/g, "-")}`.replace(/-+$/, "");
 
 // A stand-in for `hive::worktree::check_name` and its CLI wording; the real rule lives in Rust.
 function nameError(project: Project, name: string): string | null {
@@ -1091,13 +1244,14 @@ export function createMockTransport(
     later({ type: "projects", projects });
   };
   const holder = (path: string) => projects.find((p) => p.worktrees.some((w) => w.path === path));
+  // Each review's commits not brought back yet, by its path (27.4).
+  const reviews = new Map<string, ReviewCommit[]>();
   const pulls = createMockPulls(later, (path) => holder(path)?.id ?? null);
   const runs = createMockRuns(later);
   /** The fake worktrees' changes as staging and commits leave them (27.6), and each one's base. */
   const changed = structuredClone(MOCK_CHANGES);
   const bases = new Map<string, DiffBase>();
-  const resend = (path: string) =>
-    later(changes(projects, path, bases.get(path) ?? "head", changed));
+  const resend = (path: string) => later(markedChanges(path, bases.get(path) ?? "head"));
   const git = createMockGit(later, holder, changed, resend, runs);
   // As `Projects::linked`: only a linked worktree of a followed project.
   const linkedRefusal = (path: string) => {
@@ -1109,6 +1263,27 @@ export function createMockTransport(
     const ids = [...terminals].filter(([, t]) => `${t.cwd}/`.startsWith(`${path}/`));
     if (ids.length === 0) return null;
     return `in use by ${ids.map(([id]) => `fish (${id})`).join(", ")}: close its terminals first`;
+  };
+  // As `Projects::remove_worktree`: 4.4's checks unless `force`; a worktree a review reviews
+  // leaves it an ordinary worktree (its link goes).
+  const removeWorktreeAt = (path: string, force: boolean) => {
+    const failed = (message: string) =>
+      void later({ type: "remove_worktree_failed", path, message });
+    const refused = linkedRefusal(path);
+    if (refused) return failed(refused);
+    if (!force && inUse(path)) return failed(inUse(path) as string);
+    if (!force && MOCK_CHANGES[path]?.length) {
+      return failed(
+        `git worktree remove ${path} failed: fatal: '${path}' contains modified or untracked files, use --force to delete it`,
+      );
+    }
+    const project = holder(path) as Project;
+    const worktrees = project.worktrees
+      .filter((w) => w.path !== path)
+      .map((w) => (w.review_of === path ? { ...w, review_of: null } : w));
+    const updated = { ...project, worktrees };
+    projects[projects.indexOf(project)] = updated;
+    later({ type: "worktree_removed", project: updated, path });
   };
   let sessions = MOCK_SESSIONS;
   /** Sends the current space's sessions, as the service does when asked or when they change. */
@@ -1156,7 +1331,21 @@ export function createMockTransport(
     const listed = files.get(path) as string[];
     later({ type: "files", path, files: listed, ignored: ignored.sort(), truncated: false });
     // A folder project's folder has no changes (23.1).
-    if (!holder(path)?.folder) later(changes(projects, path, watchedBase));
+    if (!holder(path)?.folder) later(markedChanges(path, watchedBase));
+  };
+  // A stand-in for `hive::seen` (27.1): by `<worktree>\n<base>`, each marked file's text when
+  // marked (its diff's identity here); a file written since is changed since seen.
+  const seenMarks = new Map<string, Map<string, string>>();
+  const textOf = (worktree: string, path: string) => written.get(`${worktree}/${path}`) ?? "";
+  const markedChanges = (path: string, asked: DiffBase) => {
+    const listed = changes(projects, path, asked, changed);
+    const marks = seenMarks.get(`${path}\n${listed.base}`) ?? new Map<string, string>();
+    const files = listed.files.map((f): ChangedFile => {
+      const mark = marks.get(f.path);
+      if (mark === undefined) return f;
+      return { ...f, seen: mark === textOf(path, f.path) ? "seen" : "changed" };
+    });
+    return { ...listed, files };
   };
   // A stand-in for an agent writing a file: `touch <name>` in a worktree's terminal.
   const touch = (cwd: string, name: string) => {
@@ -1665,20 +1854,91 @@ export function createMockTransport(
       later({ type: "worktree_created", project: updated, path: made.path, notes: [] });
     },
     async removeWorktree(path, force) {
-      const failed = (message: string) =>
-        void later({ type: "remove_worktree_failed", path, message });
-      const refused = linkedRefusal(path);
-      if (refused) return failed(refused);
-      if (!force && inUse(path)) return failed(inUse(path) as string);
-      if (!force && MOCK_CHANGES[path]?.length) {
+      removeWorktreeAt(path, force);
+    },
+    // As `hive::review` (27.4): a review on `review-<name>`, its commits `MOCK_REVIEW_COMMITS`;
+    // a fast-forward into a linked worktree's branch, a merge commit into the main one's.
+    async createReview(path) {
+      const reviewed = worktreeAt(path);
+      const project = holder(path);
+      if (!reviewed || !project) {
+        const message = `${path} is not a worktree of a followed project`;
+        return void later({ type: "create_worktree_failed", project: "", name: path, message });
+      }
+      if (!reviewed.branch) {
+        const message = `${reviewed.name} is detached: there is no branch to review`;
+        return void later({
+          type: "create_worktree_failed",
+          project: project.id,
+          name: path,
+          message,
+        });
+      }
+      const base = mockReviewName(reviewed.name);
+      const taken = (n: string) => project.worktrees.some((w) => w.name === n);
+      let name = base;
+      for (let i = 2; taken(name); i++) name = `${base}-${i}`;
+      // Its reviewer's two commits, not on the main worktree's branch.
+      const fresh = worktree(project.id, name);
+      const status = fresh.status && { ...fresh.status, ahead: 2, merged: false };
+      const made: Worktree = { ...fresh, branch: name, review_of: path, status };
+      reviews.set(made.path, [...MOCK_REVIEW_COMMITS]);
+      const updated = { ...project, worktrees: [...project.worktrees, made] };
+      projects[projects.indexOf(project)] = updated;
+      later({ type: "worktree_created", project: updated, path: made.path, notes: [] });
+    },
+    async planBringBack(path) {
+      const review = worktreeAt(path);
+      const reviewed = review?.review_of ? worktreeAt(review.review_of) : undefined;
+      if (!review || !reviewed) {
+        const error = `${review?.name ?? path} is not a review`;
+        return void later({ type: "bring_back_plan", path, plan: null, error });
+      }
+      const commits = reviews.get(path) ?? [];
+      const plan = {
+        reviewed: reviewed.path,
+        into: reviewed.branch ?? "",
+        base: MOCK_REVIEW_BASE,
+        branch: review.branch ?? "",
+        tip: commits[0]?.id ?? "0000000",
+        commits,
+        total: commits.length,
+        fast_forward: !reviewed.main,
+      };
+      later({ type: "bring_back_plan", path, plan, error: null });
+    },
+    async bringBack(path, into, base, tip) {
+      const failed = (message: string) => void later({ type: "bring_back_failed", path, message });
+      const review = worktreeAt(path);
+      const reviewed = review?.review_of ? worktreeAt(review.review_of) : undefined;
+      if (!review || !reviewed) return failed(`${review?.name ?? path} is not a review`);
+      // Untracked files are no changes (`hive::review::clean`).
+      for (const w of [review, reviewed]) {
+        if (MOCK_CHANGES[w.path]?.some((f) => f.status !== "untracked")) {
+          return failed(`${w.name} has uncommitted changes: commit or discard them first`);
+        }
+      }
+      const commits = reviews.get(path) ?? [];
+      if (commits.length === 0) {
         return failed(
-          `git worktree remove ${path} failed: fatal: '${path}' contains modified or untracked files, use --force to delete it`,
+          `nothing to bring back: every commit of ${review.branch} is on ${reviewed.branch}`,
         );
       }
+      if (into !== reviewed.branch || base !== MOCK_REVIEW_BASE || commits[0]?.id !== tip) {
+        return failed(`${review.branch} changed since the commits were shown: look again`);
+      }
+      reviews.set(path, []);
       const project = holder(path) as Project;
-      const updated = { ...project, worktrees: project.worktrees.filter((w) => w.path !== path) };
-      projects[projects.indexOf(project)] = updated;
-      later({ type: "worktree_removed", project: updated, path });
+      const fast_forward = !reviewed.main;
+      later({ type: "brought_back", project, path, commits: commits.length, fast_forward });
+    },
+    async discardReview(path, force) {
+      if (!worktreeAt(path)?.review_of) {
+        const message = `${worktreeAt(path)?.name ?? path} is not a review`;
+        return void later({ type: "remove_worktree_failed", path, message });
+      }
+      removeWorktreeAt(path, force);
+      reviews.delete(path);
     },
     async renameWorktree(path, name) {
       const failed = (message: string) =>
@@ -1699,7 +1959,24 @@ export function createMockTransport(
     },
     async listChanges(path, base) {
       bases.set(path, base);
-      later(changes(projects, path, base, changed));
+      later(markedChanges(path, base));
+    },
+    async markSeen(path, base, paths, seen) {
+      const listed = changes(projects, path, base, changed);
+      const key = `${path}\n${listed.base}`;
+      const marks = seenMarks.get(key) ?? new Map<string, string>();
+      for (const f of listed.files.filter((f) => paths.includes(f.path))) {
+        if (seen) marks.set(f.path, textOf(path, f.path));
+        else marks.delete(f.path);
+      }
+      seenMarks.set(key, marks);
+      later(markedChanges(path, base));
+    },
+    async listCommits(path) {
+      const followed = worktreeAt(path);
+      const error = followed ? null : `${path} is not a worktree of a followed project`;
+      const commits = followed ? MOCK_COMMITS : [];
+      later({ type: "commits", path, commits, truncated: false, error });
     },
     stageFiles: git.stageFiles,
     commit: git.commit,
@@ -1732,6 +2009,13 @@ export function createMockTransport(
       // As the service does when a log goes (D19.4).
       listSessions();
     },
+    async whoWrote(worktree, path, line, side) {
+      const origin = mockAuthor(sessions, worktree, path, line, side);
+      later({ type: "line_author", worktree, path, line, side, origin });
+    },
+    async listSessionFiles(id) {
+      later({ type: "session_files", id, files: mockSessionFiles(id), truncated: false });
+    },
     async moveSession(id, config_dir) {
       const found = sessions.find((x) => x.id === id);
       const running = [...terminals.values()].some((t) => t.agent === id);
@@ -1762,10 +2046,15 @@ export function createMockTransport(
       );
       later({ type: "search_results", ...answer, matches, error: null });
     },
-    async openFile(worktree, path) {
+    async openFile(worktree, path, base) {
       // A folder project's file has no base (23.1).
       const folder = holder(worktree)?.folder;
-      later({ type: "file", ...fileAt(worktree, path), ...(folder && { base: null }) });
+      const read = fileAt(worktree, path);
+      // Since an agent's turn, a file it did not change is as it was then (27.2).
+      const turn = typeof base === "object" && "turn" in base;
+      const same = turn && !sinceTurn(changed, worktree).some((f) => f.path === path);
+      const at = folder ? { base: null } : same ? { base: read.content } : {};
+      later({ type: "file", ...read, ...at });
     },
     async openTable(worktree, path) {
       later({ type: "table", ...table(fileAt(worktree, path)) });

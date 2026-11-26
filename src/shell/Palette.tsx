@@ -1,6 +1,7 @@
 import { FileTextIcon, GitBranchIcon, type Icon, LightningIcon } from "@phosphor-icons/react";
 import { useEffect, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
+import { whoWrote } from "../provenance";
 import { runScript, worktreeScripts } from "../scripts";
 import { commandKeys, currentProject, goToAgent, platformCommands } from "../shortcuts";
 import {
@@ -16,11 +17,12 @@ import {
 } from "../store";
 import { showOpenFailure } from "../terminals";
 import { transport } from "../transport";
+import { cursorAsk } from "../viewer/lineAuthor";
 import { reviewTarget, sendReview } from "../viewer/review";
 import { composing, isMac, keyText } from "../window";
 import { askRemoveProject } from "./ConfirmDialog";
 import { ICON, SearchIcon, STATE_LABEL } from "./icons";
-import { leaveFile, panelViews, SEARCH_DELAY_MS } from "./RightPanel";
+import { leaveFile, markSeen, panelViews, SEARCH_DELAY_MS, unseenFiles } from "./RightPanel";
 
 // The command palette (Ctrl+Shift+P, 6.3): one filtered list of commands, agents and worktrees,
 // and the lines of the selected worktree's files holding the typed text.
@@ -99,6 +101,16 @@ export function paletteCommands(s: HiveState): PaletteItem[] {
         run: () => showOpenFailure(runScript(worktree.path, script)),
       });
     }
+    // Its changes not seen yet (27.1), all marked at once.
+    const changes = s.changes[worktree.path];
+    if (changes && unseenFiles(changes).length > 0) {
+      const paths = changes.files.map((f) => f.path);
+      extra.push({
+        label: "Mark all as seen",
+        detail: worktree.name,
+        run: () => markSeen(changes, paths, true),
+      });
+    }
   }
   // As the rail's icons (25.3): the views the shown place has; each opens the panel on it.
   for (const { view, label } of panelViews(place?.project)) {
@@ -111,6 +123,15 @@ export function paletteCommands(s: HiveState): PaletteItem[] {
     });
   }
   if (!("why" in reviewTarget(s))) extra.push({ label: "Send review", run: sendReview });
+  // The cursor's line of the editor shown (27.5); no shortcut (Q8).
+  const line = s.openFile && s.fileShown ? cursorAsk(s.openFile) : null;
+  if (line) {
+    extra.push({
+      label: "Who wrote this line?",
+      detail: `${line.path}:${line.line}`,
+      run: () => whoWrote(line),
+    });
+  }
   // As the app menu's item (23.5): only macOS has an app to remove; Windows keeps its own
   // uninstaller.
   if (isMac()) extra.push({ label: "Uninstall Hive…", run: () => openModal("uninstall") });

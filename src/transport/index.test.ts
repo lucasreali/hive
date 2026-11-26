@@ -9,6 +9,8 @@ test("the Tauri transport is used inside the app unless ?mock is set", async () 
   expect(await pickTransport(false, "")).not.toBe(tauriTransport);
   // A second host (26.18), its fake service linked as a remote one.
   const remote = await pickTransport(true, "?mock=remote");
+  // With a host count (27.8).
+  expect(await pickTransport(true, "?mock=remote&hosts=3")).not.toBe(tauriTransport);
   expect(remote).not.toBe(tauriTransport);
   expect(remote.byeHosts).not.toBe((await pickTransport(true, "?mock")).byeHosts);
 });

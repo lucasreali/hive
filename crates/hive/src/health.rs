@@ -168,6 +168,7 @@ pub(crate) mod tests {
             main,
             claude: false,
             status: None,
+            review_of: None,
         }
     }
 

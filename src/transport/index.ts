@@ -5,6 +5,7 @@ import type {
   AppMode,
   DiffBase,
   GhAccount,
+  LineSide,
   ServiceMessage,
   SessionTarget,
   Settings,
@@ -213,6 +214,25 @@ export interface Transport {
   /** Renames a Claude worktree; answered by `worktree_renamed` or `rename_worktree_failed`. */
   renameWorktree(path: string, name: string): Promise<void>;
   /**
+   * A review of the worktree `path` (27.4): a new worktree on a new branch `review-<name>` from
+   * its branch's tip, shown under it. Answered by `worktree_created` or `create_worktree_failed`
+   * (named `path`).
+   */
+  createReview(path: string): Promise<void>;
+  /** What bringing the review `path`'s changes back would do; answered by `bring_back_plan`. */
+  planBringBack(path: string): Promise<void>;
+  /**
+   * Brings the review `path`'s commits into the reviewed branch while the plan shown still holds
+   * (the reviewed branch `into` at `base`, the review's at `tip`): only on the user's click
+   * (#12). Answered by `brought_back` or `bring_back_failed`.
+   */
+  bringBack(path: string, into: string, base: string, tip: string): Promise<void>;
+  /**
+   * Removes the review `path` as `removeWorktree` does, and its branch when every commit of it
+   * was brought back. Answered by `worktree_removed` or `remove_worktree_failed`.
+   */
+  discardReview(path: string, force: boolean): Promise<void>;
+  /**
    * Watches one worktree instead of any other; its files arrive as `files`, again on every change,
    * each time with its `changes` against `base`.
    */
@@ -228,6 +248,13 @@ export interface Transport {
   setView(terminal: number | null, focused: boolean, visible: boolean): Promise<void>;
   /** What differs from `base` in the worktree at `path`; answered by `changes`. */
   listChanges(path: string, base: DiffBase): Promise<void>;
+  /** The commits of the worktree at `path` to compare with (27.2); answered by `commits`. */
+  listCommits(path: string): Promise<void>;
+  /**
+   * Marks `files` of the worktree at `path` as seen in its diff against `base`, or not (27.1);
+   * answered by `changes`, or `error` when the marks cannot be kept.
+   */
+  markSeen(path: string, base: DiffBase, files: string[], seen: boolean): Promise<void>;
   /** The scripts of the worktree at `path` (23.4); answered by `scripts`. */
   listScripts(path: string): Promise<void>;
   /** Claude sessions of the followed projects; answered by `sessions`. */
@@ -236,6 +263,19 @@ export interface Transport {
   locateSession(id: string, target: SessionTarget): Promise<void>;
   /** Deletes a session's log; answered by `session_deleted` or `delete_session_failed`. */
   deleteSession(id: string): Promise<void>;
+  /**
+   * Who wrote `line` (1-based) of `path` in the worktree (27.5), on its `side`: the file as it
+   * is, or the diff's old side at `base`; answered by `line_author`.
+   */
+  whoWrote(
+    worktree: string,
+    path: string,
+    line: number,
+    side: LineSide,
+    base: DiffBase,
+  ): Promise<void>;
+  /** The files the session `id` changed, as Hive recorded (27.5); answered by `session_files`. */
+  listSessionFiles(id: string): Promise<void>;
   /**
    * Moves a session's log into the Claude account `configDir`'s folder (null: the default
    * one); answered by `session_moved` or `move_session_failed`.
@@ -375,7 +415,8 @@ export interface Transport {
  * The Tauri transport inside the app; the in-browser fake service otherwise or with `?mock`.
  * `?mock=mismatch` / `?mock=disconnected` make the fake service fail the connection;
  * `?mock=empty` starts it with no projects; `?mock=remote` links it to a second fake service, the
- * remote host `gpu-box` (26.18, `mockHosts.ts`); `?mock=choose` first asks where the service runs (12.5.4); `?mock=update` offers an update that fails; `?mock=states` adds agents in every state;
+ * remote host `gpu-box` (26.18, `mockHosts.ts`), and `&hosts=<n>` adds fake hosts up to n in
+ * every link state (27.8); `?mock=choose` first asks where the service runs (12.5.4); `?mock=update` offers an update that fails; `?mock=states` adds agents in every state;
  * `?mock=load[&cast=<url>]` replays a recording into
  * every terminal (the load test, 1.11). The fake service is a chunk of its own, loaded only
  * then (9.24): the app's startup bundle does not carry it.
@@ -389,7 +430,7 @@ export async function pickTransport(
   if (tauri && mock === null) return tauriTransport;
   if (mock === "remote") {
     const { createHostsTransport } = await import("./mockHosts");
-    return createHostsTransport(params.get("cast"));
+    return createHostsTransport(params.get("cast"), Number(params.get("hosts") ?? 1));
   }
   const { createMockTransport } = await import("./mock");
   return createMockTransport(mock, params.get("cast"));

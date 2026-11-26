@@ -15,7 +15,8 @@ import {
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { type MouseEvent, useEffect, useRef, useState } from "react";
 import { agentKey } from "../hosts";
-import type { Session, Settings } from "../protocol";
+import type { Session, SessionFile, Settings } from "../protocol";
+import { editAuthor, editLine } from "../provenance";
 import {
   ago,
   copy,
@@ -26,9 +27,17 @@ import {
   sessionName,
   sessionTokens,
 } from "../sessions";
-import { onRemote, openSessionMenu, useHive } from "../store";
+import {
+  type HiveState,
+  onRemote,
+  openSessionMenu,
+  type SessionFocus,
+  showFailure,
+  useHive,
+} from "../store";
 import { transport } from "../transport";
 import { ICON, RefreshIcon, StateIcon } from "./icons";
+import { leaveFile } from "./RightPanel";
 import { SearchField } from "./SearchField";
 import { Submenu } from "./TerminalArea";
 import { ContextMenu } from "./WorktreeMenu";
@@ -80,6 +89,10 @@ export function SessionsView({ worktree }: { worktree: string }) {
   const matches = (x: Session) =>
     [x.title, x.last_text, x.branch, x.id].some((v) => v?.toLowerCase().includes(q));
   const shown = (sessions ?? []).filter((x) => x.worktree === worktree && matches(x));
+  // "Who wrote this line?" (27.5): the session it names, scrolled to, or shown on top when this
+  // worktree does not list it.
+  const focus = useHive((s) => s.sessionFocus);
+  const focusAt = focus ? shown.findIndex((x) => x.id === focus.edit.session) : -1;
   // Hundreds of sessions: only the rows in view are rendered, each measured as it shows. A size
   // is kept by session id, not place: the refresh and the search move a session to another index.
   const scroller = useRef<HTMLDivElement>(null);
@@ -90,6 +103,12 @@ export function SessionsView({ worktree }: { worktree: string }) {
     estimateSize: () => 72,
     overscan: 6,
   });
+  const scrolled = useRef<SessionFocus | null>(null);
+  useEffect(() => {
+    if (focusAt < 0 || scrolled.current === focus) return;
+    scrolled.current = focus;
+    virtual.scrollToIndex(focusAt, { align: "start" });
+  }, [focus, focusAt, virtual]);
   return (
     <>
       <div className="files-search sessions-search">
@@ -113,6 +132,9 @@ export function SessionsView({ worktree }: { worktree: string }) {
         </button>
       </div>
       {error && <div className="files-error">{error}</div>}
+      {focus && !listsFocus(sessions ?? [], worktree, focus) && (
+        <FocusFrom focus={focus} worktree={worktree} sessions={sessions ?? []} />
+      )}
       <div className="sessions hive-scroll" ref={scroller}>
         <ul aria-label="Sessions" style={{ height: virtual.getTotalSize(), position: "relative" }}>
           {sessions && shown.length === 0 && (
@@ -125,6 +147,7 @@ export function SessionsView({ worktree }: { worktree: string }) {
                 key={x.id}
                 session={x}
                 live={!!agents[agentKey(host, x.id)]}
+                worktree={worktree}
                 index={item.index}
                 measure={virtual.measureElement}
                 top={item.start}
@@ -138,16 +161,67 @@ export function SessionsView({ worktree }: { worktree: string }) {
   );
 }
 
+/** Whether worktree `worktree` lists the session `focus` names (a search may hide it). */
+const listsFocus = (sessions: Session[], worktree: string, focus: SessionFocus) =>
+  sessions.some((x) => x.id === focus.edit.session && x.worktree === worktree);
+
+/** The name of the worktree `id`, as the tree shows it; its path when not followed. */
+const worktreeName = (projects: HiveState["projects"], id: string) =>
+  Object.values(projects ?? {})
+    .flatMap((p) => p.worktrees)
+    .find((w) => w.id === id)?.name ?? id;
+
+/**
+ * The session an edit names when the shown worktree does not list it (27.5, Q4): on top, under
+ * "From <worktree>", without switching worktree; a deleted one (its record stays) by its name.
+ */
+function FocusFrom({
+  focus,
+  worktree,
+  sessions,
+}: {
+  focus: SessionFocus;
+  worktree: string;
+  sessions: Session[];
+}) {
+  const { edit } = focus;
+  const session = sessions.find((x) => x.id === edit.session);
+  const live = useHive((s) => !!session && !!s.agents[agentKey(s.host, session.id)]);
+  const from = useHive((s) => worktreeName(s.projects, session?.worktree ?? edit.worktree));
+  return (
+    <section className="sessions-from" aria-label={`From ${from}`}>
+      <h3 className="sessions-from-title">From {from}</h3>
+      <ul>
+        {session ? (
+          <SessionRow session={session} live={live} worktree={worktree} />
+        ) : (
+          <li className="session" data-focused>
+            <div className="session-main">
+              <span className="session-title">
+                <span className="label">{editAuthor(edit)}</span>
+              </span>
+              <span className="session-edit">{editLine(edit)}</span>
+            </div>
+            <SessionFiles id={edit.session} worktree={worktree} focus={focus} />
+          </li>
+        )}
+      </ul>
+    </section>
+  );
+}
+
 interface RowProps {
   session: Session;
   live: boolean;
-  /** Its place in the list, where the virtualizer puts it and how it measures it. */
-  index: number;
-  measure: (row: HTMLLIElement | null) => void;
-  top: number;
+  /** The worktree the view shows: a file of another one names its worktree. */
+  worktree: string;
+  /** In the virtual list: its place, how it is measured and where it is put. */
+  index?: number;
+  measure?: (row: HTMLLIElement | null) => void;
+  top?: number;
 }
 
-function SessionRow({ session: x, live, index, measure, top }: RowProps) {
+function SessionRow({ session: x, live, worktree, index, measure, top }: RowProps) {
   // A session in a Hive terminal has its live state; any other, the one its log tells.
   const state = useHive((s) =>
     live ? (s.agentStates[agentKey(s.host, x.id)]?.state ?? "idle") : x.state,
@@ -157,14 +231,19 @@ function SessionRow({ session: x, live, index, measure, top }: RowProps) {
   const account = useHive((s) => accountName(s.settings.claude, x));
   // Running outside Hive: nothing to do here, and nothing said.
   const title = live ? "Show its terminal" : x.running ? undefined : "Resume in its worktree";
+  // The edit "Who wrote this line?" found (27.5), and whether its files are listed.
+  const focus = useHive((s) => (s.sessionFocus?.edit.session === x.id ? s.sessionFocus : null));
+  const open = useHive((s) => s.openSessionFiles.includes(x.id));
+  const files = x.files_changed;
   return (
     <li
       className="session"
       data-live={live}
       data-running={x.running}
+      data-focused={focus ? true : undefined}
       data-index={index}
       ref={measure}
-      style={{ transform: `translateY(${top}px)` }}
+      style={top === undefined ? undefined : { transform: `translateY(${top}px)` }}
     >
       <button
         type="button"
@@ -187,7 +266,20 @@ function SessionRow({ session: x, live, index, measure, top }: RowProps) {
             .filter(Boolean)
             .join(" · ")}
         </span>
+        {focus && <span className="session-edit">{editLine(focus.edit)}</span>}
       </button>
+      {files > 0 && (
+        <button
+          type="button"
+          className="session-files-toggle"
+          aria-expanded={open}
+          onClick={() => toggleFiles(x.id)}
+        >
+          <CaretRightIcon className="session-files-caret" size={10} weight="bold" />
+          {files === 1 ? "1 file" : `${files} files`}
+        </button>
+      )}
+      {open && <SessionFiles id={x.id} worktree={worktree} focus={focus} />}
       <button
         type="button"
         className="session-more"
@@ -198,6 +290,70 @@ function SessionRow({ session: x, live, index, measure, top }: RowProps) {
         <DotsThreeIcon size={18} weight="bold" aria-hidden="true" />
       </button>
     </li>
+  );
+}
+
+/** Opens or closes a session's "Files changed" list. */
+const toggleFiles = (id: string) =>
+  useHive.setState((s) => ({
+    openSessionFiles: s.openSessionFiles.includes(id)
+      ? s.openSessionFiles.filter((x) => x !== id)
+      : [...s.openSessionFiles, id],
+  }));
+
+/** A changed file's line: its edits, its lines still the session's, and the last edit's time. */
+const fileMeta = (f: SessionFile) =>
+  [
+    f.edits === 1 ? "1 edit" : `${f.edits} edits`,
+    `${f.lines_now} ${f.lines_now === 1 ? "line" : "lines"} now`,
+    ago(f.last_ms),
+  ].join(" · ");
+
+/**
+ * A session's "Files changed" (27.5), asked of the service each time it opens: a click opens
+ * the file at the first of its lines that are still the session's. The file an edit was found
+ * in is highlighted.
+ */
+function SessionFiles({
+  id,
+  worktree,
+  focus,
+}: {
+  id: string;
+  worktree: string;
+  focus: SessionFocus | null;
+}) {
+  const listed = useHive((s) => s.sessionFiles[id]);
+  useEffect(() => void showFailure(transport.listSessionFiles(id)), [id]);
+  const projects = useHive((s) => s.projects);
+  if (!listed) return <div className="session-files hint">Loading…</div>;
+  return (
+    <ul className="session-files" aria-label="Files changed">
+      {listed.files.map((f) => {
+        const mark = focus?.path === f.path && focus.edit.worktree === f.worktree;
+        return (
+          <li key={`${f.worktree}\n${f.path}`}>
+            <button
+              type="button"
+              className="session-file"
+              data-focused={mark || undefined}
+              title={f.path}
+              onClick={() =>
+                leaveFile({ worktree: f.worktree, path: f.path }, true, f.first_line ?? undefined)
+              }
+            >
+              <span className="session-file-path">{f.path}</span>
+              <span className="session-meta">
+                {f.worktree === worktree
+                  ? fileMeta(f)
+                  : `${worktreeName(projects, f.worktree)} · ${fileMeta(f)}`}
+              </span>
+            </button>
+          </li>
+        );
+      })}
+      {listed.truncated && <li className="hint">More files are not listed.</li>}
+    </ul>
   );
 }
 

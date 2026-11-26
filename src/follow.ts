@@ -1,8 +1,8 @@
 // Keep the service following what the files panel shows: the worktree it lists and the open file.
 
-import type { DiffBase } from "./protocol";
 import {
   askBufferTable,
+  baseKey,
   clearTableAsks,
   diffBase,
   dropTableAsks,
@@ -37,7 +37,7 @@ export function followPanel(transport: Transport): () => void {
     const shown = open ? (panelWorktree(s)?.worktree.path ?? null) : null;
     // A new base is watched anew: the service lists its changes against it.
     const base = shown && diffBase(s, shown);
-    const key = shown && `${base}:${shown}`;
+    const key = shown && base && `${baseKey(base)}:${shown}`;
     if (key !== watched) {
       if (shown && base) void transport.watchWorktree(shown, base);
       else if (connected) void transport.unwatchWorktree();
@@ -88,7 +88,7 @@ export function followView(transport: Transport): () => void {
  */
 export function followOpenFile(transport: Transport): () => void {
   const reasons = (s: HiveState, open: OpenFile | null, recheck: number) => {
-    const base = open && diffBase(s, open.worktree);
+    const base = open && baseKey(diffBase(s, open.worktree));
     // A folder project's folder has no changes (23.1): each new listing of it stands in.
     const folder = open && s.projects?.[open.worktree]?.folder;
     const changes = open && (folder ? s.worktreeFiles : s.changesSeen[open.worktree]);
@@ -96,7 +96,12 @@ export function followOpenFile(transport: Transport): () => void {
   };
   const ask = (open: OpenFile | null, seen: unknown[], before: unknown[]) => {
     if (seen.every((reason, i) => reason === before[i])) return before;
-    if (open) void transport.openFile(open.worktree, open.path, seen[2] as DiffBase);
+    if (open)
+      void transport.openFile(
+        open.worktree,
+        open.path,
+        diffBase(useHive.getState(), open.worktree),
+      );
     return seen;
   };
   let asked: unknown[] = [];

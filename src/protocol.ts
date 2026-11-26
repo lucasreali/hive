@@ -171,11 +171,21 @@ export type ServiceMessage =
   | { type: "remove_worktree_failed"; path: string; message: string }
   | { type: "worktree_renamed"; project: Project; from: string; path: string }
   | { type: "rename_worktree_failed"; path: string; name: string; message: string }
+  | ({ type: "bring_back_plan" } & BringBackPlan)
+  | {
+      type: "brought_back";
+      project: Project;
+      path: string;
+      commits: number;
+      fast_forward: boolean;
+    }
+  | { type: "bring_back_failed"; path: string; message: string }
   | { type: "worktree_status"; path: string; status: WorktreeStatus | null }
   | ({ type: "files" } & WorktreeFiles)
   // A refused request, e.g. watching a worktree that is not followed. Not stored.
   | { type: "error"; message: string }
   | ({ type: "changes" } & Changes)
+  | ({ type: "commits" } & Commits)
   | ({ type: "scripts" } & WorktreeScripts)
   | ({ type: "file" } & FileText)
   // Consumed by the Tauri side (26.16), never forwarded to the UI: it answers with
@@ -218,6 +228,17 @@ export type ServiceMessage =
   // Handled by `resume` (src/sessions.ts), not stored.
   | { type: "session_moved"; id: string; config_dir: string | null }
   | { type: "move_session_failed"; id: string; message: string }
+  // Who wrote a line (27.5): the open question's answer (`provenance` in the store).
+  | {
+      type: "line_author";
+      worktree: string;
+      path: string;
+      line: number;
+      side: LineSide;
+      origin: LineOrigin;
+    }
+  // The files a session changed (27.5), kept by session (`sessionFiles` in the store).
+  | { type: "session_files"; id: string; files: SessionFile[]; truncated: boolean }
   | { type: "file_saved"; worktree: string; path: string; version: string }
   | { type: "save_failed"; worktree: string; path: string; error: SaveError; message: string }
   | { type: "file_created"; worktree: string; path: string }
@@ -289,7 +310,32 @@ export type Worktree = {
   claude: boolean;
   /** Null when git could not tell. */
   status: WorktreeStatus | null;
+  /** The worktree (its path) this one reviews (27.4): shown under that one. */
+  review_of?: string | null;
 };
+
+/** A commit "Bring changes back" would bring (27.4). */
+export type ReviewCommit = { id: string; summary: string };
+
+/**
+ * What "Bring changes back" of a review would do (27.4): its branch's commits missing from the
+ * reviewed worktree's branch `into` (at `base`), newest first (at most 100 listed, `total` counts them all),
+ * and whether `into` only moves forward to `tip`.
+ */
+export type ReviewPlan = {
+  reviewed: string;
+  into: string;
+  /** `into`'s commit when planned: "Bring back" must still find it there. */
+  base: string;
+  branch: string;
+  tip: string;
+  commits: ReviewCommit[];
+  total: number;
+  fast_forward: boolean;
+};
+
+/** The service's `bring_back_plan`: a plan, or why there is none. */
+export type BringBackPlan = { path: string; plan: ReviewPlan | null; error: string | null };
 
 /**
  * Mirrors `hive_protocol::WorktreeStatus`: files changed and their lines added and removed
@@ -435,13 +481,52 @@ export type ChangedFile = {
   removed: number | null;
   /** What of it is staged (27.6); null when nothing of it is left to commit. */
   staged: Staged | null;
+  /** Its seen mark (27.1): "changed" when its diff changed since it was marked; absent: none. */
+  seen?: SeenMark;
 };
 
+/** Mirrors `hive_protocol::SeenMark`. */
+export type SeenMark = "seen" | "changed";
+
 /**
- * What a worktree's changes are compared with (9.11): its HEAD, or the merge-base with the main
- * worktree's branch (the service finds it).
+ * What a worktree's changes are compared with (9.11, 27.2): its HEAD, the merge-base with the main
+ * worktree's branch (the service finds it), the worktree as it was when an agent's last turn
+ * started (the service's snapshot), or a commit picked by its full id.
  */
-export type DiffBase = "head" | "branch";
+export type DiffBase =
+  | "head"
+  | "branch"
+  | { turn: { session: string } }
+  | { commit: { id: string } };
+
+/** Mirrors `hive_protocol::TurnBase`: an agent whose last turn the worktree can be compared with. */
+export type TurnBase = {
+  session: string;
+  /** The agent's title, or the start of its session id. */
+  title: string;
+  started_ms: number;
+  /** The snapshot finished after the agent's first edit: that edit may be missing. */
+  late: boolean;
+};
+
+/** Mirrors `hive_protocol::CommitInfo`: a commit the worktree can be compared with (27.2). */
+export type CommitInfo = {
+  id: string;
+  short: string;
+  author: string;
+  time_ms: number;
+  subject: string;
+  /** Made on the worktree's branch since it left the main worktree's branch. */
+  on_branch: boolean;
+};
+
+/** A worktree's last commits (`commits`), its branch's first. */
+export type Commits = {
+  path: string;
+  commits: CommitInfo[];
+  truncated: boolean;
+  error: string | null;
+};
 
 /** A worktree's changes against its base, sorted by path, with the service's totals. */
 export type Changes = {
@@ -455,6 +540,8 @@ export type Changes = {
   added: number;
   removed: number;
   error: string | null;
+  /** The agents whose last turn can be compared with, the latest first (absent before 27.2). */
+  turns?: TurnBase[];
 };
 
 /**
@@ -491,8 +578,54 @@ export type Session = {
    * shell Hive's terminals run; null when that shell (Command Prompt) cannot quote its folders.
    */
   resume_command: string | null;
+  /** The files Hive recorded it changing (27.5), 0 when none. */
+  files_changed: number;
 };
 export type SessionTarget = "log" | "folder";
+
+/** Which side of a file a line number counts on (27.5): the worktree's file, or the diff's base. */
+export type LineSide = "worktree" | "base";
+
+/** A commit, as `git blame` names it (`ms`: its author time). */
+export type LineCommit = { id: string; author: string; ms: number; summary: string };
+
+/** The recorded edit that wrote a line (27.5); `start`/`len`: the lines still from it. */
+export type LineEdit = {
+  session: string;
+  title: string | null;
+  /** Its log is gone (deleted in the Sessions view): the record stays. */
+  deleted: boolean;
+  project: string | null;
+  worktree: string;
+  agent: string | null;
+  agent_type: string | null;
+  tool: string;
+  tool_use_id: string | null;
+  ms: number;
+  /** The user changed the edit before accepting it. */
+  user_modified: boolean;
+  start: number;
+  len: number;
+};
+
+/**
+ * Who wrote a line, as far as Hive recorded (27.5): a session's edit (`commit` null: followed
+ * live; set: found through `git blame`, so only probable), the user in Hive's editor, or unknown.
+ */
+export type LineOrigin =
+  | { kind: "session"; edit: LineEdit; commit: LineCommit | null }
+  | { kind: "editor"; ms: number }
+  | { kind: "unknown"; commit: LineCommit | null };
+
+/** A file a session changed (27.5): `path` relative to `worktree`, `first_line` to open it at. */
+export type SessionFile = {
+  worktree: string;
+  path: string;
+  edits: number;
+  lines_now: number;
+  first_line: number | null;
+  last_ms: number;
+};
 
 /** A line of a file holding the searched text (`line` is 1-based). */
 export type SearchMatch = { path: string; line: number; text: string };

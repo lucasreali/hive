@@ -151,7 +151,8 @@
               "behind": null,
               "merged": false,
               "last_commit_ms": 2
-            }
+            },
+            "review_of": null
           }
         ],
         "error": null,
@@ -183,7 +184,8 @@
             "behind": null,
             "merged": false,
             "last_commit_ms": 2
-          }
+          },
+          "review_of": null
         }
       ],
       "error": null,
@@ -220,7 +222,8 @@
             "behind": null,
             "merged": false,
             "last_commit_ms": 2
-          }
+          },
+          "review_of": null
         }
       ],
       "error": null,
@@ -480,7 +483,8 @@
             "behind": null,
             "merged": false,
             "last_commit_ms": 2
-          }
+          },
+          "review_of": null
         }
       ],
       "error": null,
@@ -519,7 +523,8 @@
             "behind": null,
             "merged": false,
             "last_commit_ms": 2
-          }
+          },
+          "review_of": null
         }
       ],
       "error": null,
@@ -556,7 +561,8 @@
             "behind": null,
             "merged": false,
             "last_commit_ms": 2
-          }
+          },
+          "review_of": null
         }
       ],
       "error": null,
@@ -571,6 +577,66 @@
     "type": "rename_worktree_failed",
     "path": "/r/.claude/worktrees/x",
     "name": "y",
+    "message": "m"
+  },
+  {
+    "type": "bring_back_plan",
+    "path": "/r/.claude/worktrees/review-x",
+    "plan": {
+      "reviewed": "/r/.claude/worktrees/x",
+      "into": "worktree-x",
+      "base": "beef",
+      "branch": "review-x",
+      "tip": "c0ffee",
+      "commits": [
+        {
+          "id": "c0ffee",
+          "summary": "Fix the login"
+        }
+      ],
+      "total": 1,
+      "fast_forward": false
+    },
+    "error": null
+  },
+  {
+    "type": "brought_back",
+    "project": {
+      "id": "/r",
+      "name": "r",
+      "path": "/r",
+      "worktrees": [
+        {
+          "id": "/r",
+          "name": "main",
+          "path": "/r",
+          "branch": "main",
+          "main": true,
+          "claude": false,
+          "status": {
+            "changes": 1,
+            "added": 3,
+            "removed": 4,
+            "ahead": null,
+            "behind": null,
+            "merged": false,
+            "last_commit_ms": 2
+          },
+          "review_of": null
+        }
+      ],
+      "error": null,
+      "group": false,
+      "folder": false,
+      "parent": "/g"
+    },
+    "path": "/r/.claude/worktrees/review-x",
+    "commits": 1,
+    "fast_forward": false
+  },
+  {
+    "type": "bring_back_failed",
+    "path": "/r/.claude/worktrees/review-x",
     "message": "m"
   },
   {
@@ -598,16 +664,41 @@
     "base_error": null,
     "files": [
       {
-        "path": "a.rs",
+        "path": "a",
         "status": "modified",
         "old_path": null,
         "added": 1,
         "removed": 0,
-        "staged": "partly"
+        "staged": "partly",
+        "seen": "seen"
       }
     ],
-    "added": 0,
+    "added": 1,
     "removed": 0,
+    "error": null,
+    "turns": [
+      {
+        "session": "s1",
+        "title": "claude",
+        "started_ms": 1,
+        "late": false
+      }
+    ]
+  },
+  {
+    "type": "commits",
+    "path": "/r",
+    "commits": [
+      {
+        "id": "0123456789012345678901234567890123456789",
+        "short": "0123456",
+        "author": "A",
+        "time_ms": 1000,
+        "subject": "fix: x",
+        "on_branch": true
+      }
+    ],
+    "truncated": false,
     "error": null
   },
   {
@@ -660,6 +751,52 @@
     "type": "move_session_failed",
     "id": "s",
     "message": "m"
+  },
+  {
+    "type": "line_author",
+    "worktree": "/r",
+    "path": "a.rs",
+    "line": 3,
+    "side": "worktree",
+    "origin": {
+      "kind": "session",
+      "edit": {
+        "session": "s",
+        "title": "t",
+        "deleted": false,
+        "project": "/r",
+        "worktree": "/r",
+        "agent": "a1",
+        "agent_type": "general-purpose",
+        "tool": "Edit",
+        "tool_use_id": "toolu_1",
+        "ms": 5,
+        "user_modified": true,
+        "start": 2,
+        "len": 3
+      },
+      "commit": {
+        "id": "abc",
+        "author": "A",
+        "ms": 6,
+        "summary": "fix"
+      }
+    }
+  },
+  {
+    "type": "session_files",
+    "id": "s",
+    "files": [
+      {
+        "worktree": "/r",
+        "path": "a.rs",
+        "edits": 2,
+        "lines_now": 3,
+        "first_line": 4,
+        "last_ms": 5
+      }
+    ],
+    "truncated": false
   },
   {
     "type": "search_results",

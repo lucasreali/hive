@@ -51,6 +51,9 @@ mod locale;
 mod projects;
 #[cfg(unix)]
 #[cfg(test)]
+mod provenance;
+#[cfg(unix)]
+#[cfg(test)]
 mod pulls;
 #[cfg(unix)]
 #[cfg(test)]
@@ -58,6 +61,9 @@ mod registry;
 #[cfg(target_os = "linux")]
 #[cfg(test)]
 mod remote;
+#[cfg(unix)]
+#[cfg(test)]
+mod review;
 #[cfg(unix)]
 #[cfg(test)]
 mod scripts;
@@ -70,6 +76,9 @@ mod statusline;
 #[cfg(unix)]
 #[cfg(test)]
 mod terminal;
+#[cfg(unix)]
+#[cfg(test)]
+mod turns;
 #[cfg(unix)]
 #[cfg(test)]
 mod uninstall;

@@ -71,16 +71,24 @@ sort! {
         | CreateIssueWorktree
         | RemoveWorktree
         | RenameWorktree
+        | CreateReview
+        | PlanBringBack
+        | BringBack
+        | DiscardReview
         | WatchWorktree
         | UnwatchWorktree
         | ExpandIgnored
         | View
         | ListChanges
+        | ListCommits
+        | MarkSeen
         | ListScripts
         | ListSessions
         | LocateSession
         | DeleteSession
         | MoveSession
+        | WhoWrote
+        | ListSessionFiles
         | SearchFiles
         | ListDirs
         | OpenFile
@@ -164,9 +172,13 @@ sort! {
         | RemoveWorktreeFailed
         | WorktreeRenamed
         | RenameWorktreeFailed
+        | BringBackPlan
+        | BroughtBack
+        | BringBackFailed
         | WorktreeStatus
         | Files
         | Changes
+        | Commits
         | Scripts
         | Sessions
         | RestoreSessions
@@ -175,6 +187,8 @@ sort! {
         | DeleteSessionFailed
         | SessionMoved
         | MoveSessionFailed
+        | LineAuthor
+        | SessionFiles
         | SearchResults
         | Dirs
         | File
@@ -223,6 +237,7 @@ fn project() -> Project {
                 merged: false,
                 last_commit_ms: 2,
             }),
+            review_of: None,
         }],
         error: None,
         group: false,
@@ -543,6 +558,33 @@ fn samples() -> Vec<Control> {
             name: s("y"),
             message: m(),
         },
+        BringBackPlan {
+            path: s("/r/.claude/worktrees/review-x"),
+            plan: Some(ReviewPlan {
+                reviewed: s("/r/.claude/worktrees/x"),
+                into: s("worktree-x"),
+                base: s("beef"),
+                branch: s("review-x"),
+                tip: s("c0ffee"),
+                commits: vec![ReviewCommit {
+                    id: s("c0ffee"),
+                    summary: s("Fix the login"),
+                }],
+                total: 1,
+                fast_forward: false,
+            }),
+            error: None,
+        },
+        BroughtBack {
+            project: project(),
+            path: s("/r/.claude/worktrees/review-x"),
+            commits: 1,
+            fast_forward: false,
+        },
+        BringBackFailed {
+            path: s("/r/.claude/worktrees/review-x"),
+            message: m(),
+        },
         WorktreeStatus {
             path: s("/r"),
             status: None,
@@ -559,15 +601,35 @@ fn samples() -> Vec<Control> {
             branch: None,
             base_error: None,
             files: vec![ChangedFile {
-                path: s("a.rs"),
+                path: s("a"),
                 status: FileStatus::Modified,
                 old_path: None,
                 added: Some(1),
                 removed: Some(0),
                 staged: Some(Staged::Partly),
+                seen: Some(SeenMark::Seen),
             }],
-            added: 0,
+            added: 1,
             removed: 0,
+            error: None,
+            turns: vec![TurnBase {
+                session: s("s1"),
+                title: s("claude"),
+                started_ms: 1,
+                late: false,
+            }],
+        },
+        Commits {
+            path: s("/r"),
+            commits: vec![CommitInfo {
+                id: s("0123456789012345678901234567890123456789"),
+                short: s("0123456"),
+                author: s("A"),
+                time_ms: 1_000,
+                subject: s("fix: x"),
+                on_branch: true,
+            }],
+            truncated: false,
             error: None,
         },
         Scripts {
@@ -604,6 +666,47 @@ fn samples() -> Vec<Control> {
         MoveSessionFailed {
             id: s("s"),
             message: m(),
+        },
+        LineAuthor {
+            worktree: s("/r"),
+            path: s("a.rs"),
+            line: 3,
+            side: LineSide::Worktree,
+            origin: LineOrigin::Session {
+                edit: Box::new(LineEdit {
+                    session: s("s"),
+                    title: Some(s("t")),
+                    deleted: false,
+                    project: Some(s("/r")),
+                    worktree: s("/r"),
+                    agent: Some(s("a1")),
+                    agent_type: Some(s("general-purpose")),
+                    tool: s("Edit"),
+                    tool_use_id: Some(s("toolu_1")),
+                    ms: 5,
+                    user_modified: true,
+                    start: 2,
+                    len: 3,
+                }),
+                commit: Some(LineCommit {
+                    id: s("abc"),
+                    author: s("A"),
+                    ms: 6,
+                    summary: s("fix"),
+                }),
+            },
+        },
+        SessionFiles {
+            id: s("s"),
+            files: vec![SessionFile {
+                worktree: s("/r"),
+                path: s("a.rs"),
+                edits: 2,
+                lines_now: 3,
+                first_line: Some(4),
+                last_ms: 5,
+            }],
+            truncated: false,
         },
         SearchResults {
             worktree: s("/r"),

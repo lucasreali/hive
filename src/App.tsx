@@ -4,10 +4,12 @@ import { CloseAppDialog, confirmClose } from "./shell/CloseAppDialog";
 import { ConfirmDialog } from "./shell/ConfirmDialog";
 import { ConnectionBlock } from "./shell/ConnectionBlock";
 import { FileMenu, FileNameDialog } from "./shell/FileMenu";
+import { LineMenu, LinePopover } from "./shell/LineAuthor";
 import { NewPullDialog } from "./shell/NewPullDialog";
 import { NewWorktreeDialog } from "./shell/NewWorktreeDialog";
 import { Palette } from "./shell/Palette";
 import { PushDialog } from "./shell/PushDialog";
+import { BringBackDialog, DiscardReviewDialog, ReviewWorktreeDialog } from "./shell/ReviewDialogs";
 import { RightPanel } from "./shell/RightPanel";
 import { RunWorkflowDialog } from "./shell/RunWorkflowDialog";
 import { SessionMenu } from "./shell/SessionsView";
@@ -72,6 +74,9 @@ export function App() {
         {modal === "worktree-picker" && !blocked && <WorktreePicker />}
         {modal === "remove-worktree" && !blocked && <RemoveWorktreeDialog />}
         {modal === "rename-worktree" && !blocked && <RenameWorktreeDialog />}
+        {modal === "review-worktree" && !blocked && <ReviewWorktreeDialog />}
+        {modal === "bring-back" && !blocked && <BringBackDialog />}
+        {modal === "discard-review" && !blocked && <DiscardReviewDialog />}
         {under === "new-space" && !blocked && <SpaceDialog editing={false} />}
         {under === "edit-space" && !blocked && <SpaceDialog editing />}
         {modal === "settings" && !blocked && <SettingsDialog />}
@@ -90,6 +95,8 @@ export function App() {
         {!blocked && <ProjectMenu />}
         {!blocked && <SessionMenu />}
         {!blocked && <FileMenu />}
+        {!blocked && <LineMenu />}
+        {!blocked && <LinePopover />}
         <ConnectionBlock />
       </div>
       <Toasts />

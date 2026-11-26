@@ -1,9 +1,11 @@
 import {
   ArrowUpIcon,
+  BinocularsIcon,
   BroomIcon,
   CopyIcon,
   FolderOpenIcon,
   GitBranchIcon,
+  GitMergeIcon,
   PencilSimpleIcon,
   PlayIcon,
   PlusIcon,
@@ -195,6 +197,38 @@ export function WorktreeMenu() {
         <ArrowUpIcon {...ICON} />
         Push…
       </button>
+      <hr />
+      <button
+        type="button"
+        role="menuitem"
+        disabled={!w.branch}
+        title={w.branch ? undefined : "A detached worktree has no branch to review"}
+        onClick={act(() => openModal("review-worktree", null, w.id))}
+      >
+        <BinocularsIcon {...ICON} />
+        Review in a new worktree…
+      </button>
+      {w.review_of && (
+        <>
+          <button
+            type="button"
+            role="menuitem"
+            onClick={act(() => openModal("bring-back", null, w.id))}
+          >
+            <GitMergeIcon {...ICON} />
+            Bring changes back…
+          </button>
+          <button
+            type="button"
+            role="menuitem"
+            className="danger"
+            onClick={act(() => openModal("discard-review", null, w.id))}
+          >
+            <TrashIcon {...ICON} />
+            Discard review…
+          </button>
+        </>
+      )}
       <hr />
       <button
         type="button"

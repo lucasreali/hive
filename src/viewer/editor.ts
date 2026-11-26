@@ -249,12 +249,14 @@ export type Viewer = {
  * Creates the view in `parent` for the file at `path`, highlighted by its name's language
  * (loaded on demand). CodeMirror lives outside React (#30): the component only calls `show`
  * with each new answer and `destroy` when the file closes. `show` keeps the scroll position.
- * `onSelect` hears the selected lines (null when none) whenever they may have changed.
+ * `onSelect` hears the selected lines (null when none) whenever they may have changed; `extra`
+ * goes into every state it shows (the line number menu, 27.5).
  */
 export function createViewer(
   parent: HTMLElement,
   path: string,
   onSelect: (lines: Lines | null) => void = () => {},
+  extra: Extension = [],
 ): Viewer {
   const view = new EditorView({ parent });
   trackScroll(view);
@@ -284,6 +286,7 @@ export function createViewer(
             language.extension(),
             diff,
             marks.of(commentMarks(marked)),
+            extra,
             EditorView.updateListener.of((u) => u.selectionSet && onSelect(selectedLines(u.state))),
           ],
         }),
@@ -347,6 +350,7 @@ export function createEditor(
   path: string,
   doc: Text,
   on: EditorEvents,
+  extra: Extension = [],
 ): Editor {
   const view = new EditorView({ parent });
   trackScroll(view);
@@ -387,6 +391,7 @@ export function createEditor(
         theme,
         language.extension(),
         comparing.of([]),
+        extra,
         EditorView.updateListener.of((u) => {
           if (u.docChanged) on.change(u.state.doc);
           if (u.selectionSet) on.select(selectedLines(u.state));

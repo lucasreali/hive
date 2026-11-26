@@ -86,15 +86,22 @@ test("terminal and project actions call their commands", async () => {
   await tauriTransport.createIssueWorktree("/r", 42, "main");
   await tauriTransport.removeWorktree("/r/w", true);
   await tauriTransport.renameWorktree("/r/w", "y");
+  await tauriTransport.createReview("/r/w");
+  await tauriTransport.planBringBack("/r/v");
+  await tauriTransport.bringBack("/r/v", "b", "cd", "ab");
+  await tauriTransport.discardReview("/r/v", false);
   await tauriTransport.watchWorktree("/r", "branch");
   await tauriTransport.unwatchWorktree();
   await tauriTransport.expandIgnored("/r", ["target"]);
   await tauriTransport.setView(3, true, false);
   await tauriTransport.listChanges("/r", "head");
+  await tauriTransport.markSeen("/r", "head", ["a"], true);
   await tauriTransport.listScripts("/r");
   await tauriTransport.listSessions();
   await tauriTransport.locateSession("s", "log");
   await tauriTransport.deleteSession("s");
+  await tauriTransport.whoWrote("/r", "a.ts", 3, "base", "branch");
+  await tauriTransport.listSessionFiles("s");
   await tauriTransport.searchFiles("/r", "q");
   await tauriTransport.openFile("/r", "a.ts", "head");
   await tauriTransport.openTable("/r", "a.csv");
@@ -152,15 +159,22 @@ test("terminal and project actions call their commands", async () => {
     ["create_issue_worktree", { project: "/r", number: 42, base: "main" }],
     ["remove_worktree", { path: "/r/w", force: true }],
     ["rename_worktree", { path: "/r/w", name: "y" }],
+    ["create_review", { path: "/r/w" }],
+    ["plan_bring_back", { path: "/r/v" }],
+    ["bring_back", { path: "/r/v", into: "b", base: "cd", tip: "ab" }],
+    ["discard_review", { path: "/r/v", force: false }],
     ["watch_worktree", { path: "/r", base: "branch" }],
     ["unwatch_worktree", {}],
     ["expand_ignored", { path: "/r", folders: ["target"] }],
     ["set_view", { terminal: 3, focused: true, visible: false }],
     ["list_changes", { path: "/r", base: "head" }],
+    ["mark_seen", { path: "/r", base: "head", files: ["a"], seen: true }],
     ["list_scripts", { path: "/r" }],
     ["list_sessions", {}],
     ["locate_session", { id: "s", target: "log" }],
     ["delete_session", { id: "s" }],
+    ["who_wrote", { worktree: "/r", path: "a.ts", line: 3, side: "base", base: "branch" }],
+    ["list_session_files", { id: "s" }],
     ["search_files", { worktree: "/r", query: "q" }],
     ["open_file", { worktree: "/r", path: "a.ts", base: "head" }],
     ["open_table", { worktree: "/r", path: "a.csv" }],
