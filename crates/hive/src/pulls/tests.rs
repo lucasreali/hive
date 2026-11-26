@@ -797,6 +797,7 @@ fn only_followed_projects_are_asked_about() {
         body: String::new(),
         base: "main".into(),
         draft: false,
+        push: false,
     };
     let message = format!("{other} is not a worktree of a followed project");
     assert_eq!(
@@ -1002,6 +1003,7 @@ fn a_pull_request_opens_from_the_worktree_branch() {
             body: body.into(),
             base: base.into(),
             draft,
+            push: false,
         })
     };
     let replies = create(" --title x ", "-x\nbody", " main ", true);
@@ -1094,5 +1096,60 @@ fn a_pull_request_opens_from_the_worktree_branch() {
     );
     git(&wt, &["checkout", "-q", "--detach"]);
     assert_eq!(refused("t", "", "main"), "This worktree is on no branch");
+    assert_eq!(setup.calls().len(), calls);
+}
+
+#[cfg(unix)]
+#[test]
+fn a_pull_request_can_push_its_branch_first() {
+    let setup = setup("https://github.com/o/r");
+    let root = Path::new(&setup.id);
+    // GitHub is a bare repository beside it.
+    let bare = setup.tmp.path().join("github.git");
+    git(setup.tmp.path(), &["init", "-q", "--bare", "github.git"]);
+    let instead = format!("url.{}.insteadOf", bare.display());
+    git(root, &["config", &instead, "https://github.com/o/r"]);
+    git(root, &["branch", "topic"]);
+    let wt = setup.path("wt");
+    git(
+        root,
+        &["worktree", "add", "-q", wt.to_str().unwrap(), "topic"],
+    );
+    let create = || {
+        setup.answer(Control::CreatePull {
+            worktree: wt.display().to_string(),
+            title: "t".into(),
+            body: String::new(),
+            base: "main".into(),
+            draft: false,
+            push: true,
+        })
+    };
+    let replies = create();
+    assert!(
+        matches!(&replies[0], Control::PullDone { number: 42, .. }),
+        "{replies:?}"
+    );
+    let pushed = Command::new("git")
+        .arg("-C")
+        .arg(&bare)
+        .args(["rev-parse", "--verify", "--quiet", "refs/heads/topic"])
+        .output()
+        .unwrap();
+    assert!(pushed.status.success(), "topic was not pushed");
+    let upstream = Command::new("git")
+        .arg("-C")
+        .arg(&wt)
+        .args(["config", "branch.topic.merge"])
+        .output()
+        .unwrap();
+    assert_eq!(upstream.stdout, b"refs/heads/topic\n");
+    // A push git refuses: no pull request, and git's message.
+    git(root, &["config", &instead, "/nowhere/at/all"]);
+    let calls = setup.calls().len();
+    let [Control::PullFailed { message, .. }] = &create()[..] else {
+        panic!()
+    };
+    assert!(message.starts_with("Could not push topic: "), "{message}");
     assert_eq!(setup.calls().len(), calls);
 }

@@ -59,6 +59,12 @@ sort! {
         | OpenRun
         | OpenJobLog
         | ActOnRun
+        | ListWorkflows
+        | RunWorkflow
+        | StageFiles
+        | Commit
+        | GetPushTarget
+        | Push
         | ListBranches
         | ValidateWorktreeName
         | CreateWorktree
@@ -144,6 +150,12 @@ sort! {
         | JobLog
         | RunDone
         | RunFailed
+        | Workflows
+        | WorkflowStarted
+        | WorkflowFailed
+        | PushTarget
+        | GitDone
+        | GitFailed
         | Branches
         | WorktreeNameValidated
         | WorktreeCreated
@@ -444,6 +456,51 @@ fn samples() -> Vec<Control> {
             run: 1,
             message: m(),
         },
+        Workflows {
+            project: s("/r"),
+            worktree: s("/r"),
+            workflows: vec![Workflow {
+                file: s("ci.yml"),
+                name: s("ci"),
+                inputs: vec![WorkflowInput {
+                    name: s("level"),
+                    description: m(),
+                    required: true,
+                    default: Some(s("a")),
+                    kind: s("choice"),
+                    options: vec![s("a")],
+                }],
+            }],
+            error: None,
+        },
+        WorkflowStarted {
+            project: s("/r"),
+            branch: s("main"),
+            run: Some(1),
+            message: m(),
+        },
+        WorkflowFailed {
+            project: s("/r"),
+            message: m(),
+        },
+        PushTarget {
+            worktree: s("/r"),
+            branch: Some(s("main")),
+            target: Some(s("origin/main")),
+            set_upstream: false,
+            ahead: Some(1),
+            error: None,
+        },
+        GitDone {
+            worktree: s("/r"),
+            action: GitAction::Commit,
+            message: m(),
+        },
+        GitFailed {
+            worktree: s("/r"),
+            action: GitAction::Push,
+            message: m(),
+        },
         Branches {
             project: s("/r"),
             local: vec![s("main")],
@@ -501,7 +558,14 @@ fn samples() -> Vec<Control> {
             base: DiffBase::Head,
             branch: None,
             base_error: None,
-            files: vec![],
+            files: vec![ChangedFile {
+                path: s("a.rs"),
+                status: FileStatus::Modified,
+                old_path: None,
+                added: Some(1),
+                removed: Some(0),
+                staged: Some(Staged::Partly),
+            }],
             added: 0,
             removed: 0,
             error: None,

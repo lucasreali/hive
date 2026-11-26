@@ -8,7 +8,7 @@ use std::collections::HashMap;
 use std::io;
 use std::path::{Path, PathBuf};
 
-use hive_protocol::{ChangedFile, Control, DiffBase, FileStatus, Project};
+use hive_protocol::{ChangedFile, Control, DiffBase, FileStatus, Project, Staged};
 
 use crate::git::{self, read_limited};
 use crate::projects;
@@ -115,7 +115,9 @@ pub fn answer(projects: &[Project], path: String, asked: DiffBase) -> (Control, 
 /// the first commit). Against `HEAD` they are what `git status` lists; against another commit,
 /// what `git diff` finds from it to the worktree, and the untracked files.
 pub fn list(dir: &Path, commit: Option<&str>) -> io::Result<Changes> {
-    let status = parse_status(&git(dir, &STATUS)?);
+    let out = git(dir, &STATUS)?;
+    let status = parse_status(&out);
+    let staged = parse_staged(&out);
     let changed = status.len() as u64;
     let (base, entries) = match commit {
         Some(commit) => {
@@ -128,7 +130,7 @@ pub fn list(dir: &Path, commit: Option<&str>) -> io::Result<Changes> {
     let counts = parse_numstat(&git(dir, &numstat(&base))?);
     Ok(Changes {
         changed,
-        ..collect(dir, entries, &counts, UNTRACKED_BUDGET)
+        ..collect(dir, entries, (&counts, &staged), UNTRACKED_BUDGET)
     })
 }
 
@@ -249,6 +251,43 @@ pub fn parse_status(out: &[u8]) -> Vec<Entry> {
     entries
 }
 
+/// What of each file `git status --porcelain=v2 -z` lists is staged (27.6), from its `XY`
+/// (index, worktree) code: an untracked or unmerged file nothing.
+pub fn parse_staged(out: &[u8]) -> HashMap<Vec<u8>, Staged> {
+    let mut staged = HashMap::new();
+    let mut records = out.split(|&b| b == 0);
+    while let Some(record) = records.next() {
+        let fields = |n| record.splitn(n, |&b| b == b' ').collect::<Vec<_>>();
+        let (n, path) = match record.first() {
+            Some(b'1') => (9, 8),
+            Some(b'2') => {
+                // A rename's old path is the next record.
+                records.next();
+                (10, 9)
+            }
+            Some(b'?' | b'u') => {
+                let n = if record.first() == Some(&b'u') { 11 } else { 2 };
+                if let Some(path) = fields(n).get(n - 1) {
+                    staged.insert(path.to_vec(), Staged::No);
+                }
+                continue;
+            }
+            _ => continue,
+        };
+        let fields = fields(n);
+        let (Some(xy), Some(path)) = (fields.get(1), fields.get(path)) else {
+            continue;
+        };
+        let state = match (xy.first(), xy.get(1)) {
+            (Some(b'.'), _) => Staged::No,
+            (_, Some(b'.')) => Staged::Yes,
+            _ => Staged::Partly,
+        };
+        staged.insert(path.to_vec(), state);
+    }
+    staged
+}
+
 /// A changed tracked file's status against `HEAD` from its `XY` (index, worktree) code.
 fn ordinary(xy: &[u8]) -> FileStatus {
     if xy.first() == Some(&b'A') {
@@ -326,13 +365,19 @@ pub fn totals(dir: &Path, entries: &[Entry], counts: &Counts) -> Totals {
 
 /// Joins the status entries with their line counts (counted here for untracked files, reading
 /// at most `budget` bytes of them), sorted by path, and keeps what fits in a message.
-fn collect(dir: &Path, entries: Vec<Entry>, counts: &Counts, mut budget: u64) -> Changes {
+fn collect(
+    dir: &Path,
+    entries: Vec<Entry>,
+    (counts, staged): (&Counts, &HashMap<Vec<u8>, Staged>),
+    mut budget: u64,
+) -> Changes {
     let mut files: Vec<ChangedFile> = entries
         .into_iter()
         .map(|entry| {
             let (added, removed) = lines(dir, &entry, counts, &mut budget);
             let (path, status, from) = entry;
             ChangedFile {
+                staged: staged.get(&path).copied(),
                 path: lossy(&path),
                 status,
                 old_path: from.as_deref().map(lossy),
@@ -422,6 +467,7 @@ mod tests {
             old_path: None,
             added: counts.0,
             removed: counts.1,
+            staged: None,
         }
     }
 
@@ -459,6 +505,21 @@ u UU N... 100644 100644 100644 100644 a1 a2 a3 both.rs\0\
         );
         // The raw bytes of a non-UTF-8 name are kept for reading the file.
         assert_eq!(entries[7].0, b"odd\xffname");
+        // What of each is staged: the index side (X) and the worktree side (Y).
+        let staged = parse_staged(out);
+        let state = |path: &[u8]| staged.get(path).copied();
+        use Staged::{No, Partly, Yes};
+        assert_eq!(state(b"src/a b.rs"), Some(No));
+        assert_eq!(state(b"new.rs"), Some(Yes));
+        assert_eq!(state(b"new2.rs"), Some(Partly));
+        assert_eq!(state(b"gone.rs"), Some(Yes));
+        assert_eq!(state(b"gone2.rs"), Some(No));
+        assert_eq!(state(b"to name"), Some(Yes));
+        assert_eq!(state(b"from name"), None);
+        assert_eq!(state(b"both.rs"), Some(No));
+        assert_eq!(state(b"odd\xffname"), Some(No));
+        assert_eq!(state(b"ignored"), None);
+        assert_eq!(staged.len(), 8);
     }
 
     #[test]
@@ -551,7 +612,7 @@ u UU N... 100644 100644 100644 100644 a1 a2 a3 both.rs\0\
         let untracked = |name: &str| (name.as_bytes().to_vec(), FileStatus::Untracked, None);
         let entries = ["a", "b", "c", "d"].map(untracked).to_vec();
         // `a` and `b` fit exactly; `c` does not, and `d` is not read after it though it would fit.
-        let changes = collect(dir.path(), entries, &HashMap::new(), 7);
+        let changes = collect(dir.path(), entries, (&HashMap::new(), &HashMap::new()), 7);
         let counted: Vec<_> = changes.files.iter().map(|f| f.added).collect();
         assert_eq!(counted, [Some(2), Some(1), None, None]);
         assert_eq!(changes.added, 3);
@@ -573,7 +634,12 @@ u UU N... 100644 100644 100644 100644 a1 a2 a3 both.rs\0\
             (b"b".to_vec(), (Some(3), Some(1))),
             (b"a".to_vec(), (Some(1), Some(2))),
         ]);
-        let changes = collect(dir.path(), entries, &counts, UNTRACKED_BUDGET);
+        let changes = collect(
+            dir.path(),
+            entries,
+            (&counts, &HashMap::new()),
+            UNTRACKED_BUDGET,
+        );
         let mut renamed = file("a", FileStatus::Renamed, (Some(1), Some(2)));
         renamed.old_path = Some("old".into());
         assert_eq!(
@@ -608,7 +674,12 @@ u UU N... 100644 100644 100644 100644 a1 a2 a3 both.rs\0\
             .iter()
             .map(|(p, _, _)| (p.clone(), (Some(1), Some(0))))
             .collect();
-        let changes = collect(dir.path(), many, &counts, UNTRACKED_BUDGET);
+        let changes = collect(
+            dir.path(),
+            many,
+            (&counts, &HashMap::new()),
+            UNTRACKED_BUDGET,
+        );
         let shown = changes.files.len();
         assert_eq!(changes.added, 4000);
         assert_eq!(shown + changes.truncated, 4000);
@@ -748,8 +819,11 @@ garbage\0\
         );
         let mut renamed = file("s", FileStatus::Renamed, (Some(0), Some(0)));
         renamed.old_path = Some("r".into());
-        let modified = file("a", FileStatus::Modified, (Some(2), Some(1)));
-        let untracked = file("u", FileStatus::Untracked, (Some(1), Some(0)));
+        let mut modified = file("a", FileStatus::Modified, (Some(2), Some(1)));
+        let mut untracked = file("u", FileStatus::Untracked, (Some(1), Some(0)));
+        // Only what is left to commit can be staged: not the branch's commits (27.6).
+        modified.staged = Some(Staged::No);
+        untracked.staged = Some(Staged::No);
         // The status counts only against HEAD: not the branch's commits.
         assert_eq!(
             answer(&projects, path.clone(), DiffBase::Branch),

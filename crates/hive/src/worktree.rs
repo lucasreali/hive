@@ -312,6 +312,20 @@ fn wslenv(current: Option<OsString>) -> OsString {
     list
 }
 
+/// Gives a git command that reaches a remote (a fetch, a push, 27.6) `env` (a space's
+/// identity and GitHub token, 9.30) and keeps it, and any credential helper, from asking: the
+/// service has no terminal to answer in.
+pub fn quiet<'a>(
+    command: &'a mut std::process::Command,
+    env: &[(&str, String)],
+) -> &'a mut std::process::Command {
+    command
+        .envs(env.iter().cloned())
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .env("GCM_INTERACTIVE", "never")
+        .env("WSLENV", wslenv(std::env::var_os("WSLENV")))
+}
+
 /// When `base` is a remote-tracking branch of the repository holding `dir`, fetches it so a
 /// worktree made next starts from its latest commit ([`fetch`] of that one branch). A
 /// failure does not stop the creation: it is a note, and the worktree starts from the last
@@ -338,12 +352,7 @@ pub fn fetch_base(dir: &Path, base: &str, env: &[(&str, String)]) -> Option<Stri
 pub fn fetch(dir: &Path, remote: &str, refspec: &str, env: &[(&str, String)]) -> io::Result<()> {
     let args = ["fetch", "--no-tags", "--", remote, refspec].map(OsStr::new);
     let mut command = git::command(dir)?;
-    command
-        .args(args)
-        .envs(env.iter().cloned())
-        .env("GIT_TERMINAL_PROMPT", "0")
-        .env("GCM_INTERACTIVE", "never")
-        .env("WSLENV", wslenv(std::env::var_os("WSLENV")));
+    quiet(command.args(args), env);
     let keep = Stdout::Max(OUTPUT_LIMIT);
     git::limited(command, "git", &args, &[], &[0], keep, Some(FETCH_TIME)).map(drop)
 }
