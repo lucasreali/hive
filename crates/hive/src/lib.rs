@@ -36,6 +36,7 @@ pub mod projects;
 pub mod provenance;
 pub mod pulls;
 pub mod registry;
+pub mod review;
 pub mod ring;
 pub mod scripts;
 pub mod search;

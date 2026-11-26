@@ -680,7 +680,8 @@ impl State {
             | Control::ProjectCreated { project, .. }
             | Control::WorktreeCreated { project, .. }
             | Control::WorktreeRemoved { project, .. }
-            | Control::WorktreeRenamed { project, .. } => (std::slice::from_mut(project), false),
+            | Control::WorktreeRenamed { project, .. }
+            | Control::BroughtBack { project, .. } => (std::slice::from_mut(project), false),
             _ => return,
         };
         for project in projects {

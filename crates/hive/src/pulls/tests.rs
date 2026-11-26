@@ -30,6 +30,7 @@ fn worktree(id: &str, branch: &str) -> Worktree {
         main: false,
         claude: false,
         status: None,
+        review_of: None,
     }
 }
 

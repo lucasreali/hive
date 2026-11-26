@@ -1224,6 +1224,31 @@ async fn project_requests_go_to_the_service_and_answers_to_the_ui() {
         name: "x".into(),
     };
     assert_eq!(service.control().await, (0, rename));
+    hive.create_review("/r/w".into()).unwrap();
+    let review = Control::CreateReview {
+        path: "/r/w".into(),
+    };
+    assert_eq!(service.control().await, (0, review));
+    hive.plan_bring_back("/r/v".into()).unwrap();
+    let plan = Control::PlanBringBack {
+        path: "/r/v".into(),
+    };
+    assert_eq!(service.control().await, (0, plan));
+    hive.bring_back("/r/v".into(), "b".into(), "cd".into(), "ab".into())
+        .unwrap();
+    let bring = Control::BringBack {
+        path: "/r/v".into(),
+        into: "b".into(),
+        base: "cd".into(),
+        tip: "ab".into(),
+    };
+    assert_eq!(service.control().await, (0, bring));
+    hive.discard_review("/r/v".into(), true).unwrap();
+    let discard = Control::DiscardReview {
+        path: "/r/v".into(),
+        force: true,
+    };
+    assert_eq!(service.control().await, (0, discard));
     hive.watch_worktree("/r".into(), DiffBase::Branch).unwrap();
     let watch = Control::WatchWorktree {
         path: "/r".into(),
@@ -2376,6 +2401,10 @@ fn commands_reach_the_managed_hive() {
             create_issue_worktree,
             remove_worktree,
             rename_worktree,
+            create_review,
+            plan_bring_back,
+            bring_back,
+            discard_review,
             watch_worktree,
             unwatch_worktree,
             expand_ignored,
@@ -2482,6 +2511,10 @@ fn commands_reach_the_managed_hive() {
     let issue = json!({"project": "/r", "number": 42, "base": "main"});
     let remove = json!({"path": "/r/w", "force": false});
     let rename = json!({"path": "/r/w", "name": "x"});
+    let review = json!({"path": "/r/w"});
+    let plan = json!({"path": "/r/v"});
+    let bring = json!({"path": "/r/v", "into": "b", "base": "cd", "tip": "ab"});
+    let discard = json!({"path": "/r/v", "force": true});
     let watch = json!({"path": "/r", "base": "branch"});
     let expand = json!({"path": "/r", "folders": ["target"]});
     let view = json!({"terminal": 1, "focused": true, "visible": true});
@@ -2532,6 +2565,10 @@ fn commands_reach_the_managed_hive() {
         ("create_issue_worktree", &issue),
         ("remove_worktree", &remove),
         ("rename_worktree", &rename),
+        ("create_review", &review),
+        ("plan_bring_back", &plan),
+        ("bring_back", &bring),
+        ("discard_review", &discard),
         ("watch_worktree", &watch),
         ("unwatch_worktree", &json!({})),
         ("expand_ignored", &expand),
@@ -2639,6 +2676,10 @@ fn commands_reach_the_managed_hive() {
         ("create_issue_worktree", issue),
         ("remove_worktree", remove),
         ("rename_worktree", rename),
+        ("create_review", review),
+        ("plan_bring_back", plan),
+        ("bring_back", bring),
+        ("discard_review", discard),
         ("watch_worktree", watch),
         ("unwatch_worktree", json!({})),
         ("expand_ignored", expand),

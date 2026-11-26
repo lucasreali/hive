@@ -13,6 +13,7 @@ use hive_protocol::{Control, Project, ProjectError, SpaceEnv, Worktree};
 use serde::de::DeserializeOwned;
 
 use crate::paths::canonical;
+use crate::review::Reviews;
 use crate::spaces::Spaces;
 use crate::worktree::{self, WORKTREES_DIR};
 use crate::wrapper::write_atomic;
@@ -27,6 +28,8 @@ pub const GROUP_ENTRIES: usize = 1024;
 /// The empty repository, in Hive's folder, that git lists a folder project's files with (23.1):
 /// git has no listing without a repository.
 const PLAIN_GIT: &str = "plain.git";
+/// The review links' file (27.4), next to the spaces file.
+const REVIEWS: &str = "reviews.json";
 
 /// The Claude config folders of spaces from before accounts (12.2), each with its space's name.
 pub type Legacy = Vec<(String, String)>;
@@ -51,6 +54,8 @@ pub struct Projects {
     legacy: Mutex<(Legacy, Vec<String>)>,
     /// The worktree each `hive-file:` token names (24.2, [`Projects::token`]), by token.
     tokens: Mutex<HashMap<String, String>>,
+    /// Which worktree reviews which (27.4), in [`REVIEWS`] next to the spaces file.
+    reviews: Reviews,
 }
 
 impl Projects {
@@ -81,6 +86,7 @@ impl Projects {
         let protected = data.map(|dir| Protected::new(dir, true, "Hive's folder"));
         Self {
             plain: file.with_file_name(PLAIN_GIT),
+            reviews: Reviews::load(file.with_file_name(REVIEWS)),
             file,
             spaces: Mutex::new(spaces),
             listed: Mutex::default(),
@@ -177,10 +183,14 @@ impl Projects {
     fn build(&self, entry: Entry) -> Project {
         match entry {
             Entry::Group(path, error, folder) => group(&path, error, folder),
-            Entry::Repo(id, parent) => Project {
-                parent,
-                ..self.listed(&id)
-            },
+            Entry::Repo(id, parent) => {
+                let mut project = Project {
+                    parent,
+                    ..self.listed(&id)
+                };
+                self.reviews.mark(&mut project);
+                project
+            }
         }
     }
 
@@ -268,7 +278,20 @@ impl Projects {
         // Held while git runs: requests at once list a project once, and a git that hangs
         // holds up only the requests on its own project.
         let mut slot = slot.lock().unwrap_or_else(PoisonError::into_inner);
-        slot.get_or_insert_with(|| project(id)).clone()
+        slot.get_or_insert_with(|| {
+            let listed = project(id);
+            // Reviews whose worktree went are known only once git lists them all.
+            if listed.error.is_none() {
+                self.reviews.prune(id, &listed.worktrees);
+            }
+            listed
+        })
+        .clone()
+    }
+
+    /// Which worktree reviews which (27.4).
+    pub fn reviews(&self) -> &Reviews {
+        &self.reviews
     }
 
     /// Forgets every project's worktrees: they changed, or may have (git's registry, a `HEAD`). The
@@ -573,9 +596,12 @@ impl Projects {
         }
         unused(proc, Path::new(path))?;
         let to = worktree::rename(Path::new(&owner.id), Path::new(path), name);
+        let to = to.map(|to| to.to_string_lossy().into_owned());
+        if let Ok(to) = &to {
+            self.reviews.rename(path, to);
+        }
         self.forget();
-        let to = to?;
-        Ok((self.project(&owner.id), to.to_string_lossy().into_owned()))
+        Ok((self.project(&owner.id), to?))
     }
 
     /// The followed project holding the worktree `path`, when it is not the main one.
@@ -946,6 +972,7 @@ fn group(path: &str, error: Option<String>, folder: bool) -> Project {
         main: true,
         claude: false,
         status: None,
+        review_of: None,
     };
     Project {
         id: path.to_owned(),
@@ -1000,6 +1027,7 @@ fn worktrees(root: &Path, list: Vec<worktree::Worktree>) -> Vec<Worktree> {
                 main: i == 0,
                 claude,
                 status: None,
+                review_of: None,
             }
         })
         .collect()
@@ -1181,6 +1209,7 @@ mod tests {
             main: true,
             claude: false,
             status: None,
+            review_of: None,
         };
         assert_eq!(got, vec![main]);
     }

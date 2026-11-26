@@ -21,6 +21,7 @@ import type {
   AgentUsage,
   AppMode,
   Branches,
+  BringBackPlan,
   Changes,
   ClaudeLogin,
   CreateFailure,
@@ -196,6 +197,10 @@ export type WorktreeDialog = {
   failure: { path: string; name: string | null; message: string } | null;
   /** Why deleting each worktree failed, by path (removing merged worktrees sends several). */
   removeFailures: Record<string, string>;
+  /** What bringing a review's changes back would do (27.4), as the service last answered. */
+  plan: BringBackPlan | null;
+  /** Why bringing the review `path`'s changes back failed. */
+  bringFailure: { path: string; message: string } | null;
 };
 
 /**
@@ -290,6 +295,9 @@ export type Modal =
   | "uninstall"
   | "remove-worktree"
   | "rename-worktree"
+  | "review-worktree"
+  | "bring-back"
+  | "discard-review"
   | "new-space"
   | "edit-space"
   | "settings"
@@ -663,6 +671,8 @@ export const initialState: HiveState = {
     createFailure: null,
     failure: null,
     removeFailures: {},
+    plan: null,
+    bringFailure: null,
   },
   terminals: {},
   agents: {},

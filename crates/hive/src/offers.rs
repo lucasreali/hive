@@ -137,6 +137,7 @@ mod tests {
             main,
             claude: !main,
             status: None,
+            review_of: None,
         }
     }
 
