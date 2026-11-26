@@ -329,11 +329,10 @@ async fn serve(
 /// Writes the line provenance store's changes every [`PROVENANCE_FLUSH`] (27.5).
 async fn keep_provenance(state: Arc<State>) {
     let mut every = tokio::time::interval(PROVENANCE_FLUSH);
+    // Stopped before an uninstall removes Hive's folder, so nothing is written after it.
     loop {
         every.tick().await;
-        if state.uninstalling().is_none() {
-            tokio::task::block_in_place(|| state.provenance.flush());
-        }
+        tokio::task::block_in_place(|| state.provenance.flush());
     }
 }
 

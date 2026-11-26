@@ -1210,6 +1210,7 @@ fn renames_are_read_from_name_status() {
     assert_eq!(parse_renames(out, "old.txt"), None);
     assert_eq!(parse_renames(b"R087\0old.txt", "new.txt"), None);
     assert_eq!(parse_renames(b"M", "a.txt"), None);
+    assert_eq!(parse_renames(b"M\0a.txt", "a.txt"), None);
 }
 
 #[test]
