@@ -269,18 +269,14 @@ pub fn plan(projects: &Projects, path: &str) -> io::Result<ReviewPlan> {
     let (tip, base) = (commit(dir, &branch)?, commit(dir, &into)?);
     let range = format!("{base}..{tip}");
     let shown = format!("--max-count={BRING_BACK_SHOWN}");
-    let log = read(
-        dir,
-        &["log", "-z", "--format=%H%x1f%s", &shown, &range],
-        &[0],
-    )?;
+    let log = ["log", "-z", "--format=%H%x1f%s", &shown, &range];
     Ok(ReviewPlan {
+        commits: parse_log(&read(dir, &log, &[0])?),
         reviewed: reviewed.path,
         into,
         fast_forward: count(dir, &format!("{tip}..{base}"))? == 0,
         base,
         branch,
-        commits: parse_log(&log),
         total: count(dir, &range)?,
         tip,
     })

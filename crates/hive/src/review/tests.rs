@@ -628,6 +628,14 @@ fn a_discarded_review_takes_its_branch_only_when_brought_back() {
     assert!(err.contains("git worktree remove"), "{err}");
     discard(&review, true).unwrap();
     assert!(has("review-fix"), "its commit is not on worktree-fix");
+    run(repo.root(), &["branch", "-D", "review-fix"]);
+
+    // Moved to a branch of the user's: that branch is never Hive's to delete.
+    let review = repo.review(&w);
+    run(Path::new(&review), &["switch", "-q", "-c", "mine"]);
+    repo.projects.forget();
+    discard(&review, false).unwrap();
+    assert!(has("mine"));
 
     assert_eq!(
         discard(&w, false).unwrap_err().to_string(),
