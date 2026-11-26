@@ -483,6 +483,8 @@ export type HiveState = {
   claudeLogins: ClaudeLogin[] | null;
   /** The project a dialog opened for (e.g. the row's "New worktree"). */
   modalProject: string | null;
+  /** The section Settings opens on (27.8: the hosts popover opens Hosts); null: its default. */
+  settingsSection: string | null;
   /** The worktree a dialog opened for (its row's menu). */
   modalWorktree: string | null;
   worktreeDialog: WorktreeDialog;
@@ -627,6 +629,7 @@ export const initialState: HiveState = {
   ghIdentity: null,
   claudeLogins: null,
   modalProject: null,
+  settingsSection: null,
   modalWorktree: null,
   worktreeDialog: {
     branches: null,
@@ -907,6 +910,7 @@ export const openModal = (
   useHive.setState({
     modal,
     modalProject,
+    settingsSection: null,
     modalWorktree,
     addProjectError: null,
     projectCreated: null,

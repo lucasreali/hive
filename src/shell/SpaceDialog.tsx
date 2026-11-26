@@ -1,11 +1,19 @@
 import { type Dispatch, type SetStateAction, useEffect, useState } from "react";
 import type { GhAccount, GhAccounts, GhIdentity, SpaceEnv, SpaceGhAccount } from "../protocol";
-import { ask, currentSpace, openModal, spaceAccount, useHive } from "../store";
+import { ask, currentSpace, openModal, spaceAccount, switchedHost, useHive } from "../store";
 import { transport } from "../transport";
 import { Select } from "../ui/Select";
+import { HostPicker } from "./Hosts";
 import { CloseIcon } from "./icons";
 
 const close = () => openModal(null);
+
+/**
+ * Shows `host`, picked as a new space's place (27.8), with the dialog left open: the space and
+ * its GitHub accounts are that host's service's, and the dialog asks it.
+ */
+const showHostHere = (host: string | null) =>
+  useHive.setState((s) => ({ ...switchedHost(s, host), modal: s.modal }));
 
 type TextKey = Exclude<keyof SpaceEnv, "gh_account" | "claude_account">;
 
@@ -242,6 +250,9 @@ export function SpaceDialog({ editing }: { editing: boolean }) {
   const [env, setEnv] = useState<SpaceEnv>({ ...NO_ENV, ...space?.env, claude_account: account });
   const title = editing ? "Edit space" : "New space";
   const empty = space?.projects.length === 0;
+  // A new space goes to the shown host; with hosts, the dialog asks where (27.8).
+  const hosts = useHive((s) => !editing && Object.keys(s.links).length > 0);
+  const host = useHive((s) => s.host);
   return (
     <dialog
       className="dialog"
@@ -275,6 +286,7 @@ export function SpaceDialog({ editing }: { editing: boolean }) {
               autoComplete="off"
             />
           </div>
+          {hosts && <HostPicker value={host} onChange={showHostHere} />}
           <ClaudeAccountField env={env} setEnv={setEnv} />
           {FIELDS.map((f) => (
             <div className="field" key={f.key}>

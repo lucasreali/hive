@@ -23,7 +23,7 @@ export const END = mac ? "Meta+ArrowRight" : "End";
 /** The status bar's connection: the service's on macOS, where it runs natively, else WSL's. */
 export const CONNECTION = mac ? "Service connection" : "WSL connection";
 /** Where the service runs while it says nothing else (no `welcome` yet). */
-export const PLACE = mac ? "macOS" : "WSL";
+export const PLACE = mac ? "This Mac" : "WSL";
 
 /** The terminal's copy and paste keys (#35): ⌘C / ⌘V on macOS. */
 export const COPY = mac ? "Meta+C" : "Control+Shift+C";

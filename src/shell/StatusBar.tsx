@@ -1,17 +1,10 @@
 import { WarningCircleIcon } from "@phosphor-icons/react";
 import { version } from "../../package.json";
-import { type Connection, currentSpace, openModal, spaceAccount, useHive } from "../store";
+import { currentSpace, openModal, spaceAccount, useHive } from "../store";
 import { usageLines } from "../usage";
 import { isMac } from "../window";
-import { HostChips } from "./Hosts";
+import { HostsItem, LOCAL_LABEL } from "./Hosts";
 import { loggedIn, useClaudeLogins, useLogIn } from "./SettingsDialog";
-
-const LABEL: Record<Connection["status"], string> = {
-  connecting: "connecting",
-  connected: "connected",
-  version_mismatch: "version mismatch",
-  disconnected: "disconnected",
-};
 
 /**
  * The current space's Claude account (22.5, D22.15), read-only: the space's terminals get it.
@@ -66,21 +59,26 @@ export function StatusBar() {
   // macOS, and on Windows in native mode (12.5.4), the service runs natively and reports none.
   const windows = useHive((s) => s.appMode?.mode === "native");
   const distro = connection.status === "connected" ? connection.distro : null;
-  const place = windows ? "Windows" : distro ? `WSL: ${distro}` : isMac() ? "macOS" : "WSL";
+  const place = windows ? "Windows" : distro ? `WSL: ${distro}` : isMac() ? "This Mac" : "WSL";
   // The service's files could not move into `~/.hive` (22.1): it said why.
   const warning = connection.status === "connected" ? connection.warning : null;
+  // With remote hosts (27.8), one item sums up every link, this Mac's too.
+  const hosts = useHive((s) => Object.keys(s.links).length > 0);
   return (
     <footer className="statusbar">
-      <div
-        className="connection"
-        data-status={connection.status}
-        title={isMac() || windows ? "Service connection" : "WSL connection"}
-      >
-        <span className="connection-dot" />
-        <span>{place}</span>
-        <span className="connection-state">{LABEL[connection.status]}</span>
-      </div>
-      <HostChips />
+      {hosts ? (
+        <HostsItem />
+      ) : (
+        <div
+          className="connection"
+          data-status={connection.status}
+          title={isMac() || windows ? "Service connection" : "WSL connection"}
+        >
+          <span className="connection-dot" />
+          <span>{place}</span>
+          <span className="connection-state">{LOCAL_LABEL[connection.status]}</span>
+        </div>
+      )}
       {warning ? (
         <span className="folder-warning" title={warning}>
           Old folders in use
