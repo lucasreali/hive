@@ -69,6 +69,9 @@ mod statusline;
 mod terminal;
 #[cfg(unix)]
 #[cfg(test)]
+mod turns;
+#[cfg(unix)]
+#[cfg(test)]
 mod uninstall;
 #[cfg(unix)]
 #[cfg(test)]
