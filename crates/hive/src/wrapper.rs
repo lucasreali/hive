@@ -109,9 +109,23 @@ fn script(bin: &Path, settings: &Path, shared: &Path) -> Vec<u8> {
     out.extend(sh_quote(settings));
     out.extend(b"\nhive_shared=");
     out.extend(sh_quote(shared));
-    out.extend(SCRIPT_BODY.as_bytes());
+    out.extend(SCRIPT_BODY.replace("@NO_CLAUDE@", NO_CLAUDE).as_bytes());
     out
 }
+
+/// What the wrapper says when it finds no `claude` (27.11): Claude Code is not installed on
+/// this host, and how to install it there; Hive itself never downloads or runs an installer
+/// (#52). The command is the official native installer's. It holds no `'`: the script
+/// writes it single-quoted.
+#[cfg(unix)]
+pub const NO_CLAUDE: &str = "hive: no claude found in PATH: Claude Code is not installed on this host.\n\
+                             Install it here to run agents, e.g.:\n  \
+                             curl -fsSL https://claude.ai/install.sh | bash\n";
+/// [`NO_CLAUDE`] for the Windows wrapper, with the official installer for PowerShell.
+#[cfg(windows)]
+pub const NO_CLAUDE: &str = "hive: no claude found in PATH: Claude Code is not installed on this host.\n\
+                             Install it here to run agents, e.g. in PowerShell:\n  \
+                             irm https://claude.ai/install.ps1 | iex\n";
 
 /// Finds the first executable `claude` on `PATH` that is not this wrapper, then runs it with
 /// the hooks settings and, while it is there, the shared plugin (21.9).
@@ -132,7 +146,7 @@ done
 set +f
 IFS=$old_ifs
 if [ -z "$real" ]; then
-    echo "hive: no claude found in PATH" >&2
+    printf '%s' '@NO_CLAUDE@' >&2
     exit 127
 fi
 if [ "${HIVE_WRAPPED-}" = 1 ]; then
@@ -632,7 +646,12 @@ mod tests {
         let out = run(&s.wrapper(), &path_var(&[&s.paths.bin_dir()]), &[], &[]);
         assert_eq!(out.status.code(), Some(127));
         assert_eq!(out.stdout, b"");
-        assert_eq!(out.stderr, b"hive: no claude found in PATH\n");
+        // It says what to do (27.11): Hive never installs Claude Code itself (#52).
+        let expected = "hive: no claude found in PATH: Claude Code is not installed on this host.\n\
+                        Install it here to run agents, e.g.:\n  \
+                        curl -fsSL https://claude.ai/install.sh | bash\n";
+        assert_eq!(String::from_utf8_lossy(&out.stderr), expected);
+        assert_eq!(NO_CLAUDE, expected);
     }
 
     #[test]

@@ -92,6 +92,24 @@ test("a remote's projects, spaces and agents are its own, keyed apart from this 
   expect(hostView(s, null)).toBe(s);
 });
 
+test("a remote's claude_logins is its host's own, never this Mac's logins (27.11)", () => {
+  const mine = [{ config_dir: null, name: "Default", logged_in: true }];
+  onMessage({ type: "claude_logins", logins: mine, claude: true });
+  const theirs = { logins: [{ config_dir: null, name: "Root", logged_in: false }], claude: false };
+  // A host not shown: kept in its stash.
+  onMessage({ type: "claude_logins", ...theirs, host: HOST });
+  let s = useHive.getState();
+  expect(s.claudeLogins).toEqual(mine);
+  expect(s.hostClaude).toBeNull();
+  expect(s.stash[HOST]?.hostClaude).toEqual(theirs);
+  expect(s.settings).toEqual(initialState.settings);
+  // Shown: its own; this Mac's logins stay.
+  showHost(HOST);
+  s = useHive.getState();
+  expect(s.hostClaude).toEqual(theirs);
+  expect(s.claudeLogins).toEqual(mine);
+});
+
 test("only REMOTE_TYPES and the link's own messages are taken of a remote", () => {
   for (const type of ["settings", "restore_sessions", "editor_target", "session_located"]) {
     expect(taken({ ...sample(type), host: HOST })).toBe(false);

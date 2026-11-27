@@ -157,6 +157,34 @@ for (const theme of ["one-dark", "one-light"]) {
   });
 }
 
+test("a remote space's status bar shows its host's Claude account, or that it has no Claude (27.11)", async ({
+  page,
+}) => {
+  await open(page, "one-dark");
+  const bar = page.getByRole("contentinfo");
+  // This Mac has only its default account: no name, the ring.
+  await expect(bar.locator(".space-account")).toHaveCount(0);
+  await expect(bar.locator(".session-usage")).toHaveCount(1);
+  // gpu-box's own default account, logged in there, with its ring.
+  await pick(page, "Default · gpu-box");
+  await expect(bar.locator(".space-account")).toHaveText("Default");
+  await expect(bar.locator(".space-account")).toHaveAttribute(
+    "title",
+    "Claude account of Default on gpu-box; change it in the space's settings",
+  );
+  await expect(bar.locator(".session-usage")).toHaveCount(1);
+  // Claude Code gone from gpu-box: the bar says so, without a ring.
+  await newTerminal(page);
+  await type(page, "no-claude");
+  await expect(bar.getByText("No Claude on gpu-box")).toBeVisible();
+  await expect(bar.locator(".session-usage")).toHaveCount(0);
+  await page.screenshot({ path: "target/e2e/hosts-no-claude.png" });
+  // This Mac's is its own again.
+  await pick(page, "Default");
+  await expect(bar.getByText("No Claude on gpu-box")).toHaveCount(0);
+  await expect(bar.locator(".session-usage")).toHaveCount(1);
+});
+
 test("Settings → Hosts adds a host by its alias, shows its link, tests and removes it", async ({
   page,
 }) => {

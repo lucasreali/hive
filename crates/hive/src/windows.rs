@@ -1899,7 +1899,7 @@ pub mod claude {
         let _ = super::ignore_ctrl();
         let bin = exe.parent().unwrap_or(exe);
         let Some(real) = crate::wrapper::real_claude(var("PATH").as_deref(), bin) else {
-            eprintln!("hive: no claude found in PATH");
+            eprint!("{}", crate::wrapper::NO_CLAUDE);
             return 127;
         };
         let mut claude = Command::new(&real);

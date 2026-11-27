@@ -106,9 +106,9 @@ export interface Transport {
   selectSpace(id: string): Promise<void>;
   /**
    * Whether each Claude account has logged in (21.6), the default one first; answered by
-   * `claude_logins`.
+   * `claude_logins`: this Mac's, or with `host` that remote host's own (27.11).
    */
-  listClaudeLogins(): Promise<void>;
+  listClaudeLogins(host?: string): Promise<void>;
   /**
    * The accounts logged in to `gh` (9.30), in `ghConfigDir` when set (else `gh`'s own config);
    * answered by `gh_accounts`, logins only.

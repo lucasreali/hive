@@ -1,6 +1,7 @@
 //! Claude accounts (12.2): kept in the settings, given to new terminals, their sessions
 //! listed together, and made of the Claude config folders spaces had.
 
+use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 
 use hive_protocol::{Account, AccountDir, ClaudeLogin, Control, Role, Settings};
@@ -400,7 +401,10 @@ async fn each_account_says_whether_it_logged_in() {
     std::fs::write(home.join(".claude.json"), r#"{"oauthAccount":{"a":1}}"#).unwrap();
     std::fs::write(work.join(".claude.json"), r#"{"numStartups":1}"#).unwrap();
     let work = work.display().to_string();
-    let mut daemon = repo.env.daemon();
+    // Only the test's own programs on its `PATH`: no `claude` yet (27.11).
+    let tools = repo.env.path("tools");
+    std::fs::create_dir_all(&tools).unwrap();
+    let mut daemon = repo.env.daemon_on_path(&tools);
     let mut app = repo.env.connect(Role::App).await;
     let mut settings = Settings::default();
     settings.claude.accounts.push(Account {
@@ -412,19 +416,32 @@ async fn each_account_says_whether_it_logged_in() {
         settings: settings.clone(),
     };
     assert_eq!(request(&mut app, set).await, Control::Settings { settings });
-    let login = |config_dir: Option<&str>, logged_in| ClaudeLogin {
+    let login = |config_dir: Option<&str>, name: &str, logged_in| ClaudeLogin {
         config_dir: config_dir.map(String::from),
+        name: name.into(),
         logged_in,
     };
-    let logins = vec![login(None, true), login(Some(&work), false)];
+    let logins = vec![
+        login(None, "Default", true),
+        login(Some(&work), "Work", false),
+    ];
     let answer = request(&mut app, Control::ListClaudeLogins).await;
-    assert_eq!(answer, Control::ClaudeLogins { logins });
-    // Its `/login` finished: asked again, it is logged in.
+    let claude = false;
+    assert_eq!(answer, Control::ClaudeLogins { logins, claude });
+    // Its `/login` finished: asked again, it is logged in. A `claude` installed meanwhile
+    // (an empty file, never run) is found.
     let done = r#"{"numStartups":1,"oauthAccount":{}}"#;
     std::fs::write(Path::new(&work).join(".claude.json"), done).unwrap();
-    let logins = vec![login(None, true), login(Some(&work), true)];
+    let claude = tools.join("claude");
+    std::fs::write(&claude, "").unwrap();
+    std::fs::set_permissions(&claude, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let logins = vec![
+        login(None, "Default", true),
+        login(Some(&work), "Work", true),
+    ];
     let answer = request(&mut app, Control::ListClaudeLogins).await;
-    assert_eq!(answer, Control::ClaudeLogins { logins });
+    let claude = true;
+    assert_eq!(answer, Control::ClaudeLogins { logins, claude });
     drop(app);
     assert!(daemon.wait_exit().success());
 }

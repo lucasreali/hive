@@ -395,8 +395,12 @@ function reduce(s: HiveState, m: HostMessage): Partial<HiveState> {
       const error = { action: m.action, message: m.message };
       return { git: { ...s.git, [m.worktree]: { busy: null, error } } };
     }
+    // A remote's (27.11) are its host's own, for the status bar of its spaces: the settings'
+    // accounts, and so `claudeLogins`, are this Mac's.
     case "claude_logins":
-      return { claudeLogins: m.logins };
+      return m.host === undefined
+        ? { claudeLogins: m.logins }
+        : { hostClaude: { logins: m.logins, claude: m.claude } };
     case "gh_accounts": {
       const { type: _, ...accounts } = m;
       return { ghAccounts: { ...s.ghAccounts, [accounts.gh_config_dir ?? ""]: accounts } };
@@ -821,10 +825,11 @@ function fileDialogDone(s: HiveState, worktree: string): Partial<HiveState> {
 
 /**
  * The app's own fields a message of a host not shown may change (26.18): its terminals, the
- * toasts, and the bell's seen agents (keyed apart by host, `agentKey`). The rest of what it
- * changes is that host's data, kept in `stash`.
+ * toasts, the bell's seen agents (keyed apart by host, `agentKey`), and this Mac's account
+ * logins (27.11: only this Mac's `claude_logins` sets them). The rest of what it changes is that
+ * host's data, kept in `stash`.
  */
-const SHARED_FIELDS = ["terminals", "notices", "pendingSeen"] as const;
+const SHARED_FIELDS = ["terminals", "notices", "pendingSeen", "claudeLogins"] as const;
 
 /**
  * `m` applied to the store: to its host's data (26.18), the shown one's or the one kept in

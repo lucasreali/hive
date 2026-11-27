@@ -59,13 +59,18 @@ fn read(file: &Path) -> Option<Config> {
 }
 
 /// The `claude_logins` answer: the default account, then each of `dirs` (the settings'
-/// accounts' folders).
-pub fn answer(dirs: &[String], var: impl Fn(&str) -> Option<OsString>) -> Vec<ClaudeLogin> {
+/// accounts' folders), each with the name `name` gives its folder (27.11).
+pub fn answer(
+    dirs: &[String],
+    name: impl Fn(Option<&str>) -> String,
+    var: impl Fn(&str) -> Option<OsString>,
+) -> Vec<ClaudeLogin> {
     let accounts = [None]
         .into_iter()
         .chain(dirs.iter().map(|d| Some(d.as_str())));
     let login = |dir: Option<&str>| ClaudeLogin {
         config_dir: dir.map(String::from),
+        name: name(dir),
         logged_in: config_file(dir, &var).is_some_and(|file| logged_in(&file)),
     };
     accounts.map(login).collect()
@@ -174,15 +179,19 @@ mod tests {
         std::fs::write(home.join(".claude.json"), r#"{"oauthAccount":{}}"#).unwrap();
         std::fs::write(work.join(".claude.json"), r#"{"numStartups":1}"#).unwrap();
         let dirs = [work, gone].map(|d| d.to_str().unwrap().to_owned());
-        let logins = answer(&dirs, env(&[(crate::dirs::HOME, home)]));
+        // Each account named as the settings name it (27.11).
+        let name = |dir: Option<&str>| format!("{}!", dir.unwrap_or("Default"));
+        let logins = answer(&dirs, name, env(&[(crate::dirs::HOME, home)]));
         let login = |config_dir: Option<&String>, logged_in| ClaudeLogin {
             config_dir: config_dir.cloned(),
+            name: name(config_dir.map(String::as_str)),
             logged_in,
         };
         let expected = [login(None, true), login(Some(&dirs[0]), false)];
         let expected = [&expected[..], &[login(Some(&dirs[1]), false)]].concat();
         assert_eq!(logins, expected);
+        assert_eq!(logins[0].name, "Default!");
         // Without a home, the default account is not logged in.
-        assert!(!answer(&[], env(&[]))[0].logged_in);
+        assert!(!answer(&[], name, env(&[]))[0].logged_in);
     }
 }

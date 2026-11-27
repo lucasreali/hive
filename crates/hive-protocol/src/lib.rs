@@ -527,8 +527,13 @@ pub enum Control {
     ListClaudeLogins,
     /// Whether each Claude account has logged in: its `.claude.json` has an `oauthAccount`
     /// (never the credentials, #45). The default account first, then the settings' accounts.
+    /// A remote host's (27.11) is that host's own: the status bar of its spaces shows it.
     ClaudeLogins {
         logins: Vec<ClaudeLogin>,
+        /// Whether the service finds a `claude` on the user's `PATH` (the one its wrapper
+        /// runs); Hive never installs one (#52).
+        #[serde(default)]
+        claude: bool,
     },
     /// Something the human should know that has no place of its own, shown as is in a toast
     /// that stays until dismissed: e.g. a terminal that could not get its space's GitHub
@@ -1647,6 +1652,10 @@ pub struct Account {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ClaudeLogin {
     pub config_dir: Option<String>,
+    /// The account's name in the service's settings (27.11): the default account's as
+    /// configured (21.4).
+    #[serde(default)]
+    pub name: String,
     pub logged_in: bool,
 }
 
@@ -3451,17 +3460,37 @@ mod tests {
             logins: vec![
                 ClaudeLogin {
                     config_dir: None,
+                    name: "Default".into(),
                     logged_in: true,
                 },
                 ClaudeLogin {
                     config_dir: Some("/w".into()),
+                    name: "Work".into(),
                     logged_in: false,
                 },
             ],
+            claude: true,
         };
         assert_eq!(
             serde_json::to_string(&logins).unwrap(),
-            r#"{"type":"claude_logins","logins":[{"config_dir":null,"logged_in":true},{"config_dir":"/w","logged_in":false}]}"#
+            r#"{"type":"claude_logins","logins":[{"config_dir":null,"name":"Default","logged_in":true},{"config_dir":"/w","name":"Work","logged_in":false}],"claude":true}"#
+        );
+        // Without the fields 27.11 added: no name, and no `claude` found.
+        let old: Control = serde_json::from_str(
+            r#"{"type":"claude_logins","logins":[{"config_dir":null,"logged_in":true}]}"#,
+        )
+        .unwrap();
+        let unnamed = ClaudeLogin {
+            config_dir: None,
+            name: String::new(),
+            logged_in: true,
+        };
+        assert_eq!(
+            old,
+            Control::ClaudeLogins {
+                logins: vec![unnamed],
+                claude: false
+            }
         );
         let list: Control = serde_json::from_str(r#"{"type":"list_claude_logins"}"#).unwrap();
         assert_eq!(list, Control::ListClaudeLogins);

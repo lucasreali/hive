@@ -148,6 +148,11 @@ export async function createHostsTransport(
   const onLine = (line: string) => {
     if (line === "drop-link" && up) drop("reconnecting");
     if (line === "stop-link" && up) drop("disconnected");
+    if (line === "no-claude") {
+      // Claude Code gone from gpu-box (27.11): its service says so when asked, as now.
+      remoteOptions.claude = false;
+      void remote.listClaudeLogins();
+    }
   };
   /** The fake hosts after gpu-box, by name, with their link and spaces. */
   const seeded = new Map<string, { link: HostLink; spaces: Space[] }>();
@@ -159,7 +164,8 @@ export async function createHostsTransport(
     remote: { hosts: [MOCK_HOST, ...seeded.keys()], keep_minutes: 1440 },
   };
   const local = createMockTransport(null, cast, { ids, settings, onLine });
-  const remote = createMockTransport(null, null, { ids, repos, onLine });
+  const remoteOptions = { ids, repos, onLine, claude: true };
+  const remote = createMockTransport(null, null, remoteOptions);
   /** The remote's terminals, by id. */
   const remoteIds = new Set<number>();
   const later = (message: HostMessage) => setTimeout(() => send(message), 0);
@@ -265,6 +271,11 @@ export async function createHostsTransport(
       const id = await remote.openTerminal(cwd, cols, rows, onData, account);
       remoteIds.add(id);
       return id;
+    },
+    // This Mac's accounts, or a host's own (27.11); a fake host after gpu-box answers none.
+    async listClaudeLogins(host) {
+      if (host === undefined) return local.listClaudeLogins();
+      if (host === MOCK_HOST) return remote.listClaudeLogins();
     },
     async reconnectHost(host) {
       if (host === MOCK_HOST && !up && hosts.includes(host)) await connectRemote(true);

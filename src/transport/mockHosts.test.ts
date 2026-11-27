@@ -188,3 +188,23 @@ test("with a host count, fake hosts come in every state with their spaces (27.8)
   await settle();
   expect(states(got, host(8))).toEqual(["removed"]);
 });
+
+test("each host answers its own Claude accounts; `no-claude` takes claude off gpu-box (27.11)", async () => {
+  const { transport, got } = await linked(2);
+  const logins = () => got.filter((m) => m.type === "claude_logins");
+  got.length = 0;
+  await transport.listClaudeLogins();
+  await transport.listClaudeLogins(MOCK_HOST);
+  // A fake host after gpu-box answers nothing.
+  await transport.listClaudeLogins(mockHostName(2));
+  await settle();
+  expect(logins().map((m) => [m.host, m.claude])).toEqual([
+    [undefined, true],
+    [MOCK_HOST, true],
+  ]);
+  got.length = 0;
+  const id = await transport.openTerminal("/home/user/projects/shop", 80, 24, () => {});
+  await transport.writeTerminal(id, "no-claude\r");
+  await settle();
+  expect(logins().map((m) => [m.host, m.claude])).toEqual([[MOCK_HOST, false]]);
+});

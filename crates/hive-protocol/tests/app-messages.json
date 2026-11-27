@@ -285,9 +285,11 @@
     "logins": [
       {
         "config_dir": null,
+        "name": "Default",
         "logged_in": true
       }
-    ]
+    ],
+    "claude": true
   },
   {
     "type": "gh_accounts",

@@ -130,7 +130,8 @@ export type ServiceMessage =
   | ({ type: "gh_accounts" } & GhAccounts)
   | { type: "gh_identity"; account: GhAccount; name: string; email: string }
   | { type: "gh_identity_failed"; account: GhAccount; message: string }
-  | { type: "claude_logins"; logins: ClaudeLogin[] }
+  // `claude`: whether that service finds a `claude` on the user's `PATH` (27.11).
+  | { type: "claude_logins"; logins: ClaudeLogin[]; claude: boolean }
   | { type: "notice"; message: string }
   | ({ type: "pulls" } & Pulls)
   | { type: "pull"; project: string; number: number; pull: PullDetail | null; error: string | null }
@@ -860,9 +861,10 @@ export type Account = { name: string; config_dir: string; hive_folder?: boolean 
 
 /**
  * Mirrors `hive_protocol::ClaudeLogin` (21.6): whether the account whose folder is `config_dir`
- * (null: the default one) has logged in, from its `.claude.json` (never the credentials, #45).
+ * (null: the default one) has logged in, from its `.claude.json` (never the credentials, #45),
+ * and its name in that service's settings (27.11).
  */
-export type ClaudeLogin = { config_dir: string | null; logged_in: boolean };
+export type ClaudeLogin = { config_dir: string | null; name: string; logged_in: boolean };
 
 /**
  * Mirrors `hive_protocol::AccountDir`: the Claude account a terminal is opened with (12.2),

@@ -3167,6 +3167,13 @@ button.chevron:hover {
   font-size: var(--fs-small);
 }
 
+/* A remote host without Claude Code (27.11): said as quietly, never a button. */
+.statusbar .space-account-note {
+  padding: 0 8px;
+  color: var(--text-2);
+  font-size: var(--fs-small);
+}
+
 .dialog footer .space-delete {
   margin-right: auto;
 }

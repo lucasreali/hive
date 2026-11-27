@@ -5,7 +5,7 @@ import { agentPlace, notify } from "../notify";
 import type { AgentState, ServiceMessage, Space } from "../protocol";
 import { apply } from "../reduce";
 import { goToAgent } from "../shortcuts";
-import { initialState, useHive } from "../store";
+import { initialState, showHost, useHive } from "../store";
 import { transport } from "../transport";
 import { agentStatus, MOCK_REPOS } from "../transport/mock";
 
@@ -119,6 +119,67 @@ test("a space's Claude account is one of the accounts, kept as its folder (22.5)
   expect(update).toHaveBeenCalledWith("w", "Work", { ...work.env, claude_account: null });
   create.mockRestore();
   update.mockRestore();
+});
+
+test("a new space's Claude account goes back to the default when another host is picked (27.11)", () => {
+  const create = spyOn(transport, "createSpace").mockResolvedValue();
+  const ask = spyOn(transport, "listClaudeLogins").mockResolvedValue();
+  show([home], "default");
+  const accounts = [{ name: "Work account", config_dir: "/w" }];
+  act(() => {
+    const s = useHive.getState().settings;
+    apply({ type: "settings", settings: { ...s, claude: { ...s.claude, accounts } } });
+    apply({ type: "host_link", host: "vps", state: "connected" });
+  });
+  pick("New space…");
+  fireEvent.mouseDown(screen.getByRole("combobox", { name: "Claude account" }));
+  fireEvent.click(screen.getByRole("option", { name: "Work account" }));
+  // Picking the host shown again keeps it.
+  const where = screen.getByRole("listbox", { name: "Where" });
+  fireEvent.click(within(where).getByRole("option", { name: "This Mac" }));
+  // Another host: this Mac's account folder never goes to it.
+  fireEvent.click(within(where).getByRole("option", { name: "vps" }));
+  fireEvent.change(screen.getByLabelText("Name"), { target: { value: "Remote" } });
+  fireEvent.click(screen.getByRole("button", { name: "Create space" }));
+  expect(create).toHaveBeenCalledWith("Remote", NO_ENV);
+  create.mockRestore();
+  ask.mockRestore();
+});
+
+test("a remote space's Claude account is one of its host's, never this Mac's (27.11)", () => {
+  const update = spyOn(transport, "updateSpace").mockResolvedValue();
+  const ask = spyOn(transport, "listClaudeLogins").mockResolvedValue();
+  show([home], "default");
+  const accounts = [{ name: "Ai1 - Visus", config_dir: "/w" }];
+  act(() => {
+    const s = useHive.getState().settings;
+    apply({ type: "settings", settings: { ...s, claude: { ...s.claude, accounts } } });
+    apply({ type: "host_link", host: "vps", state: "connected" });
+    const env = { ...NO_ENV, claude_account: "/srv/.claude-work" };
+    const space = { id: "r", name: "Remote", projects: [], env };
+    apply({ type: "spaces", spaces: [space], current: "r", host: "vps" });
+    showHost("vps");
+  });
+  const account = () => screen.getByRole("combobox", { name: "Claude account" });
+  // Before the host told its accounts: its space's account is kept as saved.
+  pick("Edit space…");
+  expect(screen.getByText(/one of vps's own/)).toBeDefined();
+  fireEvent.click(screen.getByRole("button", { name: "Save" }));
+  const saved = { ...NO_ENV, claude_account: "/srv/.claude-work" };
+  expect(update).toHaveBeenLastCalledWith("r", "Remote", saved);
+  act(() => {
+    const logins = [
+      { config_dir: null, name: "Default", logged_in: true },
+      { config_dir: "/srv/.claude-work", name: "Server work", logged_in: true },
+    ];
+    apply({ type: "claude_logins", logins, claude: true, host: "vps" });
+  });
+  expect(account().textContent).toBe("Server work");
+  fireEvent.mouseDown(account());
+  const options = screen.getAllByRole("option").map((o) => o.textContent);
+  expect(options).toEqual(["Default", "Server work"]);
+  update.mockRestore();
+  ask.mockRestore();
 });
 
 test("the space dialog has no gh config folder field: the account brings its folder (24.13)", () => {

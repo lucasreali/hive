@@ -1060,6 +1060,8 @@ export type MockOptions = {
   ids?: { last: number };
   /** Called with each line typed in one of its terminals. */
   onLine?: (line: string) => void;
+  /** Whether it finds a `claude` (27.11); true when left out. */
+  claude?: boolean;
 };
 
 export function createMockTransport(
@@ -1535,12 +1537,12 @@ export function createMockTransport(
       // The default account has logged in; an account added in the mock never has.
       const accounts = settings.claude.accounts.map((a) => ({
         config_dir: a.config_dir,
+        name: a.name,
         logged_in: false,
       }));
-      later({
-        type: "claude_logins",
-        logins: [{ config_dir: null, logged_in: true }, ...accounts],
-      });
+      const main = { config_dir: null, name: settings.claude.default_name, logged_in: true };
+      // It has a `claude` unless told otherwise (27.11).
+      later({ type: "claude_logins", logins: [main, ...accounts], claude: options.claude ?? true });
     },
     async listGhAccounts(ghConfigDir) {
       sendGhAccounts(ghConfigDir);
