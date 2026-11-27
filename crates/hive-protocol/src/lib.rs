@@ -582,10 +582,10 @@ pub enum Control {
         body: String,
         base: String,
         draft: bool,
-        /// Push the branch first, as `Push` does (27.6), to this target (`PushTarget`'s, as the
-        /// user confirmed it) when it is not on GitHub yet.
+        /// Push the branch first, as `Push` does (27.6), to this remote and ref (`PushTarget`'s,
+        /// as the user confirmed them) when it is not on GitHub yet.
         #[serde(default)]
-        push: Option<String>,
+        push: Option<PushAt>,
     },
     /// An action on a pull request worked; `message` is shown as is.
     PullDone {
@@ -696,20 +696,22 @@ pub enum Control {
     PushTarget {
         worktree: String,
         branch: Option<String>,
-        /// e.g. `origin/main`.
+        /// e.g. `origin/main`, to show.
         target: Option<String>,
+        /// The remote and its ref, exactly, for `Push` to confirm.
+        at: Option<PushAt>,
         set_upstream: bool,
         /// Its commits the remote-tracking branch has not (none known without it).
         ahead: Option<u64>,
         error: Option<String>,
     },
     /// App → service: pushes the branch of `worktree` to `PushTarget`'s target, never forced;
-    /// `branch` and `target` are what the user confirmed: refused when they changed since.
+    /// `branch` and `at` are what the user confirmed: refused when either changed since.
     /// Answered by `GitDone` or `GitFailed` (git's message, e.g. a rejected push).
     Push {
         worktree: String,
         branch: String,
-        target: String,
+        at: PushAt,
     },
     /// A git action of the Changes panel worked; `message` is shown as is.
     GitDone {
@@ -2109,9 +2111,17 @@ pub struct PullForm {
     pub body: String,
     pub base: String,
     pub draft: bool,
-    /// The confirmed target to push to first (27.6); none: no push.
+    /// The confirmed remote and ref to push to first (27.6); none: no push.
     #[serde(default)]
-    pub push: Option<String>,
+    pub push: Option<PushAt>,
+}
+
+/// Where a push goes (27.6): the remote (a name, or a URL as `branch.<name>.remote` may be)
+/// and its ref (`refs/heads/<name>`), compared exactly, never as the shown `remote/name`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PushAt {
+    pub remote: String,
+    pub merge: String,
 }
 
 /// Which git action of the Changes panel (27.6) a `GitDone` or `GitFailed` answers.
@@ -4825,7 +4835,10 @@ mod tests {
                 body: String::new(),
                 base: "main".into(),
                 draft: false,
-                push: Some("origin/b".into()),
+                push: Some(PushAt {
+                    remote: "origin".into(),
+                    merge: "refs/heads/b".into(),
+                }),
             },
             Control::PullDone {
                 project: "/r".into(),
@@ -5012,6 +5025,10 @@ mod tests {
                 worktree: "/r".into(),
                 branch: Some("b".into()),
                 target: Some("origin/b".into()),
+                at: Some(PushAt {
+                    remote: "origin".into(),
+                    merge: "refs/heads/b".into(),
+                }),
                 set_upstream: true,
                 ahead: None,
                 error: None,
@@ -5019,7 +5036,10 @@ mod tests {
             Control::Push {
                 worktree: "/r".into(),
                 branch: "b".into(),
-                target: "origin/b".into(),
+                at: PushAt {
+                    remote: "origin".into(),
+                    merge: "refs/heads/b".into(),
+                },
             },
             Control::GitFailed {
                 worktree: "/r".into(),

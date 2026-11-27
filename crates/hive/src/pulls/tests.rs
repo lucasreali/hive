@@ -1123,18 +1123,29 @@ fn a_pull_request_can_push_its_branch_first() {
             body: String::new(),
             base: "main".into(),
             draft: false,
-            push: Some(to.into()),
+            push: Some(hive_protocol::PushAt {
+                remote: "origin".into(),
+                merge: to.into(),
+            }),
         })
     };
     // An upstream of another name: the pull request's head would not be it.
-    let [Control::PullFailed { message, .. }] = &create("origin/other")[..] else {
+    let [Control::PullFailed { message, .. }] = &create("refs/heads/other")[..] else {
         panic!()
     };
     assert_eq!(
         message,
         "Its upstream has another name: push it in a terminal"
     );
-    let replies = create("origin/topic");
+    // One that only ends with it (`y/topic`) is another branch too.
+    let [Control::PullFailed { message, .. }] = &create("refs/heads/y/topic")[..] else {
+        panic!()
+    };
+    assert_eq!(
+        message,
+        "Its upstream has another name: push it in a terminal"
+    );
+    let replies = create("refs/heads/topic");
     assert!(
         matches!(&replies[0], Control::PullDone { number: 42, .. }),
         "{replies:?}"
@@ -1156,7 +1167,7 @@ fn a_pull_request_can_push_its_branch_first() {
     // A push git refuses: no pull request, and git's message.
     git(root, &["config", &instead, "/nowhere/at/all"]);
     let calls = setup.calls().len();
-    let [Control::PullFailed { message, .. }] = &create("origin/topic")[..] else {
+    let [Control::PullFailed { message, .. }] = &create("refs/heads/topic")[..] else {
         panic!()
     };
     assert!(message.starts_with("Could not push topic: "), "{message}");

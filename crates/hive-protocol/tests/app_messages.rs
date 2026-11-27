@@ -507,6 +507,10 @@ fn samples() -> Vec<Control> {
             worktree: s("/r"),
             branch: Some(s("main")),
             target: Some(s("origin/main")),
+            at: Some(PushAt {
+                remote: s("origin"),
+                merge: s("refs/heads/main"),
+            }),
             set_upstream: false,
             ahead: Some(1),
             error: None,

@@ -108,6 +108,7 @@ const FIELDS: { [T in ServiceMessage["type"]]: Fields<Extract<ServiceMessage, { 
     worktree: true,
     branch: true,
     target: true,
+    at: true,
     set_upstream: true,
     ahead: true,
     error: true,

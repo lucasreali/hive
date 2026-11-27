@@ -7,6 +7,8 @@ const tick = () => new Promise((resolve) => setTimeout(resolve, 0));
 const [shop, api] = MOCK_REPOS;
 const [main, login] = shop.worktrees;
 const refactor = api.worktrees[1];
+/** Where a push of branch `b` goes. */
+const at = { remote: "origin", merge: "refs/heads/b" };
 
 async function connected() {
   const transport = createMockTransport();
@@ -88,7 +90,7 @@ test("a partly staged file stays after a commit, unstaged; refusals outside a wo
   messages.length = 0;
   await transport.stageFiles("/nope", ["a"], true);
   await transport.commit("/nope", "m");
-  await transport.push("/nope", "b", "origin/b");
+  await transport.push("/nope", "b", at);
   await transport.getPushTarget("/nope");
   await tick();
   const why = "/nope is not a worktree of a followed project";
@@ -101,14 +103,15 @@ test("a push goes to its upstream or origin; a moved remote branch is refused", 
   const { transport, messages } = await connected();
   await transport.getPushTarget(main.path);
   await transport.getPushTarget(login.path);
-  await transport.push(login.path, "b", "origin/b");
-  await transport.push(refactor.path, "b", "origin/b");
+  await transport.push(login.path, "b", at);
+  await transport.push(refactor.path, "b", at);
   await tick();
   expect(messages[0]).toEqual({
     type: "push_target",
     worktree: main.path,
     branch: "main",
     target: "origin/main",
+    at: { remote: "origin", merge: "refs/heads/main" },
     set_upstream: false,
     ahead: 1,
     error: null,
@@ -135,7 +138,7 @@ test("a detached worktree has nothing to push", async () => {
   await tick();
   messages.length = 0;
   await transport.getPushTarget(detached.path);
-  await transport.push(detached.path, "b", "origin/b");
+  await transport.push(detached.path, "b", at);
   await tick();
   const none = "This worktree is on no branch (a detached HEAD): nothing to push";
   expect(messages).toEqual([
@@ -144,6 +147,7 @@ test("a detached worktree has nothing to push", async () => {
       worktree: detached.path,
       branch: null,
       target: null,
+      at: null,
       set_upstream: false,
       ahead: null,
       error: none,

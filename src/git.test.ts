@@ -70,14 +70,15 @@ test("the push dialog asks where the branch goes, pushes, and closes once pushed
     worktree: w.path,
     branch: "topic",
     target: "origin/topic",
+    at: { remote: "origin", merge: "refs/heads/topic" },
     set_upstream: true,
     ahead: null,
     error: null,
   };
   apply({ type: "push_target", ...answer });
   expect(useHive.getState().pushTargets[w.path]).toEqual(answer);
-  push({ ...answer, branch: "topic", target: "origin/topic" });
-  expect(send).toHaveBeenCalledWith(w.path, "topic", "origin/topic");
+  push({ ...answer, branch: "topic", at: answer.at });
+  expect(send).toHaveBeenCalledWith(w.path, "topic", answer.at);
   expect(useHive.getState().git[w.path]?.busy).toBe("push");
   apply({ type: "git_done", worktree: w.path, action: "push", message: "Pushed topic" });
   expect(useHive.getState().modal).toBeNull();

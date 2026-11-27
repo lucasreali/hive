@@ -8,12 +8,19 @@ import { transport } from "./transport";
 export type GitAction = "stage" | "unstage" | "commit" | "push";
 /** What of a changed file the next commit takes. */
 export type Staged = "no" | "partly" | "yes";
+/**
+ * Where a push goes: the remote (a name or a URL) and its ref (`refs/heads/<name>`), compared
+ * exactly by the service, never as the shown `remote/name`.
+ */
+export type PushAt = { remote: string; merge: string };
 /** The `push_target` message: where a push of the worktree's branch goes, or why it cannot. */
 export type PushTarget = {
   worktree: string;
   branch: string | null;
-  /** e.g. `origin/main`. */
+  /** e.g. `origin/main`, to show. */
   target: string | null;
+  /** The remote and its ref, exactly, for `push` to confirm. */
+  at: PushAt | null;
   /** The branch has no upstream yet: the push sets it. */
   set_upstream: boolean;
   /** Its commits the remote-tracking branch has not; null when unknown. */
@@ -87,10 +94,10 @@ export function openPush(project: string, w: Place): void {
   void transport.getPushTarget(w.path);
 }
 
-/** Pushes `worktree`'s branch to `target` as the push dialog showed it (the dialog asks). */
-export function push(target: PushTarget & { branch: string; target: string }): void {
+/** Pushes `worktree`'s branch to `at` as the push dialog showed it (the dialog asks). */
+export function push(target: PushTarget & { branch: string; at: PushAt }): void {
   setGit(target.worktree, { busy: "push", error: null });
-  void transport.push(target.worktree, target.branch, target.target);
+  void transport.push(target.worktree, target.branch, target.at);
 }
 
 /** Opens "Run workflow…" for `project`, its workflows as worktree `w`'s `HEAD` has them. */

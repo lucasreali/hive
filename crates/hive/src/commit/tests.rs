@@ -31,6 +31,14 @@ fn env() -> Vec<(&'static str, String)> {
     ]
 }
 
+/// The remote `remote` and its branch `name`, as a push is confirmed.
+fn at(remote: &str, name: &str) -> PushAt {
+    PushAt {
+        remote: remote.into(),
+        merge: format!("refs/heads/{name}"),
+    }
+}
+
 /// A repository on `main`, with a first commit when `committed`.
 fn repo(committed: bool) -> (tempfile::TempDir, PathBuf) {
     let tmp = tempfile::tempdir().unwrap();
@@ -213,7 +221,7 @@ fn a_branch_without_upstream_goes_to_origin_and_gets_it() {
         }
     );
     assert_eq!(found.shown(), "origin/main");
-    let done = push(&dir, &env(), ("main", "origin/main")).unwrap();
+    let done = push(&dir, &env(), ("main", &at("origin", "main"))).unwrap();
     assert_eq!(done, "Pushed main to origin/main, now its upstream");
     assert_eq!(
         git(&dir, &["config", "branch.main.merge"]),
@@ -228,7 +236,7 @@ fn a_branch_without_upstream_goes_to_origin_and_gets_it() {
     let found = target(&dir).unwrap();
     assert_eq!((found.set_upstream, found.ahead), (false, Some(1)));
     assert_eq!(
-        push(&dir, &env(), ("main", "origin/main")).unwrap(),
+        push(&dir, &env(), ("main", &at("origin", "main"))).unwrap(),
         "Pushed main to origin/main"
     );
     assert_eq!(target(&dir).unwrap().ahead, Some(0));
@@ -251,12 +259,14 @@ fn a_push_goes_to_the_upstreams_own_branch() {
     assert_eq!(found.shown(), "origin/remote-name");
     assert_eq!(found.ahead, Some(1));
     // Its upstream changed since it was shown: refused, nothing pushed.
-    let changed = push(&dir, &env(), ("local", "origin/other")).unwrap_err();
+    let changed = push(&dir, &env(), ("local", &at("origin", "other"))).unwrap_err();
     assert_eq!(
         changed,
-        "local → origin/other changed since it was shown (now local → origin/remote-name): check again"
+        "local → origin refs/heads/other changed since it was shown (now local → origin refs/heads/remote-name): check again"
     );
-    push(&dir, &env(), ("local", "origin/remote-name")).unwrap();
+    // A remote `origin/remote` and a ref `name` would show the same: not the same place.
+    assert!(push(&dir, &env(), ("local", &at("origin/remote", "name"))).is_err());
+    push(&dir, &env(), ("local", &at("origin", "remote-name"))).unwrap();
     assert_eq!(
         git(&bare, &["rev-parse", "remote-name"]),
         git(&dir, &["rev-parse", "HEAD"])
@@ -266,7 +276,7 @@ fn a_push_goes_to_the_upstreams_own_branch() {
 #[test]
 fn a_rejected_push_is_gits_message_and_never_forced() {
     let (tmp, dir, bare) = with_origin();
-    push(&dir, &env(), ("main", "origin/main")).unwrap();
+    push(&dir, &env(), ("main", &at("origin", "main"))).unwrap();
     // Someone else pushed meanwhile.
     let other = tmp.path().join("other");
     git(
@@ -277,7 +287,7 @@ fn a_rejected_push_is_gits_message_and_never_forced() {
     git(&other, &["push", "-q", "origin", "main"]);
     let theirs = git(&bare, &["rev-parse", "main"]);
     git(&dir, &["commit", "-q", "--allow-empty", "-m", "mine"]);
-    let err = push(&dir, &env(), ("main", "origin/main")).unwrap_err();
+    let err = push(&dir, &env(), ("main", &at("origin", "main"))).unwrap_err();
     assert!(err.contains("[rejected]"), "{err}");
     assert!(!err.starts_with("git push"), "{err}");
     assert_eq!(git(&bare, &["rev-parse", "main"]), theirs);
@@ -332,7 +342,7 @@ fn a_push_is_refused_where_it_cannot_go() {
     let detached = "This worktree is on no branch (a detached HEAD): nothing to push";
     assert_eq!(target(&dir).unwrap_err(), detached);
     assert_eq!(
-        push(&dir, &env(), ("main", "origin/main")).unwrap_err(),
+        push(&dir, &env(), ("main", &at("origin", "main"))).unwrap_err(),
         detached
     );
     git(&dir, &["switch", "-q", "main"]);
@@ -481,6 +491,7 @@ fn the_service_answers_only_its_git_requests_and_never_for_a_folder_project() {
             worktree: root.clone(),
             branch: None,
             target: None,
+            at: None,
             set_upstream: false,
             ahead: None,
             error: Some(none.into()),
@@ -489,7 +500,7 @@ fn the_service_answers_only_its_git_requests_and_never_for_a_folder_project() {
     let push = Control::Push {
         worktree: root.clone(),
         branch: "main".into(),
-        target: "origin/main".into(),
+        at: at("origin", "main"),
     };
     assert_eq!(
         ask(push),

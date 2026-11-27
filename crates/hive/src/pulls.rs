@@ -292,8 +292,8 @@ struct Form<'a> {
     body: &'a str,
     base: &'a str,
     draft: bool,
-    /// Push the branch first, to this confirmed target (27.6).
-    push: Option<String>,
+    /// Push the branch first, to this confirmed remote and ref (27.6).
+    push: Option<hive_protocol::PushAt>,
 }
 
 /// Opens a pull request from the branch of `worktree`, pushed first when asked
@@ -328,13 +328,14 @@ fn create(
     }
     let env = projects.space_env(&id);
     let repo = remote(Path::new(&project.path), host(&env)).map_err(|err| (id.clone(), err))?;
-    if let Some(to) = &form.push {
-        // The pull request's head is the local branch's name: its upstream must have it.
-        if !to.ends_with(&format!("/{branch}")) {
+    if let Some(at) = &form.push {
+        // The pull request's head is the local branch's name: its upstream ref must be that
+        // very branch (`push` then checks it is still the one confirmed).
+        if at.merge != format!("refs/heads/{branch}") {
             return fail("Its upstream has another name: push it in a terminal");
         }
         let env = crate::commit::remote_env(gh, &env);
-        let pushed = crate::commit::push(Path::new(&wt.path), &env, (&branch, to));
+        let pushed = crate::commit::push(Path::new(&wt.path), &env, (&branch, at));
         pushed.map_err(|err| (id.clone(), format!("Could not push {branch}: {err}")))?;
     }
     let fields = [

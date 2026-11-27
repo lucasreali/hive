@@ -1,4 +1,4 @@
-import type { Workflow, WorkflowValue } from "../git";
+import type { PushAt, Workflow, WorkflowValue } from "../git";
 import type { ChangedFile, Project, ServiceMessage } from "../protocol";
 
 const SHOP = "/home/user/projects/shop";
@@ -99,7 +99,7 @@ export function createMockGit(
     },
     async getPushTarget(worktree: string) {
       const branch = branchOf(worktree);
-      const none = { branch: null, target: null, set_upstream: false, ahead: null };
+      const none = { branch: null, target: null, at: null, set_upstream: false, ahead: null };
       if (!holder(worktree)) {
         return later({ type: "push_target", worktree, ...none, error: refused(worktree) });
       }
@@ -116,12 +116,13 @@ export function createMockGit(
         worktree,
         branch,
         target,
+        at: { remote: "origin", merge: `refs/heads/${branch}` },
         set_upstream: !main,
         ahead,
         error: null,
       });
     },
-    async push(worktree: string, _branch: string, _target: string) {
+    async push(worktree: string, _branch: string, _at: PushAt) {
       const branch = branchOf(worktree);
       const failed = (message: string) =>
         later({ type: "git_failed", worktree, action: "push", message });

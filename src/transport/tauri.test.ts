@@ -344,14 +344,15 @@ test("commit, push and workflow requests call their commands (27.6)", async () =
   await tauriTransport.stageFiles("/r/w", ["a"], true);
   await tauriTransport.commit("/r/w", "m");
   await tauriTransport.getPushTarget("/r/w");
-  await tauriTransport.push("/r/w", "b", "origin/b");
+  const at = { remote: "origin", merge: "refs/heads/b" };
+  await tauriTransport.push("/r/w", "b", at);
   await tauriTransport.listWorkflows("/r", "/r/w");
   await tauriTransport.runWorkflow("/r", "ci.yml", "b", [{ name: "n", value: "v" }]);
   expect(calls).toEqual([
     ["stage_files", { worktree: "/r/w", paths: ["a"], staged: true }],
     ["commit", { worktree: "/r/w", message: "m" }],
     ["get_push_target", { worktree: "/r/w" }],
-    ["push", { worktree: "/r/w", branch: "b", target: "origin/b" }],
+    ["push", { worktree: "/r/w", branch: "b", at }],
     ["list_workflows", { project: "/r", worktree: "/r/w" }],
     [
       "run_workflow",

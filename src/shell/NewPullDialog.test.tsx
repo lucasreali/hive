@@ -89,6 +89,7 @@ test("a branch not on GitHub yet is pushed first, unless unticked (27.6)", () =>
     worktree: checkout.path,
     branch: checkout.branch,
     target: `origin/${checkout.branch}`,
+    at: { remote: "origin", merge: `refs/heads/${checkout.branch}` },
     set_upstream: true,
     ahead: null,
     error: null,
@@ -100,14 +101,7 @@ test("a branch not on GitHub yet is pushed first, unless unticked (27.6)", () =>
   expect(first.checked).toBe(true);
   fireEvent.change(within(dialog).getByLabelText("Title"), { target: { value: "T" } });
   fireEvent.click(within(dialog).getByRole("button", { name: "Create" }));
-  expect(create).toHaveBeenLastCalledWith(
-    checkout.path,
-    "T",
-    "",
-    "main",
-    false,
-    `origin/${checkout.branch}`,
-  );
+  expect(create).toHaveBeenLastCalledWith(checkout.path, "T", "", "main", false, target.at);
   const pushFailed = "Could not push x: ! [rejected]";
   act(() => apply({ type: "pull_failed", project: shop.id, number: null, message: pushFailed }));
   expect(within(dialog).getByRole("alert").textContent).toBe(pushFailed);
@@ -124,7 +118,7 @@ test("a branch not on GitHub yet is pushed first, unless unticked (27.6)", () =>
   // Up to date, or not pushable (a detached HEAD): nothing to offer.
   act(() => apply({ type: "push_target", ...target, set_upstream: false, ahead: 0 }));
   expect(within(dialog).queryByLabelText(/first/)).toBeNull();
-  const detached = { ...target, branch: null, target: null, error: "no branch" };
+  const detached = { ...target, branch: null, target: null, at: null, error: "no branch" };
   act(() => apply({ type: "push_target", ...detached, set_upstream: false }));
   expect(within(dialog).queryByLabelText(/first/)).toBeNull();
   // Unknown (no remote-tracking branch): offered, without a count.

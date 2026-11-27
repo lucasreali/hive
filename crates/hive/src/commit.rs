@@ -11,7 +11,7 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use hive_protocol::{Control, FileStatus, GitAction, SpaceEnv};
+use hive_protocol::{Control, FileStatus, GitAction, PushAt, SpaceEnv};
 
 use crate::adapter::clip;
 use crate::changes;
@@ -69,10 +69,10 @@ pub fn answer(gh: &Gh, projects: &Projects, request: Control) -> Vec<Control> {
         Control::Push {
             worktree,
             branch,
-            target,
+            at,
         } => {
             let done = located(projects, &worktree)
-                .and_then(|(dir, env)| push(&dir, &remote_env(gh, &env), (&branch, &target)));
+                .and_then(|(dir, env)| push(&dir, &remote_env(gh, &env), (&branch, &at)));
             vec![reply(worktree, GitAction::Push, done)]
         }
         _ => Vec::new(),
@@ -311,6 +311,10 @@ fn target_message(worktree: String, found: Result<Target, String>) -> Control {
         Ok(target) => Control::PushTarget {
             worktree,
             target: Some(target.shown()),
+            at: Some(PushAt {
+                remote: target.remote.clone(),
+                merge: target.merge.clone(),
+            }),
             set_upstream: target.set_upstream,
             ahead: target.ahead,
             branch: Some(target.branch),
@@ -320,6 +324,7 @@ fn target_message(worktree: String, found: Result<Target, String>) -> Control {
             worktree,
             branch: None,
             target: None,
+            at: None,
             set_upstream: false,
             ahead: None,
             error: Some(error),
@@ -340,17 +345,24 @@ pub fn push_args(target: &Target) -> Vec<String> {
 }
 
 /// Pushes the branch of the worktree at `dir` to its [`target`] with `env` (the space's,
-/// [`remote_env`]), only while the branch and its target are still the `confirmed` ones (the
-/// user saw them; something in the worktree may have switched the branch or changed its
-/// upstream since); a rejected push is git's message.
-pub fn push(dir: &Path, env: &[(&str, String)], confirmed: (&str, &str)) -> Result<String, String> {
+/// [`remote_env`]), only while the branch, its remote and its ref are still the `confirmed`
+/// ones, compared exactly (the user saw them; something in the worktree may have switched the
+/// branch or changed its upstream since); a rejected push is git's message.
+pub fn push(
+    dir: &Path,
+    env: &[(&str, String)],
+    (branch, at): (&str, &PushAt),
+) -> Result<String, String> {
     let target = target(dir)?;
-    if (target.branch.as_str(), target.shown().as_str()) != confirmed {
-        let (branch, to) = confirmed;
+    let now = (
+        target.branch.as_str(),
+        target.remote.as_str(),
+        target.merge.as_str(),
+    );
+    if now != (branch, at.remote.as_str(), at.merge.as_str()) {
         return Err(format!(
-            "{branch} → {to} changed since it was shown (now {} → {}): check again",
-            target.branch,
-            target.shown()
+            "{branch} → {} {} changed since it was shown (now {} → {} {}): check again",
+            at.remote, at.merge, target.branch, target.remote, target.merge
         ));
     }
     let args = push_args(&target);

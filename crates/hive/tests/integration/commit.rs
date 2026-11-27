@@ -1,7 +1,7 @@
 //! Staging, committing and pushing from the Changes panel (27.6) through the service, against a
 //! bare repository beside the project standing for GitHub (never a real remote).
 
-use hive_protocol::{Control, GitAction, Role, SpaceEnv};
+use hive_protocol::{Control, GitAction, PushAt, Role, SpaceEnv};
 
 use crate::common::{Conn, stop};
 use crate::worktree::Repo;
@@ -107,6 +107,7 @@ async fn a_change_is_committed_as_the_space_and_pushed_never_forced() {
             worktree: root.clone(),
             branch: None,
             target: None,
+            at: None,
             set_upstream: false,
             ahead: None,
             error: Some(none.into()),
@@ -119,6 +120,10 @@ async fn a_change_is_committed_as_the_space_and_pushed_never_forced() {
             worktree: root.clone(),
             branch: Some("main".into()),
             target: Some("origin/main".into()),
+            at: Some(PushAt {
+                remote: "origin".into(),
+                merge: "refs/heads/main".into(),
+            }),
             set_upstream: true,
             ahead: None,
             error: None,
@@ -127,7 +132,10 @@ async fn a_change_is_committed_as_the_space_and_pushed_never_forced() {
     let push = Control::Push {
         worktree: root.clone(),
         branch: "main".into(),
-        target: "origin/main".into(),
+        at: PushAt {
+            remote: "origin".into(),
+            merge: "refs/heads/main".into(),
+        },
     };
     let pushed = Control::GitDone {
         worktree: root.clone(),

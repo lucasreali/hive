@@ -18,8 +18,8 @@ use std::time::{Duration, Instant};
 use futures_util::{FutureExt, SinkExt, Stream, StreamExt};
 use hive_protocol::{
     AccountDir, AgentState, Control, DiffBase, Frame, FrameCodec, FrameError, FrameType, GhAccount,
-    LineSide, PullAction, PullForm, Role, RunAction, SessionTarget, Settings, SpaceEnv, TableEdit,
-    WorkflowValue, MAX_PAYLOAD, PROTOCOL_VERSION, READ_LIMIT,
+    LineSide, PullAction, PullForm, PushAt, Role, RunAction, SessionTarget, Settings, SpaceEnv,
+    TableEdit, WorkflowValue, MAX_PAYLOAD, PROTOCOL_VERSION, READ_LIMIT,
 };
 use serde_json::{json, Value};
 use tauri::http::Response;
@@ -2148,11 +2148,11 @@ impl Host {
     }
 
     /// The answer arrives as `git_done` or `git_failed`.
-    pub fn push(&self, worktree: String, branch: String, target: String) -> Result<(), String> {
+    pub fn push(&self, worktree: String, branch: String, at: PushAt) -> Result<(), String> {
         let push = Control::Push {
             worktree,
             branch,
-            target,
+            at,
         };
         self.link().send(0, &push)
     }
@@ -2512,7 +2512,7 @@ impl Host {
         title: String,
         body: String,
         base: String,
-        (draft, push): (bool, Option<String>),
+        (draft, push): (bool, Option<PushAt>),
     ) -> Result<(), String> {
         let create = Control::CreatePull {
             worktree,
@@ -4073,9 +4073,9 @@ pub mod commands {
         host: Option<String>,
         worktree: String,
         branch: String,
-        target: String,
+        at: PushAt,
     ) -> Result<(), String> {
-        hive.on(host.as_deref())?.push(worktree, branch, target)
+        hive.on(host.as_deref())?.push(worktree, branch, at)
     }
 
     #[tauri::command]

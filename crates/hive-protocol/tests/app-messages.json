@@ -427,6 +427,10 @@
     "worktree": "/r",
     "branch": "main",
     "target": "origin/main",
+    "at": {
+      "remote": "origin",
+      "merge": "refs/heads/main"
+    },
     "set_upstream": false,
     "ahead": 1,
     "error": null

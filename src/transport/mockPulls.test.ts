@@ -110,7 +110,10 @@ test("creating one needs a title and a GitHub repository", async () => {
     },
   ]);
   messages.length = 0;
-  await transport.createPull(login.path, " New ", "body", "main", true, "origin/x");
+  await transport.createPull(login.path, " New ", "body", "main", true, {
+    remote: "origin",
+    merge: "refs/heads/x",
+  });
   await tick();
   expect(messages[0]).toEqual({
     type: "pull_done",

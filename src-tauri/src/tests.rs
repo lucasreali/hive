@@ -15,6 +15,14 @@ async fn next<T>(rx: &mut mpsc::UnboundedReceiver<T>) -> T {
         .unwrap()
 }
 
+/// Where a push of branch `b` goes: `origin`'s `refs/heads/b` (27.6).
+fn push_at() -> PushAt {
+    PushAt {
+        remote: "origin".into(),
+        merge: "refs/heads/b".into(),
+    }
+}
+
 /// A UI control channel and what it received.
 fn ui() -> (Channel<Value>, mpsc::UnboundedReceiver<Value>) {
     let (tx, rx) = mpsc::unbounded_channel();
@@ -1572,7 +1580,7 @@ async fn project_requests_go_to_the_service_and_answers_to_the_ui() {
         "t".into(),
         "b".into(),
         "main".into(),
-        (true, Some("origin/b".into())),
+        (true, Some(push_at())),
     )
     .unwrap();
     let create = Control::CreatePull {
@@ -1581,7 +1589,7 @@ async fn project_requests_go_to_the_service_and_answers_to_the_ui() {
         body: "b".into(),
         base: "main".into(),
         draft: true,
-        push: Some("origin/b".into()),
+        push: Some(push_at()),
     };
     assert_eq!(service.control().await, (0, create));
     hive.stage_files("/r/w".into(), vec!["a".into()], false)
@@ -1603,12 +1611,11 @@ async fn project_requests_go_to_the_service_and_answers_to_the_ui() {
         worktree: "/r/w".into(),
     };
     assert_eq!(service.control().await, (0, target));
-    hive.push("/r/w".into(), "b".into(), "origin/b".into())
-        .unwrap();
+    hive.push("/r/w".into(), "b".into(), push_at()).unwrap();
     let push = Control::Push {
         worktree: "/r/w".into(),
         branch: "b".into(),
-        target: "origin/b".into(),
+        at: push_at(),
     };
     assert_eq!(service.control().await, (0, push));
     hive.list_workflows("/r".into(), "/r/w".into()).unwrap();
@@ -2226,7 +2233,7 @@ async fn bridge_exit_ends_terminals_then_disconnects() {
     assert_eq!(stage, not_connected);
     assert_eq!(hive.commit("/r".into(), "m".into()), not_connected);
     assert_eq!(hive.get_push_target("/r".into()), not_connected);
-    let push = hive.push("/r".into(), "b".into(), "origin/b".into());
+    let push = hive.push("/r".into(), "b".into(), push_at());
     assert_eq!(push, not_connected);
     assert_eq!(hive.list_workflows("/r".into(), "/r".into()), not_connected);
     let run = hive.run_workflow("/r".into(), "ci.yml".into(), "b".into(), Vec::new());
@@ -2678,7 +2685,8 @@ fn commands_reach_the_managed_hive() {
     let stage_files = json!({"worktree": "/r/w", "paths": ["a"], "staged": true});
     let commit = json!({"worktree": "/r/w", "message": "m"});
     let worktree = json!({"worktree": "/r/w"});
-    let push = json!({"worktree": "/r/w", "branch": "b", "target": "origin/b"});
+    let at = json!({"remote": "origin", "merge": "refs/heads/b"});
+    let push = json!({"worktree": "/r/w", "branch": "b", "at": at});
     for (cmd, args) in [
         ("list_branches", &branches),
         ("validate_worktree_name", &validate),

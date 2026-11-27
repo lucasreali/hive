@@ -28,8 +28,8 @@ export function PushDialog() {
       <form
         onSubmit={(e) => {
           e.preventDefault();
-          if (target?.branch && target.target) {
-            push({ ...target, branch: target.branch, target: target.target });
+          if (target?.branch && target.at) {
+            push({ ...target, branch: target.branch, at: target.at });
           }
         }}
       >

@@ -27,6 +27,7 @@ const target = (extra: Partial<PushTarget>): PushTarget => ({
   worktree: login.path,
   branch: login.branch,
   target: `origin/${login.branch}`,
+  at: { remote: "origin", merge: `refs/heads/${login.branch}` },
   set_upstream: false,
   ahead: 2,
   error: null,
@@ -51,7 +52,10 @@ test("says where the branch goes, then pushes once asked", () => {
   act(() => apply({ type: "push_target", ...target({ set_upstream: true, ahead: null }) }));
   expect(dialog.textContent).toContain(", and make it its upstream?");
   fireEvent.click(submit);
-  expect(push).toHaveBeenCalledWith(login.path, login.branch, `origin/${login.branch}`);
+  expect(push).toHaveBeenCalledWith(login.path, login.branch, {
+    remote: "origin",
+    merge: `refs/heads/${login.branch}`,
+  });
   expect(submit.textContent).toBe("Pushing…");
   expect(submit.disabled).toBe(true);
   // Rejected: git's message as is, and Push again.
@@ -71,7 +75,9 @@ test("a branch that cannot be pushed says why; Cancel and the X close", () => {
   const ask = spyOn(transport, "getPushTarget").mockResolvedValue();
   const dialog = open();
   const why = "This worktree is on no branch (a detached HEAD): nothing to push";
-  act(() => apply({ type: "push_target", ...target({ branch: null, target: null, error: why }) }));
+  act(() =>
+    apply({ type: "push_target", ...target({ branch: null, target: null, at: null, error: why }) }),
+  );
   expect(within(dialog).getByRole("alert").textContent).toBe(why);
   expect((within(dialog).getByRole("button", { name: "Push" }) as HTMLButtonElement).disabled).toBe(
     true,
