@@ -192,7 +192,7 @@ test("the input saves on Enter and cancels on Escape, only for its own file", ()
   add.mockRestore();
 });
 
-test("the list groups the comments and sends, resolves, reopens and deletes them", () => {
+test("the list groups the comments and sends, resolves, reopens and deletes them", async () => {
   const resolve = spyOn(transport, "resolveComment").mockImplementation(async () => {});
   const remove = spyOn(transport, "deleteComment").mockImplementation(async () => {});
   render(<CommentsView worktree={wt} />);
@@ -232,9 +232,44 @@ test("the list groups the comments and sends, resolves, reopens and deletes them
     "Paste the open comments into the agent's terminal, without Enter",
   ]);
   expect(one.title).toBe("Paste the comment into the agent's terminal, without Enter");
-  // No xterm in this test: nothing is pasted, nothing breaks.
+  // No xterm yet: nothing is pasted, nothing breaks.
+  const write = spyOn(transport, "writeTerminal");
   fireEvent.click(all);
   fireEvent.click(one);
+  expect(write).not.toHaveBeenCalled();
+
+  // Two agents with their xterms: each button opens the menu, and the picked agent gets the text.
+  window.localStorage.clear();
+  const host = document.body.appendChild(document.createElement("div"));
+  const unmount = mountTerminals(host);
+  act(() => useHive.setState({ tabs: [], activeTab: null }));
+  const alpha = await act(() => openTerminal(wt));
+  const beta = await act(() => openTerminal(wt));
+  await act(() => new Promise((resolve) => setTimeout(resolve, 10)));
+  act(() =>
+    useHive.setState({
+      agents: { a: agent("a", alpha), b: agent("b", beta) },
+      agentTitles: { a: "alpha", b: "beta" },
+    }),
+  );
+  const labels = () =>
+    screen.getAllByRole("menuitem").map((m) => m.querySelector(".label")?.textContent);
+  fireEvent.click(all);
+  expect(write).not.toHaveBeenCalled();
+  expect(labels()).toEqual(["alpha", "beta"]);
+  fireEvent.click(screen.getByRole("menuitem", { name: /beta/ }));
+  expect(write).toHaveBeenCalledTimes(1);
+  expect(write).toHaveBeenLastCalledWith(beta, reviewText([a, b]).replace("\n", "\r"));
+  // The last pick is listed first; picking the other sends the one comment there.
+  fireEvent.click(within(first).getByRole("button", { name: "Send" }));
+  expect(labels()).toEqual(["beta", "alpha"]);
+  fireEvent.click(screen.getByRole("menuitem", { name: /alpha/ }));
+  expect(write).toHaveBeenCalledTimes(2);
+  expect(write).toHaveBeenLastCalledWith(alpha, reviewText([a]));
+  expect(useHive.getState().activeTab).toBe(alpha);
+  write.mockRestore();
+  unmount();
+  host.remove();
 
   fireEvent.click(within(first).getByRole("button", { name: "Resolve" }));
   expect(resolve).toHaveBeenCalledWith(wt, 1, true);
