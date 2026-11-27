@@ -7,13 +7,16 @@ import { owner, useHive } from "../store";
  * The Changes panel's commit box (27.6, D27.3): how many of the files left to commit are staged,
  * with a box staging or unstaging them all, the commit message, "Commit" (asked first) and
  * "Push…" (its dialog). Each file's own box is on its row of the tree. The service runs git: a
- * failure shows here as git said it; the files watch brings the new changes.
+ * failure shows here as git said it; the files watch brings the new changes. In a jj repository's
+ * main worktree a note says jj owns the index there (28.26).
  */
 export function CommitBox({ worktree }: { worktree: Worktree }) {
   const path = worktree.path;
   const changes = useHive((s) => s.changes[path]);
   const git = useHive((s) => s.git[path]);
   const project = useHive((s) => owner(s.projects, worktree.id)?.id);
+  // jj resets git's index and moves its HEAD (28.26): only the main worktree is jj's.
+  const jj = useHive((s) => worktree.main && owner(s.projects, worktree.id)?.jj === true);
   const [message, setMessage] = useState("");
   const busy = git?.busy ?? null;
   // A commit that went through empties the message.
@@ -29,6 +32,11 @@ export function CommitBox({ worktree }: { worktree: Worktree }) {
   const error = git?.error && git.error.action !== "push" ? git.error.message : null;
   return (
     <section className="commit-box" aria-label="Commit">
+      {jj && (
+        <p className="commit-box-note" role="note">
+          This is a jj repository: jj rewrites git's index; commit with jj
+        </p>
+      )}
       <div className="commit-box-bar">
         <label className="checkbox">
           <input
