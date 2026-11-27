@@ -50,7 +50,7 @@ export function linkText(link: LinkState): string {
       return "reconnecting";
     case "disconnected":
       return link.kind === "version"
-        ? `disconnected: version ${link.version ?? "?"}, this app ${link.app_version ?? "?"}`
+        ? `disconnected: version ${link.version ?? "?"}, this app ${link.app_version ?? "?"}: restart the remote service to update it`
         : `disconnected: ${link.reason}`;
     case "removed":
       return "removed";
@@ -261,8 +261,6 @@ export function HostsPopover({
 
 /** A remote host's row in the popover: its link and, while it is down, its action. */
 function HostRow({ host, link, shown }: { host: string; link: LinkState; shown: boolean }) {
-  const version = link.state === "disconnected" && link.kind === "version";
-  const terminals = (version && link.terminals) || 0;
   return (
     <li className="hosts-popover-row" data-status={link.state}>
       <HostDot status={link.state} />
@@ -274,28 +272,41 @@ function HostRow({ host, link, shown }: { host: string; link: LinkState; shown: 
         {link.state === "reconnecting" ? <Since since={link.since} /> : linkText(link)}
       </span>
       {shown && <span className="hosts-popover-shown">shown</span>}
-      {hostProblem(link) && !version && (
-        <button
-          type="button"
-          className="ghost host-action"
-          aria-label={`Reconnect ${host}`}
-          onClick={() => void transport.reconnectHost(host)}
-        >
-          Reconnect
-        </button>
-      )}
-      {version && (
-        <button
-          type="button"
-          className="ghost host-action"
-          aria-label={`Restart the remote service on ${host}`}
-          title={`Ends its ${terminals === 1 ? "terminal" : `${terminals} terminals`}`}
-          onClick={() => void transport.restartRemote(host)}
-        >
-          Restart the remote service
-        </button>
-      )}
+      <HostActions host={host} link={link} />
     </li>
+  );
+}
+
+/**
+ * What a host's link offers while it has a problem (27.8, 27.10): Reconnect while it is down or
+ * refused, "Restart the remote service" for another version (Q8), which ends its kept terminals.
+ * The status bar's popover and Settings → Hosts both show it.
+ */
+export function HostActions({ host, link }: { host: string; link: LinkState | undefined }) {
+  if (!link || !hostProblem(link)) return null;
+  if (link.state === "disconnected" && link.kind === "version") {
+    const terminals = link.terminals || 0;
+    return (
+      <button
+        type="button"
+        className="ghost host-action"
+        aria-label={`Restart the remote service on ${host}`}
+        title={`Ends its ${terminals === 1 ? "terminal" : `${terminals} terminals`}`}
+        onClick={() => void transport.restartRemote(host)}
+      >
+        Restart the remote service
+      </button>
+    );
+  }
+  return (
+    <button
+      type="button"
+      className="ghost host-action"
+      aria-label={`Reconnect ${host}`}
+      onClick={() => void transport.reconnectHost(host)}
+    >
+      Reconnect
+    </button>
   );
 }
 
@@ -411,7 +422,8 @@ export function HostOverlay() {
  * Settings → Hosts (26.18): the remote hosts the app links to, each by its alias in
  * `~/.ssh/config`, typed in (Hive does not read that file); each with its link's state, Test
  * (tries the link now) and Remove. The service checks an alias when the settings are saved.
- * With many hosts (27.8) the list scrolls and a filter narrows it.
+ * With many hosts (27.8) the list scrolls and a filter narrows it. A link with a problem offers
+ * the popover's action (27.10, `HostActions`): Reconnect, or "Restart the remote service".
  */
 export function HostsSettings() {
   const hosts = useHive((s) => s.settings.remote.hosts);
@@ -454,6 +466,9 @@ export function HostsSettings() {
               </span>
               <span className="connection-state host-row-state" title={link && linkText(link)}>
                 {link ? linkText(link) : "not linked yet"}
+              </span>
+              <span className="host-row-actions">
+                <HostActions host={host} link={link} />
               </span>
               <button
                 type="button"

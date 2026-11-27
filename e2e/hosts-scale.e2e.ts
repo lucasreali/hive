@@ -123,3 +123,33 @@ test("with 50 hosts the switcher and the status bar fit, and the keyboard goes t
   await expect(popover).toHaveCount(0);
   await expect(item).toBeFocused();
 });
+
+test("Settings → Hosts restarts a host of another version and reconnects a down one (27.10)", async ({
+  page,
+}) => {
+  await open(page, 10);
+  const item = page.locator(".hosts-item");
+  await expect(item).toHaveText("4 of 10 hosts down");
+  await page.keyboard.press(`${mod}+Comma`);
+  const settings = page.getByRole("dialog", { name: "Settings" });
+  await settings.getByRole("button", { name: "Hosts" }).click();
+  const hosts = settings.locator(".hosts");
+  // build-05 runs another version: its row says what to do and offers the restart.
+  await expect(hosts).toContainText(
+    "build-05disconnected: version 0.29.0, this app 0.30.0: restart the remote service to update it",
+  );
+  const restarts = settings.getByRole("button", { name: /^Restart the remote service on / });
+  await expect(restarts).toHaveCount(1);
+  const restart = settings.getByRole("button", { name: "Restart the remote service on build-05" });
+  await expect(restart).toHaveAttribute("title", "Ends its 2 terminals");
+  await restart.click();
+  await expect(restart).toHaveCount(0);
+  await expect(hosts).toContainText("build-05connected");
+  // build-03 is reconnecting, build-08 refused: each has Reconnect; a connected host none.
+  await expect(settings.getByRole("button", { name: "Reconnect build-02" })).toHaveCount(0);
+  await expect(settings.getByRole("button", { name: "Reconnect build-08" })).toBeVisible();
+  const reconnect = settings.getByRole("button", { name: "Reconnect build-03" });
+  await reconnect.click();
+  await expect(reconnect).toHaveCount(0);
+  await expect(item).toHaveText("2 of 10 hosts down");
+});

@@ -2723,10 +2723,11 @@ button.chevron:hover {
   display: contents;
 }
 
-/* Settings → Hosts (26.18): each host's name, link state, Test and Remove. */
+/* Settings → Hosts (26.18): each host's name, link state, its link's action (27.10), Test and
+   Remove. */
 .hosts {
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto 24px;
+  grid-template-columns: auto minmax(0, 1fr) auto auto 24px;
   gap: 6px 10px;
   align-items: center;
 }
@@ -2735,10 +2736,9 @@ button.chevron:hover {
   display: contents;
 }
 
+/* Wrapped, not cut: a link with a problem says what to do (27.10). */
 .host-row-state {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  overflow-wrap: anywhere;
 }
 
 .host-add {

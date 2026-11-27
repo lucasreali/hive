@@ -110,7 +110,7 @@ test("the host item opens every host's link, problems first, with their actions 
   link("gpu-box", { state: "disconnected", reason: "version", kind: "version", ...version });
   act(() => showHost("gpu-box"));
   expect(rows()).toContain(
-    "gpu-boxdisconnected: version 0.28.0, this app 0.29.1shownRestart the remote service",
+    "gpu-boxdisconnected: version 0.28.0, this app 0.29.1: restart the remote service to update itshownRestart the remote service",
   );
   const button = screen.getByRole("button", { name: "Restart the remote service on gpu-box" });
   expect(button.title).toBe("Ends its 2 terminals");
@@ -258,6 +258,39 @@ test("Settings → Hosts filters a long list (27.8)", () => {
   expect(screen.getByText("No host matches.")).toBeDefined();
 });
 
+test("Settings → Hosts offers the popover's action on a host with a problem (27.10)", () => {
+  const reconnect = spyOn(transport, "reconnectHost").mockResolvedValue();
+  const restart = spyOn(transport, "restartRemote").mockResolvedValue();
+  const hosts = ["gpu-box", "lab", "vps", "box"];
+  const settings = { ...DEFAULT_SETTINGS, remote: { hosts, keep_minutes: 60 } };
+  act(() => apply({ type: "settings", settings }));
+  link("gpu-box", { state: "connected" });
+  link("lab", { state: "reconnecting", reason: "gone", retry_secs: 5 });
+  const version = { version: "0.30.0", app_version: "0.31.0", terminals: 3 };
+  link("vps", { state: "disconnected", reason: "version", kind: "version", ...version });
+  link("box", { state: "disconnected", reason: "Permission denied.", kind: "auth" });
+  render(<HostsSettings />);
+  const actions = () =>
+    [...document.querySelectorAll(".host-row-actions")].map((a) => a.textContent);
+  // Nothing on a connected host; Reconnect while down or refused; a restart on a mismatch.
+  expect(actions()).toEqual(["", "Reconnect", "Restart the remote service", "Reconnect"]);
+  expect(document.querySelector(".hosts")?.textContent).toContain(
+    "vpsdisconnected: version 0.30.0, this app 0.31.0: restart the remote service to update it",
+  );
+  const button = screen.getByRole("button", { name: "Restart the remote service on vps" });
+  expect(button.title).toBe("Ends its 3 terminals");
+  fireEvent.click(button);
+  expect(restart).toHaveBeenCalledWith("vps");
+  fireEvent.click(screen.getByRole("button", { name: "Reconnect lab" }));
+  fireEvent.click(screen.getByRole("button", { name: "Reconnect box" }));
+  expect(reconnect.mock.calls).toEqual([["lab"], ["box"]]);
+  // Once linked again, the action goes.
+  link("vps", { state: "connected" });
+  expect(screen.queryByRole("button", { name: "Restart the remote service on vps" })).toBeNull();
+  reconnect.mockRestore();
+  restart.mockRestore();
+});
+
 test("a link's text for each state", () => {
   const since = 0;
   expect(linkText({ state: "removed", since })).toBe("removed");
@@ -265,7 +298,7 @@ test("a link's text for each state", () => {
     "reconnecting",
   );
   expect(linkText({ state: "disconnected", reason: "x", kind: "version", since })).toBe(
-    "disconnected: version ?, this app ?",
+    "disconnected: version ?, this app ?: restart the remote service to update it",
   );
 });
 
