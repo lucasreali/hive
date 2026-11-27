@@ -1,5 +1,5 @@
 import type { Settings } from "./protocol";
-import type { HiveState, PanelView } from "./store";
+import type { HiveState, PanelView, SpacePlace } from "./store";
 
 // The window's own preferences, kept in its `localStorage` between runs (not service data, #37).
 
@@ -254,6 +254,40 @@ export function savePlaces(s: HiveState, prev: HiveState): void {
   const { tabHistory, panelViews } = s;
   try {
     safeStorage()?.setItem(PLACES_STORAGE, JSON.stringify({ tabHistory, panelViews }));
+  } catch {
+    // A full or blocked storage only loses the preference.
+  }
+}
+
+/** Where each space's place (11.5) is remembered between runs (28.27), by the store's key. */
+const SPACE_PLACES_STORAGE = "hive.spacePlaces";
+
+/** Whether `value` is a place a space may name: a place and its project, or none (null). */
+const isSpacePlace = (value: unknown): value is SpacePlace | null => {
+  if (value === null) return true;
+  const { place, project } = (typeof value === "object" ? value : {}) as Partial<SpacePlace>;
+  return typeof place === "string" && (project === null || typeof project === "string");
+};
+
+/** The spaces' places of the last run, the most recent `PLACES_LIMIT`; none when unreadable. */
+export function savedSpacePlaces(
+  storage: Pick<Storage, "getItem"> | null = safeStorage(),
+): HiveState["spacePlaces"] {
+  try {
+    const saved: unknown = JSON.parse(storage?.getItem(SPACE_PLACES_STORAGE) ?? "{}");
+    if (typeof saved !== "object" || saved === null) return {};
+    const places = Object.entries(saved).filter((e) => isSpacePlace(e[1]));
+    return Object.fromEntries(places.slice(-PLACES_LIMIT));
+  } catch {
+    return {};
+  }
+}
+
+/** Remembers the spaces' places, the current space's included (`leaveSpace`), the most recent. */
+export function saveSpacePlaces(places: HiveState["spacePlaces"]): void {
+  const kept = Object.fromEntries(Object.entries(places).slice(-PLACES_LIMIT));
+  try {
+    safeStorage()?.setItem(SPACE_PLACES_STORAGE, JSON.stringify(kept));
   } catch {
     // A full or blocked storage only loses the preference.
   }

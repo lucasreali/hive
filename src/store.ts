@@ -10,12 +10,14 @@ import {
   savedAgentOrder,
   savedLayout,
   savedPlaces,
+  savedSpacePlaces,
   savedTabOrder,
   savedTheme,
   savedUnseenOnly,
   savedWidths,
   saveLayout,
   savePlaces,
+  saveSpacePlaces,
   saveTabOrder,
   saveTheme,
   saveUnseenOnly,
@@ -445,9 +447,15 @@ export type HiveState = {
   selection: string | null;
   /**
    * By space id: the place selected when the user left that space and its project (11.5), to
-   * select again on coming back; this run only. Null: nothing was selected.
+   * select again on coming back, and at launch (28.27); kept between runs. Null: nothing was
+   * selected.
    */
   spacePlaces: Record<string, SpacePlace | null>;
+  /**
+   * Whether the launch selected the place the current space was left on (28.27): once the
+   * projects and the spaces are there. Until then the current space's place is not saved.
+   */
+  placesRestored: boolean;
   /**
    * Collapsed tree nodes: a project by its id, a worktree by `worktree:<id>` (a main worktree
    * has its project's id), a folder of the Files or Diff tree by `files:` or `changes:<worktree>/<path>`
@@ -673,6 +681,7 @@ export const initialState: HiveState = {
   commenting: null,
   selection: null,
   spacePlaces: {},
+  placesRestored: false,
   collapsed: {},
   tabs: [],
   activeTab: null,
@@ -978,6 +987,7 @@ export const useHive = create<HiveState>()(() => ({
   agentOrder: savedAgentOrder(),
   tabOrder: savedTabOrder(),
   ...savedPlaces(),
+  spacePlaces: savedSpacePlaces(),
 }));
 useHive.subscribe(saveTabOrder);
 useHive.subscribe(savePlaces);
@@ -986,6 +996,7 @@ useHive.subscribe(saveAgentOrder);
 useHive.subscribe(saveTheme);
 useHive.subscribe(saveLayout);
 useHive.subscribe(saveUnseenOnly);
+useHive.subscribe(followSpacePlaces);
 
 /** What `followPlaces` reads: any other change leaves the places as they are. */
 const PLACE_FIELDS = [
@@ -1028,6 +1039,24 @@ export function followPlaces(s: HiveState, prev: HiveState): void {
     change.panelViews = remembered(s.panelViews, place, s.panelView);
   }
   if (Object.keys(change).length > 0) useHive.setState(change);
+}
+
+/**
+ * The spaces' places between runs (28.27, rows 1 and 2 of `docs/review/last-place.md`): once the
+ * projects and the spaces are there, the launch selects the place the current space was left on
+ * (nothing when it was left with none); from then on every space's place is saved, the current
+ * one's as `leaveSpace` would keep it.
+ */
+export function followSpacePlaces(s: HiveState, prev: HiveState): void {
+  if (!s.placesRestored) {
+    if (s.projects === null || s.spaces === null || s.currentSpace === null) return;
+    const back = s.selection === null && !!s.spacePlaces[spaceKey(s)];
+    useHive.setState({ placesRestored: true, ...(back ? selected(s, spacePlace(s)) : {}) });
+    return;
+  }
+  const fields = ["spacePlaces", "selection", "currentSpace", "host", "placesRestored"] as const;
+  if (fields.every((field) => s[field] === prev[field])) return;
+  saveSpacePlaces(leaveSpace(s).spacePlaces ?? s.spacePlaces);
 }
 
 /**
@@ -1685,7 +1714,7 @@ export function leaveSpace(s: HiveState): Partial<HiveState> {
  * The current space's key in `spacePlaces`: its id, qualified by its host for a remote's (two
  * hosts may each have a "default", 26.18).
  */
-const spaceKey = (s: HiveState): string =>
+export const spaceKey = (s: HiveState): string =>
   s.host === null ? (s.currentSpace ?? "") : `${s.host}\n${s.currentSpace ?? ""}`;
 
 /**
