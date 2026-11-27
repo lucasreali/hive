@@ -465,6 +465,18 @@ test("a background command's end is an inbox item; only a failure has a tone and
   ]);
 });
 
+test("a background command's OS notification never shows its command line", () => {
+  useHive.setState({ tabs: [{ id: 7, cwd: "/home/u/api" }] });
+  const secret = "curl -H 'Authorization: Bearer x' https://e";
+  const failed = ended({ description: null, command: secret, alert: "failed", notify: true });
+  notify(failed, useHive.getState(), clock, 1000);
+  const [item] = useHive.getState().inbox;
+  expect(item?.text).toBe(`Background command failed: ${secret}`);
+  expect(shown).toEqual([
+    { title: "Background command failed", body: "api · after 12s", agent: "terminal:7" },
+  ]);
+});
+
 test("a background command's text names it by its description, else its line, else its kind", () => {
   useHive.setState({ tabs: [{ id: 7, cwd: "/home/u/api" }] });
   const s = useHive.getState();

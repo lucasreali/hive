@@ -178,7 +178,11 @@ function backgroundFinished(
   addToInbox({ terminal: m.channel, failed, at: wall, text: text.title, ...host });
   if (!failed) return;
   toneAt(s, now);
-  if (m.notify) void transport.showNotification(text.title, text.body, text.agent);
+  if (!m.notify) return;
+  // The OS keeps its notifications (Notification Center), and a command line may hold a secret:
+  // the notification names the command by its description only.
+  const shown = backgroundText(s, { ...m, command: "" });
+  void transport.showNotification(shown.title, shown.body, shown.agent);
 }
 
 /**
