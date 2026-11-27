@@ -51,9 +51,14 @@ fn more_than_20_notifications_in_10_seconds_is_a_flood() {
         json!({"type": "terminal_notification", "title": "t", "body": "b", "notify": false}),
         json!({"type": "usage_alert"}),
         json!({"type": "agent_state", "notify": true}),
+        json!({"type": "background_finished", "alert": "failed", "notify": true}),
     ];
     assert!(alerting_ones.iter().all(alerting));
-    let quiet = [badge, json!({"type": "agent_state", "notify": false})];
+    let quiet = [
+        badge,
+        json!({"type": "agent_state", "notify": false}),
+        json!({"type": "background_finished", "alert": "failed", "notify": false}),
+    ];
     assert!(!quiet.iter().any(alerting));
 }
 
@@ -187,6 +192,24 @@ fn a_remote_s_titles_badges_and_errors_are_clipped() {
     let mut notification = json!({"type": "terminal_notification", "body": long});
     check(&mut notification).unwrap();
     assert_eq!(notification["body"], clipped);
+    // An agent's background commands (28.8), listed or ended; not another message's.
+    let mut state = json!({"type": "agent_state",
+        "background": [{"command": long, "description": long}]});
+    check(&mut state).unwrap();
+    assert_eq!(state["background"][0]["command"], clipped);
+    assert_eq!(state["background"][0]["description"], clipped);
+    let mut ended = json!({"type": "background_finished", "command": long, "description": long});
+    check(&mut ended).unwrap();
+    assert_eq!(
+        (&ended["command"], &ended["description"]),
+        (&json!(clipped), &json!(clipped))
+    );
+    let mut other = json!({"type": "scripts", "command": long, "description": long});
+    check(&mut other).unwrap();
+    assert_eq!(
+        (&other["command"], &other["description"]),
+        (&json!(long), &json!(long))
+    );
     // A commit's short id (27.2), at any depth of a `commits`.
     let mut commits = json!({"type": "commits", "commits": [{"short": long}]});
     check(&mut commits).unwrap();

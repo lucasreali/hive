@@ -67,9 +67,14 @@ const CLIPPED: &[&str] = &[
     "author",
 ];
 /// Fields clipped only in one type's messages: `body` is also a pull request's description.
-/// A review comment's lines (27.3) are cut at 200 characters by its service.
+/// A review comment's lines (27.3) are cut at 200 characters by its service, a background
+/// command's line and description (28.8) at 1000 and 200.
 const CLIPPED_IN: &[(&str, &str)] = &[
     ("terminal_notification", "body"),
+    ("agent_state", "command"),
+    ("agent_state", "description"),
+    ("background_finished", "command"),
+    ("background_finished", "description"),
     ("commits", "short"),
     ("comments", "code"),
     ("comments", "before"),
@@ -141,7 +146,8 @@ impl Rate {
 }
 
 /// Whether the UI shows an OS notification for `message` (`src/notify.ts`): a command that
-/// finished, a program's notification, a usage alert, or an agent's state that says `notify`.
+/// finished, a program's notification, a usage alert, or an agent's state or background command
+/// (28.8) that says `notify`.
 pub(crate) fn alerting(message: &Value) -> bool {
     let kind = message["type"].as_str().unwrap_or_default();
     let always = ["command_finished", "terminal_notification", "usage_alert"];

@@ -135,6 +135,7 @@ sort! {
         | TerminalNotification
         | AgentDetected
         | AgentState
+        | BackgroundFinished
         | SubagentWorktrees
         | AgentTitle
         | AgentUsage
@@ -325,6 +326,44 @@ fn samples() -> Vec<Control> {
             }],
             activity: Some(s("Reading a.rs")),
             since_ms: 1,
+            background: vec![
+                BackgroundCommand {
+                    id: s("b1"),
+                    kind: BackgroundKind::Shell,
+                    command: s("bun test --watch"),
+                    description: Some(s("Watch the tests")),
+                    by: None,
+                    since_ms: 1,
+                    ended: None,
+                },
+                BackgroundCommand {
+                    id: s("b2"),
+                    kind: BackgroundKind::Monitor,
+                    command: s("tail -f log"),
+                    description: None,
+                    by: Some(s("a")),
+                    since_ms: 1,
+                    ended: Some(BackgroundEnd {
+                        status: BackgroundStatus::Completed,
+                        exit: Some(0),
+                        ms: 2,
+                        alert: BackgroundAlert::Quiet,
+                    }),
+                },
+            ],
+        },
+        BackgroundFinished {
+            agent: s("s"),
+            id: s("b3"),
+            kind: BackgroundKind::Shell,
+            command: s("make"),
+            description: Some(s("Build")),
+            by: Some(s("a")),
+            status: BackgroundStatus::Failed,
+            exit: Some(2),
+            secs: 4,
+            alert: BackgroundAlert::Failed,
+            notify: true,
         },
         SubagentWorktrees { worktrees: vec![] },
         AgentTitle {

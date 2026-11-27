@@ -94,6 +94,10 @@ impl State {
         if let Some(state) = agent.apply(id, event, sent_ns, now, &place) {
             self.to_app(channel, &state).await;
         }
+        // After the state that lists them as ended (28.8).
+        for finished in agent.finished(id) {
+            self.to_app(channel, &finished).await;
+        }
         if event.subagent.is_none() {
             self.turn_snapshot(id, agent.worktree.as_deref(), &event.kind);
         }
@@ -281,6 +285,9 @@ impl State {
             {
                 self.to_app(agent.channel, &message).await;
             }
+            if let Some(message) = agent.expire(id, now) {
+                self.to_app(agent.channel, &message).await;
+            }
             // While it may be interrupted, its transcript is read every tick for the interrupt.
             if agent.busy() {
                 agent.usage.due = true;
@@ -380,5 +387,41 @@ mod tests {
         state.agents.lock().await.remove("busy");
         state.tick_agents(&quiet, now).await;
         assert_eq!(calls.taken(), vec![true, false, true, false]);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn an_ended_background_command_leaves_on_the_tick_ten_seconds_later() {
+        use crate::adapter::{Adapter, ClaudeCode};
+        let dir = tempfile::tempdir().unwrap();
+        let state = super::super::test_state(dir.path());
+        let start = Instant::now();
+        let event = |name: &str, extra: serde_json::Value| {
+            let mut payload = serde_json::json!({"session_id": "s"});
+            for (k, v) in extra.as_object().unwrap() {
+                payload[k] = v.clone();
+            }
+            ClaudeCode.translate(name, Some("1".into()), payload)
+        };
+        let launch = event(
+            "PostToolUse",
+            serde_json::json!({"tool_name": "Bash", "tool_response": {"backgroundTaskId": "b1"}}),
+        );
+        let stop = event("Stop", serde_json::json!({"background_tasks": []}));
+        let mut agent = Agent::new(1, start, 0);
+        agent.apply("s", &launch, 1, start, &|_| None);
+        agent.apply("s", &stop, 2, start, &|_| None);
+        let listed = |agent: &Agent| match agent.message("s") {
+            Control::AgentState { background, .. } => background.len(),
+            _ => usize::MAX,
+        };
+        assert_eq!(listed(&agent), 1);
+        state.agents.lock().await.insert("s".into(), agent);
+        let quiet = HashMap::new();
+        state.tick_agents(&quiet, start).await;
+        assert_eq!(listed(&state.agents.lock().await["s"]), 1);
+        state
+            .tick_agents(&quiet, start + crate::background::SHOWN_ENDED)
+            .await;
+        assert_eq!(listed(&state.agents.lock().await["s"]), 0);
     }
 }

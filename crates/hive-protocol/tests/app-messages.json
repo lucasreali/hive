@@ -87,7 +87,45 @@
       }
     ],
     "activity": "Reading a.rs",
-    "since_ms": 1
+    "since_ms": 1,
+    "background": [
+      {
+        "id": "b1",
+        "kind": "shell",
+        "command": "bun test --watch",
+        "description": "Watch the tests",
+        "by": null,
+        "since_ms": 1
+      },
+      {
+        "id": "b2",
+        "kind": "monitor",
+        "command": "tail -f log",
+        "description": null,
+        "by": "a",
+        "since_ms": 1,
+        "ended": {
+          "status": "completed",
+          "exit": 0,
+          "ms": 2,
+          "alert": "quiet"
+        }
+      }
+    ]
+  },
+  {
+    "type": "background_finished",
+    "agent": "s",
+    "id": "b3",
+    "kind": "shell",
+    "command": "make",
+    "description": "Build",
+    "by": "a",
+    "status": "failed",
+    "exit": 2,
+    "secs": 4,
+    "alert": "failed",
+    "notify": true
   },
   {
     "type": "subagent_worktrees",

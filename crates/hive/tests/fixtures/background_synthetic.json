@@ -1,0 +1,14 @@
+{
+  "note": "SYNTHETIC: built by hand from Claude Code's docs (hooks: PostToolUse, Stop background_tasks; tools reference: Bash run_in_background) and the tool_response.backgroundTaskId Hive already reads (5.10), not recorded (TODO 28.8, docs/spike/background-commands.md section 8). The payloads are as `hive hook` slims them. The agent starts two background commands and ends its turn with only the first still listed; its next turn ends with none.",
+  "calls": [
+    ["SessionStart", {"session_id": "bg", "source": "startup"}],
+    ["UserPromptSubmit", {"session_id": "bg"}],
+    ["PostToolUse", {"session_id": "bg", "hook_event_name": "PostToolUse", "tool_name": "Bash", "tool_use_id": "toolu_01", "tool_input": {"command": "sleep 20; echo ok", "description": "Wait, then say ok", "run_in_background": true}, "tool_response": {"backgroundTaskId": "bash_1"}}],
+    ["PostToolUse", {"session_id": "bg", "hook_event_name": "PostToolUse", "tool_name": "Bash", "tool_use_id": "toolu_02", "tool_input": {"command": "sleep 5; exit 3", "description": "Fail after 5 s", "run_in_background": true}, "tool_response": {"backgroundTaskId": "bash_2"}}],
+    ["Stop", {"session_id": "bg", "stop_hook_active": false, "background_tasks": [
+      {"id": "bash_1", "type": "shell", "status": "running", "description": "Wait, then say ok", "command": "sleep 20; echo ok"}
+    ]}],
+    ["UserPromptSubmit", {"session_id": "bg"}],
+    ["Stop", {"session_id": "bg", "stop_hook_active": false, "background_tasks": []}]
+  ]
+}

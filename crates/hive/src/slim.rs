@@ -82,12 +82,40 @@ pub fn slim(payload: Value) -> Value {
     let tool = out.get("tool_name").and_then(Value::as_str).unwrap_or("");
     let input = raw.get("tool_input").and_then(Value::as_object);
     let response = response.as_ref().and_then(Value::as_object);
-    if let (Some(input), Some(response)) = (input, response)
-        && let Some(edit) = edit(tool, input, response)
-    {
+    let edit = input.zip(response).and_then(|(i, r)| edit(tool, i, r));
+    let background = input.and_then(|input| background(tool, input));
+    if let Some(edit) = edit {
         out.insert("hive_edit".to_owned(), edit);
     }
+    if let Some(background) = background {
+        out.insert("tool_input".to_owned(), background);
+    }
     fitting(out)
+}
+
+/// What a Bash `run_in_background` call's `tool_input` keeps (28.8): its `command` and
+/// `description`, cut at [`crate::background::COMMAND_CHARS`] and
+/// [`crate::background::DESCRIPTION_CHARS`] characters (the service cleans them). `None` for any
+/// other call, whose input never crosses the socket.
+fn background(tool: &str, input: &Map<String, Value>) -> Option<Value> {
+    if tool != "Bash" || input.get("run_in_background") != Some(&Value::Bool(true)) {
+        return None;
+    }
+    let mut kept = Map::new();
+    kept.insert("run_in_background".to_owned(), Value::Bool(true));
+    let limits = [
+        ("command", crate::background::COMMAND_CHARS),
+        ("description", crate::background::DESCRIPTION_CHARS),
+    ];
+    for (key, most) in limits {
+        if let Some(text) = input.get(key).and_then(Value::as_str) {
+            kept.insert(
+                key.to_owned(),
+                Value::String(text.chars().take(most).collect()),
+            );
+        }
+    }
+    Some(Value::Object(kept))
 }
 
 /// `slimmed` as sent, at most [`crate::hook::MAX_INPUT`] once written: without `hive_edit` when
@@ -599,6 +627,47 @@ mod tests {
         unknown["tool_name"] = json!("Read");
         assert_eq!(slim(unknown).get("hive_edit"), None);
         assert_eq!(slim(json!("text")), json!("text"));
+    }
+
+    #[test]
+    fn a_background_bash_call_keeps_its_command_and_description_cut() {
+        // SYNTHETIC: the Bash `tool_input` of Claude Code's tools reference (28.8).
+        let payload = |input: Value| {
+            json!({"tool_name": "Bash", "tool_input": input,
+                "tool_response": {"stdout": "", "backgroundTaskId": "b1"}})
+        };
+        let input = json!({"command": "npm run dev", "description": "Start the server",
+            "run_in_background": true, "timeout": 5000, "dangerouslyDisableSandbox": true});
+        assert_eq!(
+            slim(payload(input)),
+            json!({"tool_name": "Bash", "tool_response": {"backgroundTaskId": "b1"},
+                "tool_input": {"command": "npm run dev", "description": "Start the server",
+                    "run_in_background": true}})
+        );
+        let long = json!({"command": "é".repeat(crate::background::COMMAND_CHARS + 1),
+            "description": "d".repeat(crate::background::DESCRIPTION_CHARS + 1),
+            "run_in_background": true});
+        let kept = &slim(payload(long))["tool_input"];
+        let chars = |key: &str| kept[key].as_str().unwrap().chars().count();
+        assert_eq!(chars("command"), crate::background::COMMAND_CHARS);
+        assert_eq!(chars("description"), crate::background::DESCRIPTION_CHARS);
+        // Text of the wrong type is left out; the call still counts.
+        let odd = json!({"command": 3, "run_in_background": true});
+        assert_eq!(
+            slim(payload(odd))["tool_input"],
+            json!({"run_in_background": true})
+        );
+        // A foreground call, another tool or `run_in_background` not exactly true keeps none.
+        for input in [
+            json!({"command": "ls"}),
+            json!({"command": "ls", "run_in_background": false}),
+            json!({"command": "ls", "run_in_background": "true"}),
+        ] {
+            assert_eq!(slim(payload(input)).get("tool_input"), None);
+        }
+        let mut monitor = payload(json!({"command": "tail -f x", "run_in_background": true}));
+        monitor["tool_name"] = json!("Monitor");
+        assert_eq!(slim(monitor).get("tool_input"), None);
     }
 
     #[test]
