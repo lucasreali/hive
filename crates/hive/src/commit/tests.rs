@@ -175,15 +175,12 @@ fn a_commit_message_is_checked() {
 #[cfg(unix)]
 #[test]
 fn the_repositorys_hooks_run_and_their_output_is_the_error() {
-    use std::os::unix::fs::PermissionsExt;
     let (_tmp, dir) = repo(true);
     let hook = dir.join(".git/hooks/pre-commit");
-    std::fs::write(
+    executable(
         &hook,
         "#!/bin/sh\necho 'lint: 2 problems'\necho 'hook says no' >&2\nexit 1\n",
-    )
-    .unwrap();
-    std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755)).unwrap();
+    );
     std::fs::write(dir.join("a.txt"), "b\n").unwrap();
     stage(&dir, &paths(&["a.txt"]), true).unwrap();
     let err = commit(&dir, "m", &env()).unwrap_err();
@@ -379,12 +376,10 @@ fn gits_message_loses_only_the_command() {
 #[cfg(unix)]
 #[test]
 fn a_push_gets_the_spaces_identity_and_its_accounts_token() {
-    use std::os::unix::fs::PermissionsExt;
     let tmp = tempfile::tempdir().unwrap();
     // A fake gh answering `gh auth token` (never the real one).
     let program = tmp.path().join("gh");
-    std::fs::write(&program, "#!/bin/sh\necho tok-123\n").unwrap();
-    std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755)).unwrap();
+    executable(&program, "#!/bin/sh\necho tok-123\n");
     let gh = Gh {
         program: program.into(),
         path: "/usr/bin:/bin".into(),
@@ -503,4 +498,18 @@ fn the_service_answers_only_its_git_requests_and_never_for_a_folder_project() {
             message: none.into(),
         }]
     );
+}
+
+/// An executable file written by a `sh` of its own: a file this process writes can be held
+/// open by a child another test thread forks meanwhile, and running it then fails with
+/// "Text file busy" (Linux).
+#[cfg(unix)]
+fn executable(path: &Path, body: &str) {
+    let written = std::process::Command::new("sh")
+        .args(["-c", r#"printf '%s' "$1" > "$2" && chmod 755 "$2""#, "sh"])
+        .arg(body)
+        .arg(path)
+        .status()
+        .unwrap();
+    assert!(written.success());
 }

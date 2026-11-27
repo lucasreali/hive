@@ -1,6 +1,4 @@
 #[cfg(unix)]
-use std::os::unix::fs::PermissionsExt;
-#[cfg(unix)]
 use std::process::Command;
 
 use super::*;
@@ -196,8 +194,7 @@ esac
     );
     std::fs::write(tmp.path().join("runs"), "7\n").unwrap();
     let program = tmp.path().join("gh");
-    std::fs::write(&program, script).unwrap();
-    std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755)).unwrap();
+    executable(&program, &script);
     let gh = Gh {
         program: program.into(),
         path: "/usr/bin:/bin".into(),
@@ -440,4 +437,18 @@ fn a_start_is_refused_with_ghs_message_or_before_it_runs() {
     );
     // The list before, the start and the branch's list: no looks.
     assert_eq!(setup.calls().len(), calls + 3);
+}
+
+/// An executable file written by a `sh` of its own: a file this process writes can be held
+/// open by a child another test thread forks meanwhile, and running it then fails with
+/// "Text file busy" (Linux).
+#[cfg(unix)]
+fn executable(path: &Path, body: &str) {
+    let written = std::process::Command::new("sh")
+        .args(["-c", r#"printf '%s' "$1" > "$2" && chmod 755 "$2""#, "sh"])
+        .arg(body)
+        .arg(path)
+        .status()
+        .unwrap();
+    assert!(written.success());
 }
