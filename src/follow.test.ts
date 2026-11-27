@@ -6,10 +6,12 @@ import {
   followTableEdits,
   followView,
 } from "./follow";
+import type { DiffBase } from "./protocol";
 import { apply } from "./reduce";
 import {
   addTab,
   askBufferTable,
+  baseKey,
   editOpenTable,
   type HiveState,
   initialState,
@@ -37,8 +39,8 @@ function recorder() {
   const calls: (string | null)[] = [];
   const transport = {
     // The main worktrees are watched against HEAD; any other base shows.
-    watchWorktree: async (path: string, base: string) =>
-      void calls.push(base === "head" ? path : `${base}:${path}`),
+    watchWorktree: async (path: string, base: DiffBase) =>
+      void calls.push(base === "head" ? path : `${baseKey(base)}:${path}`),
     unwatchWorktree: async () => void calls.push(null),
   } as unknown as Transport;
   return { calls, transport };
@@ -138,6 +140,11 @@ test("a Claude worktree is watched against its branch, and anew when its base is
   setDiffBase(fix.path, "head");
   setDiffBase("/elsewhere", "branch");
   expect(calls).toEqual([`branch:${fix.path}`, fix.path]);
+  // An agent's turn (27.2): the same base picked again, as a new object, is no new watch.
+  setDiffBase(fix.path, { turn: { session: "s1" } });
+  setDiffBase(fix.path, { turn: { session: "s1" } });
+  setDiffBase(fix.path, { commit: { id: "c" } });
+  expect(calls.slice(2)).toEqual([`turn:s1:${fix.path}`, `commit:c:${fix.path}`]);
   stop();
 });
 
@@ -147,7 +154,7 @@ const changes = (path: string) =>
   apply({ type: "changes", path, ...none, files: [], added: 0, removed: 0, error: null });
 
 test("asks for the open file when it opens, its worktree changes, or the service is new", () => {
-  const openFile = mock(async (_worktree: string, _path: string, _base: string) => {});
+  const openFile = mock(async (_worktree: string, _path: string, _base: DiffBase) => {});
   const stop = followOpenFile({ openFile } as unknown as Transport);
   setOpenFile({ worktree: "/w", path: "a.ts" });
   pinFile({ worktree: "/w", path: "a.ts" }); // Its tab stays when b.ts opens (11.1).
@@ -183,7 +190,7 @@ test("asks for the open file when it opens, its worktree changes, or the service
 });
 
 test("a folder project's open file is asked for again with each listing of its folder", () => {
-  const openFile = mock(async (_worktree: string, _path: string, _base: string) => {});
+  const openFile = mock(async (_worktree: string, _path: string, _base: DiffBase) => {});
   const folder = MOCK_FOLDER.path;
   welcome();
   apply({ type: "projects", projects: [MOCK_FOLDER, ...MOCK_REPOS] });
@@ -204,21 +211,24 @@ test("a folder project's open file is asked for again with each listing of its f
 });
 
 test("asks for the open file again at the base picked for its worktree", () => {
-  const openFile = mock(async (_worktree: string, _path: string, _base: string) => {});
+  const openFile = mock(async (_worktree: string, _path: string, _base: DiffBase) => {});
   welcome();
   setOpenFile({ worktree: "/w", path: "a.ts" });
   const stop = followOpenFile({ openFile } as unknown as Transport);
   setDiffBase("/other", "branch");
   setDiffBase("/w", "branch");
+  setDiffBase("/w", { turn: { session: "s1" } });
+  setDiffBase("/w", { turn: { session: "s1" } });
   expect(openFile.mock.calls).toEqual([
     ["/w", "a.ts", "head"],
     ["/w", "a.ts", "branch"],
+    ["/w", "a.ts", { turn: { session: "s1" } }],
   ]);
   stop();
 });
 
 test("asks again when a save found a newer version on disk", () => {
-  const openFile = mock(async (_worktree: string, _path: string, _base: string) => {});
+  const openFile = mock(async (_worktree: string, _path: string, _base: DiffBase) => {});
   welcome();
   setOpenFile({ worktree: "/w", path: "a.ts" }, true);
   const stop = followOpenFile({ openFile } as unknown as Transport);

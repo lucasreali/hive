@@ -184,7 +184,7 @@ test("the selected worktree's changes: summary, totals, letters and counts", () 
   // Nothing is said before the service answers.
   expect(screen.queryByText(/changed|No changes/)).toBeNull();
   act(() => apply({ type: "changes", ...changes(refactor.path, MOCK_CHANGES[refactor.path]) }));
-  expect(document.querySelector(".files-summary")?.textContent).toBe("5 files changed+24−49");
+  expect(document.querySelector(".files-summary")?.textContent).toBe("5 files changed+24−49HEAD");
   // A closed folder sums its files' counts; a binary file (logo.png) adds none.
   expect(rows()).toEqual([
     ["assets", "M"],
@@ -213,48 +213,118 @@ test("one file, no changes, and the service's error", () => {
   panel();
   act(() => select(fixLogin.id));
   act(() => apply({ type: "changes", ...changes(fixLogin.path, [file("a.ts", "untracked")]) }));
-  expect(document.querySelector(".files-summary")?.textContent).toBe("1 file changed+1");
+  expect(document.querySelector(".files-summary")?.textContent).toBe("1 file changed+1HEAD");
   expect(rows()).toEqual([["a.ts+1A", "A"]]);
   act(() => apply({ type: "changes", ...changes(fixLogin.path, []) }));
-  expect(document.querySelector(".files-summary")?.textContent).toBe("No changes");
+  expect(document.querySelector(".files-summary")?.textContent).toBe("No changesHEAD");
   expect(screen.getByText("No changes in this worktree.")).toBeDefined();
   act(() => apply({ type: "changes", ...changes(fixLogin.path, [], "git status failed") }));
   expect(screen.getByText("git status failed")).toBeDefined();
 });
 
-test("the changes compare with HEAD or the main branch, as picked, or say why not", () => {
+test("the changes compare with HEAD, the main branch, a turn or a commit, as picked, or say why not", () => {
   const asked = panel();
+  const commits = spyOn(transport, "listCommits").mockImplementation(async () => {});
   act(() => select(fixLogin.id));
-  const toggle = () => screen.queryByRole("group", { name: "Compare with" });
-  const pressed = () =>
-    screen.getAllByRole("button", { pressed: true }).filter((b) => toggle()?.contains(b));
-  // Without a branch to compare with (the main worktree), no toggle.
+  const menu = () => screen.getByRole("combobox", { name: "Compare with" });
+  const open = () => fireEvent.mouseDown(menu(), { button: 0 });
+  const items = () =>
+    screen.getAllByRole("option").map((o) => [o.textContent, o.getAttribute("aria-disabled")]);
+  const choose = (name: string) => {
+    open();
+    fireEvent.click(screen.getByRole("option", { name }));
+  };
+  // The main worktree: HEAD, its agents' turns and a commit.
   act(() => apply({ type: "changes", ...changes(fixLogin.path, []) }));
-  expect(toggle()).toBeNull();
-
-  const onBranch = { ...changes(fixLogin.path, []), base: "branch", branch: "main" } as const;
-  act(() => apply({ type: "changes", ...onBranch }));
-  expect(pressed().map((b) => b.textContent)).toEqual(["main"]);
-  fireEvent.click(screen.getByRole("button", { name: "HEAD" }));
-  expect(useHive.getState().diffBases).toEqual({ [fixLogin.path]: "head" });
-  expect(asked.mock.calls).toEqual([
-    [fixLogin.path, "branch"],
-    [fixLogin.path, "head"],
+  expect(menu().textContent).toBe("HEAD");
+  open();
+  expect(items()).toEqual([
+    ["HEAD", null],
+    ["A commit…", null],
   ]);
-  act(() => apply({ type: "changes", ...onBranch, base: "head" }));
-  expect(pressed().map((b) => b.textContent)).toEqual(["HEAD"]);
-  fireEvent.click(screen.getByRole("button", { name: "main" }));
-  expect(asked.mock.calls.at(-1)).toEqual([fixLogin.path, "branch"]);
+  fireEvent.mouseDown(menu(), { button: 0 });
 
+  const turns = [
+    { session: "s1", title: "claude-3", started_ms: 1, late: false },
+    { session: "s2", title: "tests", started_ms: 0, late: true },
+  ];
+  const onBranch = {
+    ...changes(fixLogin.path, []),
+    base: "branch",
+    branch: "main",
+    turns,
+  } as const;
+  act(() => apply({ type: "changes", ...onBranch }));
+  expect(menu().textContent).toBe("main");
+  open();
+  expect(items()).toEqual([
+    ["HEAD", null],
+    ["main", null],
+    ["Since claude-3's last turn", null],
+    ["Since tests's last turn (may miss its first edit)", null],
+    ["A commit…", null],
+  ]);
+  const turnTitle = screen.getByRole("option", { name: "Since claude-3's last turn" }).title;
+  expect(turnTitle).toContain("other agents' changes since then show too");
+  fireEvent.click(screen.getByRole("option", { name: "HEAD" }));
+  expect(useHive.getState().diffBases).toEqual({ [fixLogin.path]: "head" });
+  act(() => apply({ type: "changes", ...onBranch, base: "head" }));
+  choose("main");
+  choose("Since claude-3's last turn");
+  const turn = { turn: { session: "s1" } };
+  expect(useHive.getState().diffBases[fixLogin.path]).toEqual(turn);
+  expect(asked.mock.calls.slice(-3)).toEqual([
+    [fixLogin.path, "head"],
+    [fixLogin.path, "branch"],
+    [fixLogin.path, turn],
+  ]);
+  act(() => apply({ type: "changes", ...onBranch, base: turn }));
+  expect(menu().textContent).toBe("Since claude-3's last turn");
+
+  // "A commit…" opens the picker, which asks for the commits; one picked is the base.
+  choose("A commit…");
+  expect(commits).toHaveBeenCalledWith(fixLogin.path);
+  const id = "a".repeat(40);
+  const commit = { id, short: "aaaaaaa", author: "A", time_ms: 0, subject: "Fix", on_branch: true };
+  act(() =>
+    apply({
+      type: "commits",
+      path: fixLogin.path,
+      commits: [commit],
+      truncated: false,
+      error: null,
+    }),
+  );
+  fireEvent.click(screen.getByRole("button", { name: /Fix/ }));
+  expect(screen.queryByRole("dialog", { name: "Compare with a commit" })).toBeNull();
+  expect(useHive.getState().diffBases[fixLogin.path]).toEqual({ commit: { id } });
+  act(() => apply({ type: "changes", ...onBranch, base: { commit: { id } } }));
+  expect(menu().textContent).toBe("aaaaaaa");
+  // Picking the commit shown again changes nothing.
+  choose("aaaaaaa");
+  expect(useHive.getState().diffBases[fixLogin.path]).toEqual({ commit: { id } });
+
+  // A turn base that fell back: HEAD, and why.
+  const gone = "No snapshot of this agent's last turn in this worktree";
+  act(() => {
+    useHive.setState((s) => ({ diffBases: { ...s.diffBases, [fixLogin.path]: turn } }));
+    apply({ type: "changes", ...onBranch, base: "head", base_error: gone });
+  });
+  expect(menu().textContent).toBe("HEAD");
+  expect(document.querySelector(".files-base-error")?.textContent).toBe(gone);
   // No common base: HEAD, the branch disabled with the reason.
   const why = "No commit in common with main";
-  act(() => apply({ type: "changes", ...onBranch, base: "head", base_error: why }));
-  const branch = screen.getByRole("button", { name: "main" }) as HTMLButtonElement;
-  expect([branch.disabled, branch.title]).toEqual([true, why]);
-  // Without a branch to name, it is "Branch".
-  const detached = { ...onBranch, base: "head", branch: null, base_error: why } as const;
-  act(() => apply({ type: "changes", ...detached }));
-  expect((screen.getByRole("button", { name: "Branch" }) as HTMLButtonElement).disabled).toBe(true);
+  act(() => {
+    useHive.setState((s) => ({ diffBases: { ...s.diffBases, [fixLogin.path]: "branch" } }));
+    apply({ type: "changes", ...onBranch, base: "head", base_error: why });
+  });
+  open();
+  const branch = screen.getByRole("option", { name: "main" });
+  expect([branch.getAttribute("aria-disabled"), branch.title]).toEqual(["true", why]);
+  fireEvent.click(branch);
+  expect(useHive.getState().diffBases[fixLogin.path]).toBe("branch");
+  expect(screen.getByRole("listbox")).toBeDefined();
+  commits.mockRestore();
 });
 
 test("the panel follows the selected agent, else the shown terminal", () => {

@@ -183,6 +183,25 @@ export interface Transport {
   /** Renames a Claude worktree; answered by `worktree_renamed` or `rename_worktree_failed`. */
   renameWorktree(path: string, name: string): Promise<void>;
   /**
+   * A review of the worktree `path` (27.4): a new worktree on a new branch `review-<name>` from
+   * its branch's tip, shown under it. Answered by `worktree_created` or `create_worktree_failed`
+   * (named `path`).
+   */
+  createReview(path: string): Promise<void>;
+  /** What bringing the review `path`'s changes back would do; answered by `bring_back_plan`. */
+  planBringBack(path: string): Promise<void>;
+  /**
+   * Brings the review `path`'s commits into the reviewed branch while the plan shown still holds
+   * (the reviewed branch `into` at `base`, the review's at `tip`): only on the user's click
+   * (#12). Answered by `brought_back` or `bring_back_failed`.
+   */
+  bringBack(path: string, into: string, base: string, tip: string): Promise<void>;
+  /**
+   * Removes the review `path` as `removeWorktree` does, and its branch when every commit of it
+   * was brought back. Answered by `worktree_removed` or `remove_worktree_failed`.
+   */
+  discardReview(path: string, force: boolean): Promise<void>;
+  /**
    * Watches one worktree instead of any other; its files arrive as `files`, again on every change,
    * each time with its `changes` against `base`.
    */
@@ -198,6 +217,8 @@ export interface Transport {
   setView(terminal: number | null, focused: boolean, visible: boolean): Promise<void>;
   /** What differs from `base` in the worktree at `path`; answered by `changes`. */
   listChanges(path: string, base: DiffBase): Promise<void>;
+  /** The commits of the worktree at `path` to compare with (27.2); answered by `commits`. */
+  listCommits(path: string): Promise<void>;
   /**
    * Marks `files` of the worktree at `path` as seen in its diff against `base`, or not (27.1);
    * answered by `changes`, or `error` when the marks cannot be kept.

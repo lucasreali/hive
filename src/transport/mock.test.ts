@@ -22,6 +22,7 @@ import {
   MOCK_BRANCHES,
   MOCK_CHANGES,
   MOCK_CLAUDE_DIR,
+  MOCK_COMMITS,
   MOCK_DIAGNOSTICS,
   MOCK_FILES,
   MOCK_FOLDER,
@@ -38,6 +39,7 @@ import {
   MOCK_SHARED,
   MOCK_STATES,
   MOCK_TEXTS,
+  MOCK_TURNS,
   mockDirs,
   mockSessionFiles,
   mockUninstall,
@@ -793,6 +795,61 @@ test("a worktree's scripts: the settings' first, shop's repository's, a port eac
   expect(messages.some((m) => m.type === "scripts")).toBe(false);
 });
 
+test("changes since an agent's turn or a commit, the commits, and a file at a turn (27.2)", async () => {
+  const { transport, messages } = await connected();
+  const refactor = MOCK_REPOS[1].worktrees[1].path;
+  const files = MOCK_CHANGES[refactor];
+  const turn = { turn: { session: MOCK_TURNS[0].session } };
+  const commit = { commit: { id: MOCK_COMMITS[2].id } };
+  messages.length = 0;
+  await transport.listChanges(refactor, turn);
+  await transport.listChanges(refactor, commit);
+  await transport.listChanges(refactor, { turn: { session: "gone" } });
+  await transport.listChanges(refactor, { commit: { id: "f".repeat(40) } });
+  await tick();
+  const answer = (m: ServiceMessage) =>
+    m.type === "changes" && [m.base, m.base_error, m.files.map((f) => f.path), m.added];
+  expect(messages.map(answer)).toEqual([
+    [turn, null, ["src/middleware/auth.ts"], 21],
+    [commit, null, files.map((f) => f.path), 24],
+    [
+      "head",
+      "No snapshot of this agent's last turn in this worktree",
+      files.map((f) => f.path),
+      24,
+    ],
+    ["head", "This commit is not in the repository", files.map((f) => f.path), 24],
+  ]);
+  messages.length = 0;
+  await transport.listCommits(refactor);
+  await transport.listCommits("/nope");
+  await tick();
+  expect(messages).toEqual([
+    { type: "commits", path: refactor, commits: MOCK_COMMITS, truncated: false, error: null },
+    {
+      type: "commits",
+      path: "/nope",
+      commits: [],
+      truncated: false,
+      error: "/nope is not a worktree of a followed project",
+    },
+  ]);
+  expect(MOCK_COMMITS.map((c) => [c.id.length, c.on_branch])).toEqual([
+    [40, true],
+    [40, true],
+    [40, false],
+    [40, false],
+  ]);
+  // At a turn, a file the agent did not change is as it was; one it changed has its base.
+  messages.length = 0;
+  await transport.openFile(refactor, "package.json", turn);
+  await transport.openFile(refactor, "src/middleware/auth.ts", turn);
+  await transport.openFile(refactor, "package.json", "head");
+  await tick();
+  const sides = (m: ServiceMessage) => m.type === "file" && m.content === m.base;
+  expect(messages.map(sides)).toEqual([true, false, false]);
+});
+
 test("changes of a followed worktree with their totals, or why not", async () => {
   const { transport, messages } = await connected();
   const [shop, api, dotfiles] = MOCK_REPOS;
@@ -813,6 +870,7 @@ test("changes of a followed worktree with their totals, or why not", async () =>
     added: 24,
     removed: 49,
     error: null,
+    turns: MOCK_TURNS,
   } as const;
   expect(messages).toEqual([
     refactored,
@@ -827,6 +885,7 @@ test("changes of a followed worktree with their totals, or why not", async () =>
       added: 0,
       removed: 0,
       error: null,
+      turns: MOCK_TURNS,
     },
     {
       type: "changes",
@@ -838,6 +897,7 @@ test("changes of a followed worktree with their totals, or why not", async () =>
       added: 0,
       removed: 0,
       error: `${dotfiles.path} is not a worktree of a followed project`,
+      turns: [],
     },
     { ...refactored, base: "head" },
   ]);

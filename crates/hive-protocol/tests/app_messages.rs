@@ -65,11 +65,16 @@ sort! {
         | CreateIssueWorktree
         | RemoveWorktree
         | RenameWorktree
+        | CreateReview
+        | PlanBringBack
+        | BringBack
+        | DiscardReview
         | WatchWorktree
         | UnwatchWorktree
         | ExpandIgnored
         | View
         | ListChanges
+        | ListCommits
         | MarkSeen
         | ListComments
         | AddComment
@@ -159,10 +164,14 @@ sort! {
         | RemoveWorktreeFailed
         | WorktreeRenamed
         | RenameWorktreeFailed
+        | BringBackPlan
+        | BroughtBack
+        | BringBackFailed
         | WorktreeStatus
         | Files
         | Changes
         | Comments
+        | Commits
         | Scripts
         | Sessions
         | RestoreSessions
@@ -221,6 +230,7 @@ fn project() -> Project {
                 merged: false,
                 last_commit_ms: 2,
             }),
+            review_of: None,
         }],
         error: None,
         group: false,
@@ -496,6 +506,33 @@ fn samples() -> Vec<Control> {
             name: s("y"),
             message: m(),
         },
+        BringBackPlan {
+            path: s("/r/.claude/worktrees/review-x"),
+            plan: Some(ReviewPlan {
+                reviewed: s("/r/.claude/worktrees/x"),
+                into: s("worktree-x"),
+                base: s("beef"),
+                branch: s("review-x"),
+                tip: s("c0ffee"),
+                commits: vec![ReviewCommit {
+                    id: s("c0ffee"),
+                    summary: s("Fix the login"),
+                }],
+                total: 1,
+                fast_forward: false,
+            }),
+            error: None,
+        },
+        BroughtBack {
+            project: project(),
+            path: s("/r/.claude/worktrees/review-x"),
+            commits: 1,
+            fast_forward: false,
+        },
+        BringBackFailed {
+            path: s("/r/.claude/worktrees/review-x"),
+            message: m(),
+        },
         WorktreeStatus {
             path: s("/r"),
             status: None,
@@ -521,6 +558,25 @@ fn samples() -> Vec<Control> {
             }],
             added: 1,
             removed: 0,
+            error: None,
+            turns: vec![TurnBase {
+                session: s("s1"),
+                title: s("claude"),
+                started_ms: 1,
+                late: false,
+            }],
+        },
+        Commits {
+            path: s("/r"),
+            commits: vec![CommitInfo {
+                id: s("0123456789012345678901234567890123456789"),
+                short: s("0123456"),
+                author: s("A"),
+                time_ms: 1_000,
+                subject: s("fix: x"),
+                on_branch: true,
+            }],
+            truncated: false,
             error: None,
         },
         Comments {

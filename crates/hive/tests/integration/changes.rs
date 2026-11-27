@@ -72,6 +72,7 @@ async fn a_worktree_lists_what_differs_from_head() {
             added: 0,
             removed: 0,
             error: Some(error),
+            turns: vec![],
         }
     );
     follow(&mut conn, &root).await;
@@ -103,6 +104,7 @@ async fn a_worktree_lists_what_differs_from_head() {
             added: 5 + u64::from(not_utf8),
             removed: 2,
             error: None,
+            turns: vec![],
         }
     );
 
@@ -130,6 +132,7 @@ async fn a_worktree_lists_what_differs_from_head() {
             added: 2,
             removed: 0,
             error: None,
+            turns: vec![],
         }
     );
 

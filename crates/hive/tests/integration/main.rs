@@ -63,6 +63,9 @@ mod registry;
 mod remote;
 #[cfg(unix)]
 #[cfg(test)]
+mod review;
+#[cfg(unix)]
+#[cfg(test)]
 mod scripts;
 #[cfg(unix)]
 #[cfg(test)]
@@ -73,6 +76,9 @@ mod statusline;
 #[cfg(unix)]
 #[cfg(test)]
 mod terminal;
+#[cfg(unix)]
+#[cfg(test)]
+mod turns;
 #[cfg(unix)]
 #[cfg(test)]
 mod uninstall;

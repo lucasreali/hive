@@ -133,10 +133,11 @@ fn list(kind: &str, field: &str, len: usize) -> Value {
 }
 
 #[test]
-fn projects_sessions_and_any_list_are_capped() {
+fn projects_sessions_commits_and_any_list_are_capped() {
     let lists = [
         ("projects", PROJECTS),
         ("sessions", SESSIONS),
+        ("commits", COMMITS),
         ("comments", COMMENTS),
     ];
     for (kind, most) in lists {
@@ -163,8 +164,8 @@ fn projects_sessions_and_any_list_are_capped() {
     assert_eq!(check(&mut checked), Ok(()));
     assert_eq!(checked, fine);
     assert_eq!(
-        (PROJECTS, SESSIONS, COMMENTS, LIST),
-        (1000, 1000, 1000, 50_000)
+        (PROJECTS, SESSIONS, COMMITS, COMMENTS, LIST),
+        (1000, 1000, 1000, 1000, 50_000)
     );
 }
 
@@ -186,6 +187,10 @@ fn a_remote_s_titles_badges_and_errors_are_clipped() {
     let mut notification = json!({"type": "terminal_notification", "body": long});
     check(&mut notification).unwrap();
     assert_eq!(notification["body"], clipped);
+    // A commit's short id (27.2), at any depth of a `commits`.
+    let mut commits = json!({"type": "commits", "commits": [{"short": long}]});
+    check(&mut commits).unwrap();
+    assert_eq!(commits["commits"][0]["short"], clipped);
     // A review comment's lines and author (27.3), and its text at 4096 characters.
     let mut comments = json!({"type": "comments", "comments": [{
         "code": [long], "before": [long], "after": [long], "author": long, "file": long,

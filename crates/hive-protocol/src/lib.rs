@@ -765,6 +765,56 @@ pub enum Control {
         name: String,
         message: String,
     },
+    /// App → service: "Review in a new worktree…" (27.4) of the worktree `path` of a followed
+    /// project: a Claude worktree `review-<name>` on a new branch of the same name, from the tip
+    /// of `path`'s branch, linked to `path` as its review (`Worktree::review_of`). Answered by
+    /// `WorktreeCreated`, or `CreateWorktreeFailed` with `path` as its name.
+    CreateReview {
+        path: String,
+    },
+    /// App → service: what "Bring changes back" of the review worktree `path` would do,
+    /// answered by `BringBackPlan`. Nothing changes.
+    PlanBringBack {
+        path: String,
+    },
+    BringBackPlan {
+        path: String,
+        /// `None` with `error` when nothing can be brought back.
+        plan: Option<ReviewPlan>,
+        error: Option<String>,
+    },
+    /// App → service, on the user's click only (#12): brings the review `path`'s commits into
+    /// its reviewed worktree's branch, in that worktree: a fast-forward when possible, else a
+    /// merge commit (never a rebase). Refused when either worktree has uncommitted changes, or
+    /// when anything differs from the plan shown: the reviewed branch `into` at `base`, the
+    /// review's branch at `tip`; a conflict is aborted and its message answered. Answered by
+    /// `BroughtBack` or `BringBackFailed`.
+    BringBack {
+        path: String,
+        into: String,
+        base: String,
+        tip: String,
+    },
+    BroughtBack {
+        /// The project with its updated worktrees.
+        project: Project,
+        path: String,
+        /// The commits brought, and whether it was a fast-forward.
+        commits: u64,
+        fast_forward: bool,
+    },
+    BringBackFailed {
+        path: String,
+        message: String,
+    },
+    /// App → service: "Discard review" of the review worktree `path`: removed as
+    /// `RemoveWorktree` removes it (4.4's checks, `--force` when `force`); its `review-<name>`
+    /// branch is deleted too when every commit of it is on the reviewed branch, else kept.
+    /// Answered by `WorktreeRemoved` or `RemoveWorktreeFailed`.
+    DiscardReview {
+        path: String,
+        force: bool,
+    },
     /// App → service: watch this worktree of a followed project for the files panel,
     /// answered by `Files` now and after every change. Only one worktree is watched: this
     /// replaces the previous one. Its `Changes` are listed against `base`.
@@ -834,12 +884,31 @@ pub enum Control {
         /// The main worktree's branch this worktree can be compared with; `None` for the
         /// main worktree itself, or when that one is detached.
         branch: Option<String>,
-        /// Why `branch` was asked but `HEAD` is shown.
+        /// Why the base asked is not shown but `HEAD` is.
         base_error: Option<String>,
         files: Vec<ChangedFile>,
         added: u64,
         removed: u64,
         /// Why nothing could be listed, or why the list was cut short.
+        error: Option<String>,
+        /// The agents whose last turn can be compared with ([`DiffBase::Turn`]), the latest
+        /// first.
+        #[serde(default)]
+        turns: Vec<TurnBase>,
+    },
+    /// App → service: the commits of a worktree of a followed project to compare with (27.2),
+    /// answered by `Commits`.
+    ListCommits {
+        path: String,
+    },
+    /// The last commits of the worktree `path`'s `HEAD` (at most 500), those of its branch
+    /// first (`on_branch`), then the older ones, each newest first.
+    Commits {
+        path: String,
+        commits: Vec<CommitInfo>,
+        /// More commits were left out.
+        truncated: bool,
+        /// Why they could not be listed.
         error: Option<String>,
     },
     /// App → service (27.3): the review comments of a worktree of a followed project (or a
@@ -2031,6 +2100,39 @@ pub struct Worktree {
     pub claude: bool,
     /// `None` when git could not tell.
     pub status: Option<WorktreeStatus>,
+    /// The worktree (its path) this one reviews (27.4): the sidebar shows it under that one.
+    /// Optional, so adding it kept protocol 1 compatible.
+    #[serde(default)]
+    pub review_of: Option<String>,
+}
+
+/// What "Bring changes back" of a review (27.4) would do.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ReviewPlan {
+    /// The reviewed worktree (its path), its branch the commits go to and that branch's commit:
+    /// `BringBack` must still find both.
+    pub reviewed: String,
+    pub into: String,
+    pub base: String,
+    /// The review's branch, and its tip: the commit id `BringBack` must still find there.
+    pub branch: String,
+    pub tip: String,
+    /// The commits that would go, newest first, at most [`BRING_BACK_SHOWN`]; `total` counts
+    /// them all.
+    pub commits: Vec<ReviewCommit>,
+    pub total: u64,
+    /// The reviewed branch has no commit of its own since: it moves to `tip`, no merge commit.
+    pub fast_forward: bool,
+}
+
+/// Most commits a [`ReviewPlan`] lists.
+pub const BRING_BACK_SHOWN: usize = 100;
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ReviewCommit {
+    pub id: String,
+    /// Its subject line, cut by the service.
+    pub summary: String,
 }
 
 /// A worktree's health, for the sidebar. Hive never merges anything (#12).
@@ -2316,15 +2418,53 @@ pub struct SearchMatch {
     pub text: String,
 }
 
-/// What a worktree's changes are compared with (9.11); the app keeps the choice.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+/// What a worktree's changes are compared with (9.11, 27.2); the app keeps the choice.
+/// `"head"` and `"branch"` in JSON; the others as `{"turn":{"session":…}}` and
+/// `{"commit":{"id":…}}`.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum DiffBase {
     /// Its `HEAD`: what is not committed yet.
+    #[default]
     Head,
     /// The merge-base of its `HEAD` and the main worktree's branch (the branch 6.6 counts
     /// ahead/behind against): all the work of its branch, committed or not.
     Branch,
+    /// The worktree as it was when the agent `session` started its last turn (27.2): the
+    /// service's snapshot at its `UserPromptSubmit`.
+    Turn { session: String },
+    /// A commit the user picked (27.2), by its full id (40 or 64 hex digits).
+    Commit { id: String },
+}
+
+/// An agent with a usable snapshot of its last turn in a worktree (27.2): what
+/// [`DiffBase::Turn`] can compare with.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TurnBase {
+    pub session: String,
+    /// The agent's title, or the start of its session id.
+    pub title: String,
+    /// When the turn started (the snapshot's `UserPromptSubmit`).
+    pub started_ms: u64,
+    /// The snapshot finished after the agent's first edit of the turn: that edit may be
+    /// missing from the diff.
+    pub late: bool,
+}
+
+/// A commit of a worktree's history the user can compare with (27.2).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CommitInfo {
+    /// The full id.
+    pub id: String,
+    pub short: String,
+    /// Clipped by the service (100 characters).
+    pub author: String,
+    /// The commit time.
+    pub time_ms: u64,
+    /// Its first line, clipped by the service (200 characters).
+    pub subject: String,
+    /// Made on the worktree's branch since it left the main worktree's branch.
+    pub on_branch: bool,
 }
 
 /// A file that differs from the base in a worktree.
@@ -3264,6 +3404,7 @@ mod tests {
             main: true,
             claude: false,
             status: None,
+            review_of: None,
         };
         let project = Project {
             id: "/r".into(),
@@ -3450,16 +3591,68 @@ mod tests {
             added: 1,
             removed: 0,
             error: None,
+            turns: vec![TurnBase {
+                session: "s".into(),
+                title: "t".into(),
+                started_ms: 5,
+                late: true,
+            }],
         };
         assert_eq!(
             &Frame::control(0, &changes).payload[..],
-            br#"{"type":"changes","path":"/r","base":"head","branch":"main","base_error":"e","files":[{"path":"b","status":"renamed","old_path":"a","added":1,"removed":null}],"added":1,"removed":0,"error":null}"#
+            br#"{"type":"changes","path":"/r","base":"head","branch":"main","base_error":"e","files":[{"path":"b","status":"renamed","old_path":"a","added":1,"removed":null}],"added":1,"removed":0,"error":null,"turns":[{"session":"s","title":"t","started_ms":5,"late":true}]}"#
         );
+        // A service before 27.2 sends no turns.
+        let old = br#"{"type":"changes","path":"/r","base":"branch","branch":null,"base_error":null,"files":[],"added":0,"removed":0,"error":null}"#;
+        let old = serde_json::from_slice::<Control>(old).unwrap();
+        assert!(matches!(old, Control::Changes { turns, .. } if turns.is_empty()));
         let list = Control::ListChanges {
             path: "/r".into(),
             base: DiffBase::Branch,
         };
         assert_eq!(Frame::control(0, &list).to_control().unwrap(), list);
+        for (base, json) in [
+            (
+                DiffBase::Turn {
+                    session: "s".into(),
+                },
+                r#"{"turn":{"session":"s"}}"#,
+            ),
+            (
+                DiffBase::Commit { id: "ab".into() },
+                r#"{"commit":{"id":"ab"}}"#,
+            ),
+        ] {
+            assert_eq!(serde_json::to_string(&base).unwrap(), json);
+            let list = Control::OpenFile {
+                worktree: "/r".into(),
+                path: "a".into(),
+                base,
+            };
+            assert_eq!(Frame::control(0, &list).to_control().unwrap(), list);
+        }
+        let commits = Control::Commits {
+            path: "/r".into(),
+            commits: vec![CommitInfo {
+                id: "abc".into(),
+                short: "ab".into(),
+                author: "A".into(),
+                time_ms: 1000,
+                subject: "s".into(),
+                on_branch: true,
+            }],
+            truncated: false,
+            error: None,
+        };
+        assert_eq!(
+            &Frame::control(0, &commits).payload[..],
+            br#"{"type":"commits","path":"/r","commits":[{"id":"abc","short":"ab","author":"A","time_ms":1000,"subject":"s","on_branch":true}],"truncated":false,"error":null}"#
+        );
+        let list = Control::ListCommits { path: "/r".into() };
+        assert_eq!(
+            &Frame::control(0, &list).payload[..],
+            br#"{"type":"list_commits","path":"/r"}"#
+        );
         // A file's seen mark (27.1), left out when it has none.
         let files = [ChangedFile {
             path: "b".into(),
@@ -3719,6 +3912,61 @@ mod tests {
             &Frame::control(0, &failed).payload[..],
             br#"{"type":"remove_worktree_failed","path":"/r/w","message":"m"}"#
         );
+    }
+
+    #[test]
+    fn review_messages_are_tagged_json() {
+        let create = Control::CreateReview {
+            path: "/r/w".into(),
+        };
+        assert_eq!(
+            &Frame::control(0, &create).payload[..],
+            br#"{"type":"create_review","path":"/r/w"}"#
+        );
+        let bring = Control::BringBack {
+            path: "/r/v".into(),
+            into: "b".into(),
+            base: "cd".into(),
+            tip: "ab".into(),
+        };
+        assert_eq!(
+            &Frame::control(0, &bring).payload[..],
+            br#"{"type":"bring_back","path":"/r/v","into":"b","base":"cd","tip":"ab"}"#
+        );
+        let plan = Control::BringBackPlan {
+            path: "/r/v".into(),
+            plan: Some(ReviewPlan {
+                reviewed: "/r/w".into(),
+                into: "b".into(),
+                base: "cd".into(),
+                branch: "review-w".into(),
+                tip: "ab".into(),
+                commits: vec![ReviewCommit {
+                    id: "ab".into(),
+                    summary: "fix".into(),
+                }],
+                total: 1,
+                fast_forward: true,
+            }),
+            error: None,
+        };
+        assert_eq!(
+            &Frame::control(0, &plan).payload[..],
+            br#"{"type":"bring_back_plan","path":"/r/v","plan":{"reviewed":"/r/w","into":"b","base":"cd","branch":"review-w","tip":"ab","commits":[{"id":"ab","summary":"fix"}],"total":1,"fast_forward":true},"error":null}"#
+        );
+        assert_eq!(Frame::control(0, &plan).to_control().unwrap(), plan);
+        let discard = Control::DiscardReview {
+            path: "/r/v".into(),
+            force: false,
+        };
+        assert_eq!(
+            &Frame::control(0, &discard).payload[..],
+            br#"{"type":"discard_review","path":"/r/v","force":false}"#
+        );
+        // A worktree from a service before reviews is none.
+        let old = br#"{"id":"/r","name":"r","path":"/r","branch":null,"main":true,"claude":false,"status":null}"#;
+        let worktree: Worktree = serde_json::from_slice(old).unwrap();
+        assert_eq!(worktree.review_of, None);
     }
 
     #[test]

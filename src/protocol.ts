@@ -157,12 +157,22 @@ export type ServiceMessage =
   | { type: "remove_worktree_failed"; path: string; message: string }
   | { type: "worktree_renamed"; project: Project; from: string; path: string }
   | { type: "rename_worktree_failed"; path: string; name: string; message: string }
+  | ({ type: "bring_back_plan" } & BringBackPlan)
+  | {
+      type: "brought_back";
+      project: Project;
+      path: string;
+      commits: number;
+      fast_forward: boolean;
+    }
+  | { type: "bring_back_failed"; path: string; message: string }
   | { type: "worktree_status"; path: string; status: WorktreeStatus | null }
   | ({ type: "files" } & WorktreeFiles)
   // A refused request, e.g. watching a worktree that is not followed. Not stored.
   | { type: "error"; message: string }
   | ({ type: "changes" } & Changes)
   | { type: "comments"; path: string; comments: ReviewComment[] }
+  | ({ type: "commits" } & Commits)
   | ({ type: "scripts" } & WorktreeScripts)
   | ({ type: "file" } & FileText)
   // Consumed by the Tauri side (26.16), never forwarded to the UI: it answers with
@@ -287,7 +297,32 @@ export type Worktree = {
   claude: boolean;
   /** Null when git could not tell. */
   status: WorktreeStatus | null;
+  /** The worktree (its path) this one reviews (27.4): shown under that one. */
+  review_of?: string | null;
 };
+
+/** A commit "Bring changes back" would bring (27.4). */
+export type ReviewCommit = { id: string; summary: string };
+
+/**
+ * What "Bring changes back" of a review would do (27.4): its branch's commits missing from the
+ * reviewed worktree's branch `into` (at `base`), newest first (at most 100 listed, `total` counts them all),
+ * and whether `into` only moves forward to `tip`.
+ */
+export type ReviewPlan = {
+  reviewed: string;
+  into: string;
+  /** `into`'s commit when planned: "Bring back" must still find it there. */
+  base: string;
+  branch: string;
+  tip: string;
+  commits: ReviewCommit[];
+  total: number;
+  fast_forward: boolean;
+};
+
+/** The service's `bring_back_plan`: a plan, or why there is none. */
+export type BringBackPlan = { path: string; plan: ReviewPlan | null; error: string | null };
 
 /**
  * Mirrors `hive_protocol::WorktreeStatus`: files changed and their lines added and removed
@@ -458,10 +493,44 @@ export type ReviewComment = {
 export type SeenMark = "seen" | "changed";
 
 /**
- * What a worktree's changes are compared with (9.11): its HEAD, or the merge-base with the main
- * worktree's branch (the service finds it).
+ * What a worktree's changes are compared with (9.11, 27.2): its HEAD, the merge-base with the main
+ * worktree's branch (the service finds it), the worktree as it was when an agent's last turn
+ * started (the service's snapshot), or a commit picked by its full id.
  */
-export type DiffBase = "head" | "branch";
+export type DiffBase =
+  | "head"
+  | "branch"
+  | { turn: { session: string } }
+  | { commit: { id: string } };
+
+/** Mirrors `hive_protocol::TurnBase`: an agent whose last turn the worktree can be compared with. */
+export type TurnBase = {
+  session: string;
+  /** The agent's title, or the start of its session id. */
+  title: string;
+  started_ms: number;
+  /** The snapshot finished after the agent's first edit: that edit may be missing. */
+  late: boolean;
+};
+
+/** Mirrors `hive_protocol::CommitInfo`: a commit the worktree can be compared with (27.2). */
+export type CommitInfo = {
+  id: string;
+  short: string;
+  author: string;
+  time_ms: number;
+  subject: string;
+  /** Made on the worktree's branch since it left the main worktree's branch. */
+  on_branch: boolean;
+};
+
+/** A worktree's last commits (`commits`), its branch's first. */
+export type Commits = {
+  path: string;
+  commits: CommitInfo[];
+  truncated: boolean;
+  error: string | null;
+};
 
 /** A worktree's changes against its base, sorted by path, with the service's totals. */
 export type Changes = {
@@ -475,6 +544,8 @@ export type Changes = {
   added: number;
   removed: number;
   error: string | null;
+  /** The agents whose last turn can be compared with, the latest first (absent before 27.2). */
+  turns?: TurnBase[];
 };
 
 /**

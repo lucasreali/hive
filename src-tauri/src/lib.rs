@@ -2055,6 +2055,38 @@ impl Host {
         self.link().send(0, &Control::RenameWorktree { path, name })
     }
 
+    /// The answer arrives as `worktree_created` or `create_worktree_failed`.
+    pub fn create_review(&self, path: String) -> Result<(), String> {
+        self.link().send(0, &Control::CreateReview { path })
+    }
+
+    /// The answer arrives as `bring_back_plan`.
+    pub fn plan_bring_back(&self, path: String) -> Result<(), String> {
+        self.link().send(0, &Control::PlanBringBack { path })
+    }
+
+    /// The answer arrives as `brought_back` or `bring_back_failed`.
+    pub fn bring_back(
+        &self,
+        path: String,
+        into: String,
+        base: String,
+        tip: String,
+    ) -> Result<(), String> {
+        let bring = Control::BringBack {
+            path,
+            into,
+            base,
+            tip,
+        };
+        self.link().send(0, &bring)
+    }
+
+    /// The answer arrives as `worktree_removed` or `remove_worktree_failed`.
+    pub fn discard_review(&self, path: String, force: bool) -> Result<(), String> {
+        self.link().send(0, &Control::DiscardReview { path, force })
+    }
+
     /// Answered by `files` now and after every change in the worktree.
     pub fn watch_worktree(&self, path: String, base: DiffBase) -> Result<(), String> {
         self.link().send(0, &Control::WatchWorktree { path, base })
@@ -2088,6 +2120,11 @@ impl Host {
     /// The answer arrives as `changes`.
     pub fn list_changes(&self, path: String, base: DiffBase) -> Result<(), String> {
         self.link().send(0, &Control::ListChanges { path, base })
+    }
+
+    /// The answer arrives as `commits` (27.2).
+    pub fn list_commits(&self, path: String) -> Result<(), String> {
+        self.link().send(0, &Control::ListCommits { path })
     }
 
     /// Marks files seen in the diff, or not (27.1); the answer arrives as `changes`.
@@ -2979,6 +3016,9 @@ const REMOTE_TO_UI: &[&str] = &[
     "remove_worktree_failed",
     "worktree_renamed",
     "rename_worktree_failed",
+    "bring_back_plan",
+    "brought_back",
+    "bring_back_failed",
     "worktree_status",
     "sessions",
     "session_deleted",
@@ -2988,6 +3028,7 @@ const REMOTE_TO_UI: &[&str] = &[
     "files",
     "changes",
     "comments",
+    "commits",
     "scripts",
     "search_results",
     "file",
@@ -3366,6 +3407,46 @@ pub mod commands {
     }
 
     #[tauri::command]
+    pub fn create_review(
+        hive: State<'_, Hive>,
+        host: Option<String>,
+        path: String,
+    ) -> Result<(), String> {
+        hive.on(host.as_deref())?.create_review(path)
+    }
+
+    #[tauri::command]
+    pub fn plan_bring_back(
+        hive: State<'_, Hive>,
+        host: Option<String>,
+        path: String,
+    ) -> Result<(), String> {
+        hive.on(host.as_deref())?.plan_bring_back(path)
+    }
+
+    #[tauri::command]
+    pub fn bring_back(
+        hive: State<'_, Hive>,
+        host: Option<String>,
+        path: String,
+        into: String,
+        base: String,
+        tip: String,
+    ) -> Result<(), String> {
+        hive.on(host.as_deref())?.bring_back(path, into, base, tip)
+    }
+
+    #[tauri::command]
+    pub fn discard_review(
+        hive: State<'_, Hive>,
+        host: Option<String>,
+        path: String,
+        force: bool,
+    ) -> Result<(), String> {
+        hive.on(host.as_deref())?.discard_review(path, force)
+    }
+
+    #[tauri::command]
     pub fn list_sessions(hive: State<'_, Hive>, host: Option<String>) -> Result<(), String> {
         hive.on(host.as_deref())?.list_sessions()
     }
@@ -3488,6 +3569,15 @@ pub mod commands {
         base: DiffBase,
     ) -> Result<(), String> {
         hive.on(host.as_deref())?.list_changes(path, base)
+    }
+
+    #[tauri::command]
+    pub fn list_commits(
+        hive: State<'_, Hive>,
+        host: Option<String>,
+        path: String,
+    ) -> Result<(), String> {
+        hive.on(host.as_deref())?.list_commits(path)
     }
 
     #[tauri::command]

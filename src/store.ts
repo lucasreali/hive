@@ -21,8 +21,10 @@ import type {
   AgentUsage,
   AppMode,
   Branches,
+  BringBackPlan,
   Changes,
   ClaudeLogin,
+  Commits,
   CreateFailure,
   Diagnostics,
   DiffBase,
@@ -194,6 +196,10 @@ export type WorktreeDialog = {
   failure: { path: string; name: string | null; message: string } | null;
   /** Why deleting each worktree failed, by path (removing merged worktrees sends several). */
   removeFailures: Record<string, string>;
+  /** What bringing a review's changes back would do (27.4), as the service last answered. */
+  plan: BringBackPlan | null;
+  /** Why bringing the review `path`'s changes back failed. */
+  bringFailure: { path: string; message: string } | null;
 };
 
 /**
@@ -288,6 +294,9 @@ export type Modal =
   | "uninstall"
   | "remove-worktree"
   | "rename-worktree"
+  | "review-worktree"
+  | "bring-back"
+  | "discard-review"
   | "new-space"
   | "edit-space"
   | "settings"
@@ -535,6 +544,8 @@ export type HiveState = {
   worktreeFiles: WorktreeFiles | null;
   /** By worktree path: the last `changes` the service sent for it. */
   changes: Record<string, Changes>;
+  /** By worktree path: the last `commits` the service sent for it (27.2). */
+  commits: Record<string, Commits>;
   /** By worktree path: the last `scripts` the service sent for it (23.4). */
   scripts: Record<string, WorktreeScripts>;
   /** By terminal id: the script it was opened to run (UI state, `src/scripts.ts`). */
@@ -668,6 +679,8 @@ export const initialState: HiveState = {
     createFailure: null,
     failure: null,
     removeFailures: {},
+    plan: null,
+    bringFailure: null,
   },
   terminals: {},
   agents: {},
@@ -677,6 +690,7 @@ export const initialState: HiveState = {
   subagentWorktrees: [],
   worktreeFiles: null,
   changes: {},
+  commits: {},
   scripts: {},
   scriptRuns: {},
   changesSeen: {},
@@ -741,6 +755,7 @@ export const HOST_FIELDS = [
   "worktreeFiles",
   "changes",
   "changesSeen",
+  "commits",
   "scripts",
   "file",
   "table",
@@ -1451,6 +1466,12 @@ export function diffBase(s: HiveState, path: string): DiffBase {
   const worktrees = Object.values(s.projects ?? {}).flatMap((p) => p.worktrees);
   const claude = worktrees.find((w) => w.path === path)?.claude;
   return s.diffBases[path] ?? (claude ? "branch" : "head");
+}
+
+/** A base as one string, for comparing and as a key: "head", "branch", "turn:<session>", "commit:<id>". */
+export function baseKey(base: DiffBase): string {
+  if (typeof base === "string") return base;
+  return "turn" in base ? `turn:${base.turn.session}` : `commit:${base.commit.id}`;
 }
 
 /** Picks the base the worktree at `path` is compared with. */

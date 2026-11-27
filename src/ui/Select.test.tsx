@@ -5,6 +5,25 @@ import { Select, TYPE_AHEAD_MS } from "./Select";
 
 afterEach(cleanup);
 
+test("a disabled option shows, with its tooltip, but is never picked", () => {
+  const changed = mock((_: string) => {});
+  const options = [
+    { value: "a", label: "Apple" },
+    { value: "b", label: "Banana", disabled: true, title: "Out of season" },
+  ];
+  render(<Select aria-label="Fruit" value="a" options={options} onChange={changed} />);
+  const trigger = screen.getByRole("combobox", { name: "Fruit" });
+  fireEvent.keyDown(trigger, { key: "ArrowDown" });
+  const banana = screen.getByRole("option", { name: "Banana" });
+  expect([banana.getAttribute("aria-disabled"), banana.title]).toEqual(["true", "Out of season"]);
+  expect(screen.getByRole("option", { name: "Apple" }).getAttribute("aria-disabled")).toBeNull();
+  fireEvent.keyDown(trigger, { key: "ArrowDown" });
+  fireEvent.keyDown(trigger, { key: "Enter" });
+  fireEvent.click(banana);
+  expect(changed).not.toHaveBeenCalled();
+  expect(screen.getByRole("listbox")).toBeDefined();
+});
+
 const OPTIONS = [
   { value: "a", label: "Apple" },
   { value: "b", label: "Banana" },

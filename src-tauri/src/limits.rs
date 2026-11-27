@@ -7,8 +7,8 @@
 //!   second; at most [`ALERTS`] that would show an OS notification in [`ALERT_WINDOW`]. One the
 //!   UI takes is read as its type ([`typed`]): a field of another type ends the link, an
 //!   unknown one is dropped.
-//! - **Lists:** at most [`PROJECTS`] projects, [`SESSIONS`] sessions, [`COMMENTS`] review
-//!   comments, and [`LIST`] items in any other list of a message.
+//! - **Lists:** at most [`PROJECTS`] projects, [`SESSIONS`] sessions, [`COMMITS`] commits,
+//!   [`COMMENTS`] review comments, and [`LIST`] items in any other list of a message.
 //! - **Terminal output:** at most [`UNACKED`] bytes of one terminal's output the UI has not
 //!   acknowledged (9.19), the service stopping at 512 KiB and a read, and [`LINK_UNACKED`] of
 //!   all of a link's terminals.
@@ -39,6 +39,8 @@ const ALERT_WINDOW: Duration = Duration::from_secs(10);
 pub(crate) const PROJECTS: usize = 1000;
 /// The most sessions a remote's `sessions` lists (its service sends at most 500).
 pub(crate) const SESSIONS: usize = 1000;
+/// The most commits a remote's `commits` lists (its service sends at most 500, 27.2).
+pub(crate) const COMMITS: usize = 1000;
 /// The most review comments a remote's `comments` lists (27.3; its service keeps at most 500
 /// a worktree).
 pub(crate) const COMMENTS: usize = 1000;
@@ -61,12 +63,14 @@ pub(crate) const TEXT: usize = 1024;
 /// The fields of a remote's messages that hold text shown as is (titles, badges, errors), at
 /// any depth.
 const CLIPPED: &[&str] = &[
-    "title", "text", "message", "error", "reason", "activity", "name", "account",
+    "title", "text", "message", "error", "reason", "activity", "name", "account", "subject",
+    "author",
 ];
 /// Fields clipped only in one type's messages: `body` is also a pull request's description.
 /// A review comment's lines (27.3) are cut at 200 characters by its service.
 const CLIPPED_IN: &[(&str, &str)] = &[
     ("terminal_notification", "body"),
+    ("commits", "short"),
     ("comments", "code"),
     ("comments", "before"),
     ("comments", "after"),
@@ -209,6 +213,7 @@ pub(crate) fn check(message: &mut Value) -> Result<(), String> {
     let lists = [
         ("projects", PROJECTS),
         ("sessions", SESSIONS),
+        ("commits", COMMITS),
         ("comments", COMMENTS),
     ];
     for (list, most) in lists {

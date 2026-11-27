@@ -38,6 +38,7 @@ import type {
   Worktree,
 } from "../protocol";
 import {
+  baseKey,
   diffBase,
   editOpenTable,
   type FileTarget,
@@ -66,6 +67,7 @@ import {
 } from "../store";
 import { dropFile, fileTabState, paneState } from "../tabs";
 import { transport } from "../transport";
+import { Select, type SelectOption } from "../ui/Select";
 import { useBlockEdit } from "../viewer/blockEdit";
 import { isDirty, isFor } from "../viewer/buffer";
 import { CodeView, notice } from "../viewer/CodeView";
@@ -77,6 +79,7 @@ import { referenceTarget, sendReference } from "../viewer/reference";
 import { CommentButton, CommentInput, CommentsView } from "../viewer/review";
 import { TableView } from "../viewer/TableView";
 import { commandKey, isMac, keyText } from "../window";
+import { CommitPicker } from "./CommitPicker";
 import { askDiscard } from "./ConfirmDialog";
 import { askDelete } from "./FileMenu";
 import {
@@ -749,36 +752,69 @@ function ContentResults({ worktree, query }: { worktree: string; query: string }
   );
 }
 
+/** The base menu's item that opens the commit picker (27.2). */
+const PICK_COMMIT = "pick-commit";
+
+/** The base menu's items for `changes`, `asked` being the base picked (9.11, 27.2). */
+export function baseOptions(changes: Changes, asked: DiffBase): SelectOption[] {
+  const branch = changes.branch;
+  const failed = baseKey(asked) !== baseKey(changes.base);
+  const options: SelectOption[] = [
+    { value: "head", label: "HEAD", title: "Compare with HEAD: what is not committed yet" },
+  ];
+  if (branch) {
+    const fell = failed && asked === "branch";
+    options.push({
+      value: "branch",
+      label: branch,
+      disabled: fell,
+      title: fell
+        ? (changes.base_error ?? undefined)
+        : `Compare with where this branch left ${branch}: all its work`,
+    });
+  }
+  for (const turn of changes.turns ?? []) {
+    const late = turn.late ? " (may miss its first edit)" : "";
+    options.push({
+      value: baseKey({ turn: { session: turn.session } }),
+      label: `Since ${turn.title}'s last turn${late}`,
+      title: `What changed in this worktree since ${turn.title} started its last turn: yours and other agents' changes since then show too`,
+    });
+  }
+  const base = changes.base;
+  if (typeof base === "object" && "commit" in base) {
+    const id = base.commit.id;
+    options.push({ value: baseKey(base), label: id.slice(0, 7), title: `Compare with ${id}` });
+  }
+  options.push({ value: PICK_COMMIT, label: "A commit…", title: "Compare with a commit you pick" });
+  return options;
+}
+
 /**
- * What the changes are compared with (9.11): HEAD (what is not committed yet) or the main
- * worktree's branch (the merge-base with it: all the work of this branch). Only where there is
- * a branch to compare with, or a branch base fell back to HEAD: then the branch is disabled and
- * its tooltip says why.
+ * What the changes are compared with (9.11, 27.2), as a menu: HEAD (what is not committed yet),
+ * the main worktree's branch (the merge-base with it: all the work of this branch; disabled with
+ * the reason when it fell back), one item per agent whose last turn's snapshot is of this
+ * worktree, and "A commit…", which opens the commit picker. It shows the base used.
  */
-function BaseToggle({ changes }: { changes: Changes }) {
-  if (!changes.branch && !changes.base_error) return null;
-  const branch = changes.branch ?? "Branch";
-  const option = (base: DiffBase, label: string, title: string, disabled = false) => (
-    <button
-      type="button"
-      aria-pressed={changes.base === base}
-      title={title}
-      disabled={disabled}
-      onClick={() => setDiffBase(changes.path, base)}
-    >
-      {label}
-    </button>
-  );
+function BaseMenu({ changes }: { changes: Changes }) {
+  const asked = useHive((s) => diffBase(s, changes.path));
+  const [picking, setPicking] = useState(false);
+  const pick = (value: string) => {
+    if (value === PICK_COMMIT) setPicking(true);
+    else if (value === "head" || value === "branch") setDiffBase(changes.path, value);
+    else setDiffBase(changes.path, { turn: { session: value.slice("turn:".length) } });
+  };
   return (
-    <fieldset className="segmented diff-base" aria-label="Compare with">
-      {option("head", "HEAD", "Compare with HEAD: what is not committed yet")}
-      {option(
-        "branch",
-        branch,
-        changes.base_error ?? `Compare with where this branch left ${branch}: all its work`,
-        !!changes.base_error,
-      )}
-    </fieldset>
+    <>
+      <Select
+        className="diff-base"
+        aria-label="Compare with"
+        value={baseKey(changes.base)}
+        options={baseOptions(changes, asked)}
+        onChange={pick}
+      />
+      {picking && <CommitPicker path={changes.path} onClose={() => setPicking(false)} />}
+    </>
   );
 }
 
@@ -805,8 +841,9 @@ function Summary({ worktree }: { worktree: string }) {
       <div className="files-summary">
         <span>{n === 0 ? "No changes" : `${n} ${n === 1 ? "file" : "files"} changed`}</span>
         {n > 0 && <Counts added={changes.added} removed={changes.removed} />}
-        <BaseToggle changes={changes} />
+        <BaseMenu changes={changes} />
       </div>
+      {changes.base_error && <div className="files-base-error">{changes.base_error}</div>}
       {n > 0 && (
         <div className="files-seen">
           <span>{`${seen} of ${n} seen`}</span>

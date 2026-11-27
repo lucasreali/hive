@@ -177,6 +177,11 @@ impl Paths {
     }
 
     /// The Claude sessions that ran in Hive's terminals when the app last closed.
+    /// Where the worktrees' turn snapshots are kept (27.2).
+    pub fn snapshots(&self) -> PathBuf {
+        self.data.join("snapshots")
+    }
+
     pub fn open_sessions(&self) -> PathBuf {
         self.data.join("open-sessions.json")
     }

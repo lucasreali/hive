@@ -20,7 +20,7 @@ use super::{Gone, State};
 use crate::VERSION;
 use crate::adapter::{self, Adapter, ClaudeCode};
 use crate::terminal::Input;
-use crate::{changes, comments, dirs, file, procs, table, table_edit, uninstall, worktree};
+use crate::{changes, comments, dirs, file, procs, review, table, table_edit, uninstall, worktree};
 
 /// Longest `hive badge` label, in characters.
 const MAX_BADGE: usize = 40;
@@ -653,24 +653,83 @@ async fn app_frame(
                 },
             }
         }),
-        Ok(Control::ListChanges { path, base }) => {
-            let seen = state.clone();
-            state.projects(move |projects| {
-                changes::answer(&projects.list(), path, base, &seen.seen).0
+        Ok(Control::CreateReview { path }) => {
+            state.change_worktrees(move |projects| match review::create(projects, &path) {
+                Ok((project, created)) => Control::WorktreeCreated {
+                    project,
+                    path: created.path.to_string_lossy().into_owned(),
+                    notes: created.notes,
+                },
+                Err(err) => Control::CreateWorktreeFailed {
+                    project: projects
+                        .holding(&path)
+                        .map(|(p, _)| p.id)
+                        .unwrap_or_default(),
+                    name: path,
+                    message: err.to_string(),
+                },
             })
+        }
+        Ok(Control::PlanBringBack { path }) => state.projects(move |projects| {
+            let plan = review::plan(projects, &path);
+            Control::BringBackPlan {
+                path,
+                error: plan.as_ref().err().map(ToString::to_string),
+                plan: plan.ok(),
+            }
+        }),
+        Ok(Control::BringBack {
+            path,
+            into,
+            base,
+            tip,
+        }) => {
+            // The merge commit has the space's git identity (21.5), as its terminals would.
+            let space = tokio::task::block_in_place(|| state.projects.space_env(&path));
+            let env = crate::spaces::vars(&space);
+            state.change_worktrees(move |projects| {
+                let shown = review::Shown {
+                    into: &into,
+                    base: &base,
+                    tip: &tip,
+                };
+                match review::bring_back(projects, &path, shown, &env) {
+                    Ok((project, commits, fast_forward)) => Control::BroughtBack {
+                        project,
+                        path,
+                        commits,
+                        fast_forward,
+                    },
+                    Err(err) => Control::BringBackFailed {
+                        path,
+                        message: err.to_string(),
+                    },
+                }
+            })
+        }
+        Ok(Control::DiscardReview { path, force }) => {
+            let archiving = state.clone();
+            state.change_worktrees(move |projects| {
+                let archive = |root: &str| archiving.archive(root, &path);
+                match review::discard(projects, &path, force, procs::Source::System, archive) {
+                    Ok(project) => Control::WorktreeRemoved { project, path },
+                    Err(err) => Control::RemoveWorktreeFailed {
+                        path,
+                        message: err.to_string(),
+                    },
+                }
+            })
+        }
+        Ok(Control::ListChanges { path, base }) => state.list_changes(path, base),
+        Ok(Control::ListCommits { path }) => {
+            state.projects(move |projects| changes::commits(&projects.list(), path))
         }
         Ok(Control::MarkSeen {
             path,
             base,
             files,
             seen,
-        }) => {
-            let marking = state.clone();
-            state.projects(move |projects| {
-                let marks = (files.as_slice(), seen);
-                changes::mark(&projects.list(), path, base, &marking.seen, marks)
-            })
-        }
+        }) => state.mark_seen(path, base, (files, seen)),
         Ok(Control::ListComments { path }) => state.comments(path, comments::Request::List),
         Ok(Control::AddComment {
             path,
@@ -810,7 +869,12 @@ async fn app_frame(
             worktree,
             path,
             base,
-        }) => state.projects(move |projects| file::answer::open(projects, worktree, path, base)),
+        }) => {
+            let snapshots = state.snapshots.clone();
+            state.projects(move |projects| {
+                file::answer::open(projects, &snapshots, worktree, path, &base)
+            })
+        }
         Ok(Control::ReadFile {
             id,
             token,

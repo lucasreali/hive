@@ -2,7 +2,8 @@ import { CaretDownIcon } from "@phosphor-icons/react";
 import { type KeyboardEvent, useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 import { CheckIcon } from "../shell/icons";
 
-export type SelectOption = { value: string; label: string };
+/** An option; a `disabled` one shows but cannot be picked; `title` is its tooltip. */
+export type SelectOption = { value: string; label: string; disabled?: boolean; title?: string };
 
 /** How long a pause in typing starts a new type-ahead search. */
 export const TYPE_AHEAD_MS = 500;
@@ -42,6 +43,7 @@ export function Select(props: {
     setOpen(true);
   };
   const choose = (at: number) => {
+    if (options[at].disabled) return;
     setOpen(false);
     trigger.current?.focus();
     if (options[at].value !== value) onChange(options[at].value);
@@ -166,6 +168,8 @@ export function Select(props: {
               role="option"
               tabIndex={-1}
               aria-selected={at === current}
+              aria-disabled={o.disabled || undefined}
+              title={o.title}
               data-active={at === active}
               onMouseMove={() => setActive(at)}
               onClick={() => choose(at)}

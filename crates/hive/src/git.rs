@@ -177,7 +177,7 @@ pub enum Stdout {
 /// its stderr only (never its stdout), and everything it started killed after `time`. A
 /// program that cannot start is an error of that kind (`NotFound` when it is not installed).
 pub fn limited(
-    mut command: Command,
+    command: Command,
     program: &str,
     args: &[&OsStr],
     input: &[u8],
@@ -185,6 +185,38 @@ pub fn limited(
     keep: Stdout,
     time: Option<Duration>,
 ) -> io::Result<Vec<u8>> {
+    let ran = ran(command, program, args, input, keep, time)?;
+    if ran.code.is_some_and(|code| ok.contains(&code)) {
+        return Ok(ran.out);
+    }
+    let command: Vec<_> = args.iter().map(|arg| arg.to_string_lossy()).collect();
+    Err(io::Error::other(format!(
+        "{program} {} failed: {}",
+        command.join(" "),
+        String::from_utf8_lossy(&ran.err).trim()
+    )))
+}
+
+/// What a command [`ran`] said, and how it exited.
+#[derive(Debug)]
+pub struct Ran {
+    /// Its exit code; `None` when a signal ended it.
+    pub code: Option<i32>,
+    pub out: Vec<u8>,
+    /// At most [`STDERR_LIMIT`] bytes of it.
+    pub err: Vec<u8>,
+}
+
+/// Runs `command` as [`limited`] does, whatever its exit code: an error only when it cannot
+/// start, takes longer than `time` or prints more than `keep` allows.
+pub fn ran(
+    mut command: Command,
+    program: &str,
+    args: &[&OsStr],
+    input: &[u8],
+    keep: Stdout,
+    time: Option<Duration>,
+) -> io::Result<Ran> {
     if time.is_some() {
         // Its own process group, so the limit ends its children too.
         #[cfg(unix)]
@@ -252,13 +284,11 @@ pub fn limited(
             "{program} {command} printed more than {limit} bytes"
         ))
     })?;
-    if status.code().is_some_and(|code| ok.contains(&code)) {
-        return Ok(out);
-    }
-    Err(io::Error::other(format!(
-        "{program} {command} failed: {}",
-        String::from_utf8_lossy(&err).trim()
-    )))
+    Ok(Ran {
+        code: status.code(),
+        out,
+        err,
+    })
 }
 
 /// What a program printed (a path, a `PATH`) as an OS string: its bytes on Unix; on Windows,
