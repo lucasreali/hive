@@ -3,11 +3,15 @@ import { create } from "zustand";
 import type { GitState, PushTarget, Workflows } from "./git";
 import {
   clampWidth,
+  type HostPlaces,
+  hostPlacesSaved,
+  NO_HOST_PLACES,
   ORDER_LIMIT,
   remembered,
   type Side,
   saveAgentOrder,
   savedAgentOrder,
+  savedHostPlaces,
   savedLayout,
   savedPlaces,
   savedSpacePlaces,
@@ -15,6 +19,7 @@ import {
   savedTheme,
   savedUnseenOnly,
   savedWidths,
+  saveHostPlaces,
   saveLayout,
   savePlaces,
   saveSpacePlaces,
@@ -79,8 +84,10 @@ import {
   editFor,
   fileKey,
   fileVisible,
+  itemWorktree,
   kept,
   lastShown,
+  onShownHost,
   opened,
   paneFile,
   paneIdOf,
@@ -471,6 +478,11 @@ export type HiveState = {
    */
   splits: Split[];
   /**
+   * Pairs of the last run (28.27) waiting for a chat of theirs to be resumed: their bar keys, a
+   * file's or a chat's (`session:<id>`); each becomes a pair once both its tabs are open.
+   */
+  pendingSplits: [string, string][];
+  /**
    * The terminal whose search bar is open (17.21): it shows while that terminal is the active
    * tab, over its pane.
    */
@@ -686,6 +698,7 @@ export const initialState: HiveState = {
   tabs: [],
   activeTab: null,
   splits: [],
+  pendingSplits: [],
   terminalSearch: null,
   inbox: [],
   inboxSeen: 0,
@@ -859,6 +872,7 @@ export const HOST_FIELDS = [
   "diffBases",
   "collapsed",
   "splits",
+  "pendingSplits",
   "fileDialog",
   "fileMenu",
 ] as const satisfies readonly (keyof HiveState)[];
@@ -882,12 +896,80 @@ export const NO_HOST_DATA = hostData(initialState) as HostData;
 export const hostKey = (host: string | null | undefined): string => host ?? "";
 
 /**
+ * A host's data as its places of the last run reopen it (28.27): its files' tabs (without their
+ * edits), its diff bases and trees, its pairs of files (a pair with a chat waits for it).
+ */
+export function restoredHost(places: HostPlaces = NO_HOST_PLACES): Partial<HostData> {
+  const openFiles: FileTab[] = places.files.map((f) => ({
+    ...f,
+    editing: false,
+    edit: null,
+    view: null,
+  }));
+  const open = new Set(openFiles.map(fileKey));
+  const paired = new Set<string>();
+  const splits: Split[] = [];
+  const pendingSplits: [string, string][] = [];
+  for (const [left, right] of places.pairs) {
+    const files = [left, right].filter((k) => k.startsWith("file:"));
+    // A tab is in one pair at most; a file not reopened ends its pair.
+    if (left === right || paired.has(left) || paired.has(right)) continue;
+    if (!files.every((k) => open.has(k))) continue;
+    paired.add(left).add(right);
+    if (files.length === 2) splits.push({ left, right });
+    else pendingSplits.push([left, right]);
+  }
+  return {
+    openFiles,
+    diffBases: places.diffBases,
+    collapsed: places.collapsed,
+    splits,
+    pendingSplits,
+  };
+}
+
+/** Each host's places of the last run (28.27), by `hostKey`, until that host's data is made. */
+const lastRun: Record<string, HostPlaces> = {};
+/** Each host's first data, made once (`hostStart`). */
+const starts = new Map<string, HostData>();
+
+/**
+ * Starts the hosts from `hosts`, their places of the last run (28.27): at launch the saved ones,
+ * and in the tests a run of their own. Returns this Mac's host data.
+ */
+export function startHosts(hosts: Record<string, HostPlaces> = savedHostPlaces()) {
+  for (const key of Object.keys(lastRun)) delete lastRun[key];
+  Object.assign(lastRun, hosts);
+  starts.clear();
+  const local = restoredHost(lastRun[""]);
+  // As `saveHosts` would save them now, so an unchanged launch writes nothing.
+  const view = { ...initialState, ...local };
+  hostPlacesSaved({ ...lastRun, "": placesOf(view) });
+  return local;
+}
+
+/** A host's data before its service told anything: its places of the last run (28.27). */
+export function hostStart(key: string): HostData {
+  const kept = starts.get(key);
+  if (kept) return kept;
+  const data = { ...NO_HOST_DATA, ...restoredHost(lastRun[key]) } as HostData;
+  starts.set(key, data);
+  return data;
+}
+
+/** Forgets host `key`'s places of the last run: the host was removed (28.27). */
+export function forgetHostPlaces(key: string): void {
+  delete lastRun[key];
+  starts.delete(key);
+}
+
+/**
  * `s` as `host` sees it: its service data, the shown host's or kept in `stash`, with the app's
  * own state (`host` set to it).
  */
 export function hostView(s: HiveState, host: string | null): HiveState {
   if (host === s.host) return s;
-  return { ...s, ...(s.stash[hostKey(host)] ?? NO_HOST_DATA), host };
+  return { ...s, ...(s.stash[hostKey(host)] ?? hostStart(hostKey(host))), host };
 }
 
 /**
@@ -988,6 +1070,7 @@ export const useHive = create<HiveState>()(() => ({
   tabOrder: savedTabOrder(),
   ...savedPlaces(),
   spacePlaces: savedSpacePlaces(),
+  ...startHosts(),
 }));
 useHive.subscribe(saveTabOrder);
 useHive.subscribe(savePlaces);
@@ -997,6 +1080,8 @@ useHive.subscribe(saveTheme);
 useHive.subscribe(saveLayout);
 useHive.subscribe(saveUnseenOnly);
 useHive.subscribe(followSpacePlaces);
+useHive.subscribe(saveHosts);
+useHive.subscribe(followPairs);
 
 /** What `followPlaces` reads: any other change leaves the places as they are. */
 const PLACE_FIELDS = [
@@ -1057,6 +1142,90 @@ export function followSpacePlaces(s: HiveState, prev: HiveState): void {
   const fields = ["spacePlaces", "selection", "currentSpace", "host", "placesRestored"] as const;
   if (fields.every((field) => s[field] === prev[field])) return;
   saveSpacePlaces(leaveSpace(s).spacePlaces ?? s.spacePlaces);
+}
+
+/** What `saveHosts` reads: any other change leaves the saved places as they are. */
+const HOST_PLACE_FIELDS = [
+  "openFiles",
+  "splits",
+  "pendingSplits",
+  "diffBases",
+  "changes",
+  "collapsed",
+  "agents",
+  "stash",
+  "host",
+] as const satisfies readonly (keyof HiveState)[];
+
+/**
+ * Host `view`'s places to keep (28.27): its open files, its pairs by their bar keys (a plain
+ * terminal's channel is one run's, so its pair is not kept), and the pairs still waiting, its
+ * diff bases but those the service could not use (a turn or a commit no longer there, which
+ * falls back), and its trees.
+ */
+export function placesOf(view: HiveState): HostPlaces {
+  const failed = (path: string, base: DiffBase) => {
+    const answer = view.changes[path];
+    return !!answer?.base_error && baseKey(answer.base) !== baseKey(base);
+  };
+  const pairs = view.splits.map((p): [string, string] => [
+    paneKey(view, p.left),
+    paneKey(view, p.right),
+  ]);
+  return {
+    files: view.openFiles.map(({ worktree, path, preview, rendered, asText }) => ({
+      worktree,
+      path,
+      preview,
+      rendered,
+      asText,
+    })),
+    pairs: [...pairs, ...view.pendingSplits],
+    diffBases: Object.fromEntries(
+      Object.entries(view.diffBases).filter(([path, base]) => !failed(path, base)),
+    ),
+    collapsed: view.collapsed,
+  };
+}
+
+/**
+ * Remembers each host's places (28.27) whenever one may have changed: the shown host's, those
+ * kept in `stash`, and those of hosts not linked yet in this run, as the last run left them.
+ */
+export function saveHosts(s: HiveState, prev: HiveState): void {
+  if (HOST_PLACE_FIELDS.every((field) => s[field] === prev[field])) return;
+  const keys = new Set([...Object.keys(lastRun), ...knownHosts(s).map(hostKey)]);
+  const hosts = Object.fromEntries(
+    [...keys].map((key) => [key, placesOf(hostView(s, key === "" ? null : key))]),
+  );
+  saveHostPlaces(hosts);
+}
+
+/**
+ * Makes the shown host's waiting pairs (28.27) once both their tabs are open: a chat resumed
+ * and named by its session, a file still open. A pair whose file closed, or one of whose tabs
+ * is in another pair or another worktree, is dropped.
+ */
+export function followPairs(s: HiveState, prev: HiveState): void {
+  if (s.pendingSplits.length === 0) return;
+  const fields = ["pendingSplits", "tabs", "agents", "openFiles", "splits", "host"] as const;
+  if (fields.every((field) => s[field] === prev[field])) return;
+  const items: BarItem[] = [...s.tabs.filter((t) => onShownHost(s, t)), ...s.openFiles];
+  const find = (key: string) => items.find((t) => barKey(s, t) === key);
+  const splits = [...s.splits];
+  const pendingSplits = s.pendingSplits.filter(([left, right]) => {
+    const [l, r] = [find(left), find(right)];
+    const closed = [left, right].some((k) => k.startsWith("file:") && !find(k));
+    if (closed) return false;
+    if (!l || !r) return true;
+    const ids = [paneIdOf(l), paneIdOf(r)];
+    const free = ids.every((id) => !splits.some((p) => p.left === id || p.right === id));
+    if (free && itemWorktree(s, l) === itemWorktree(s, r)) {
+      splits.push({ left: ids[0] as PaneId, right: ids[1] as PaneId });
+    }
+    return false;
+  });
+  if (pendingSplits.length < s.pendingSplits.length) useHive.setState({ pendingSplits, splits });
 }
 
 /**
@@ -1387,7 +1556,7 @@ export function switchedHost(s: HiveState, host: string | null): Partial<HiveSta
   if (host === s.host) return {};
   const left = leaveSpace(s);
   const all = { ...s.stash, [hostKey(s.host)]: hostData(s) as HostData };
-  const { [hostKey(host)]: data = NO_HOST_DATA, ...stash } = all;
+  const { [hostKey(host)]: data = hostStart(hostKey(host)), ...stash } = all;
   // A dialog, a question or a menu asked on the host left would act on the one shown now: they
   // close (26.18 review).
   const closed = { modal: null, question: null, menu: null, projectMenu: null, sessionMenu: null };

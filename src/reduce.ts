@@ -9,6 +9,7 @@ import type {
 import { authorAnswered } from "./provenance";
 import {
   type FileTab,
+  forgetHostPlaces,
   type HiveState,
   hostData,
   hostKey,
@@ -874,6 +875,8 @@ function hostLinked(
 ): Partial<HiveState> {
   const { type: _, host, ...link } = m;
   if (link.state === "removed") {
+    // Its places of the last run go too (28.27): a host added again starts anew.
+    forgetHostPlaces(host);
     const { [host]: __, ...links } = s.links;
     const shown = switchedHost(s, s.host === host ? null : s.host);
     const { [host]: ___, ...stash } = shown.stash ?? s.stash;

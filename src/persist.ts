@@ -1,4 +1,4 @@
-import type { Settings } from "./protocol";
+import type { DiffBase, Settings } from "./protocol";
 import type { HiveState, PanelView, SpacePlace } from "./store";
 
 // The window's own preferences, kept in its `localStorage` between runs (not service data, #37).
@@ -288,6 +288,136 @@ export function saveSpacePlaces(places: HiveState["spacePlaces"]): void {
   const kept = Object.fromEntries(Object.entries(places).slice(-PLACES_LIMIT));
   try {
     safeStorage()?.setItem(SPACE_PLACES_STORAGE, JSON.stringify(kept));
+  } catch {
+    // A full or blocked storage only loses the preference.
+  }
+}
+
+/**
+ * Where each host's tabs and trees were left (28.27, rows 4, 5, 6, 9 and 10 of
+ * `docs/review/last-place.md`), remembered between runs by `hostKey` ("" for this Mac): its open
+ * files (without their edits), its pairs of files and chats by their bar keys, each worktree's
+ * diff base, and the trees' collapsed projects and worktrees and open folders.
+ */
+const HOST_PLACES_STORAGE = "hive.hostPlaces";
+/** How many hosts are remembered. */
+export const HOSTS_LIMIT = 50;
+/** How many open files each host reopens. */
+export const FILES_LIMIT = 100;
+/** How many pairs each host remembers. */
+export const PAIRS_LIMIT = 50;
+/** How many diff bases each host remembers. */
+export const BASES_LIMIT = 200;
+/** How many collapsed or open tree nodes each host remembers; the oldest are forgotten first. */
+export const COLLAPSED_LIMIT = 1000;
+
+/** An open file's tab as it reopens: where it is, and how it showed. */
+export type SavedFile = {
+  worktree: string;
+  path: string;
+  preview?: boolean;
+  rendered?: boolean;
+  asText?: boolean;
+};
+/** One host's places. */
+export type HostPlaces = {
+  files: SavedFile[];
+  pairs: [string, string][];
+  diffBases: HiveState["diffBases"];
+  collapsed: HiveState["collapsed"];
+};
+export const NO_HOST_PLACES: HostPlaces = { files: [], pairs: [], diffBases: {}, collapsed: {} };
+
+const isObject = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null && !Array.isArray(value);
+
+/** A saved file, its flags only when true; none when it names no worktree and path. */
+function savedFile(value: unknown): SavedFile[] {
+  if (!isObject(value) || typeof value.worktree !== "string" || typeof value.path !== "string") {
+    return [];
+  }
+  const flags = (["preview", "rendered", "asText"] as const).filter((f) => value[f] === true);
+  const file: SavedFile = { worktree: value.worktree, path: value.path };
+  for (const flag of flags) file[flag] = true;
+  return [file];
+}
+
+/** A pair's key: a file's or a chat's (a plain terminal's channel is one run's). */
+const pairKey = (key: unknown): key is string =>
+  typeof key === "string" && (key.startsWith("file:") || key.startsWith("session:"));
+
+/** A diff base as `DiffBase` holds it; none for anything else. */
+function savedBase(value: unknown): DiffBase | undefined {
+  if (value === "head" || value === "branch") return value;
+  if (!isObject(value)) return undefined;
+  const { turn, commit } = value;
+  if (isObject(turn) && typeof turn.session === "string")
+    return { turn: { session: turn.session } };
+  if (isObject(commit) && typeof commit.id === "string") return { commit: { id: commit.id } };
+  return undefined;
+}
+
+/** One host's places as saved, what cannot be read left out. */
+function hostPlaces(value: unknown): HostPlaces {
+  if (!isObject(value)) return NO_HOST_PLACES;
+  const list = (v: unknown) => (Array.isArray(v) ? v : []);
+  const record = (v: unknown) => Object.entries(isObject(v) ? v : {});
+  const pairs = list(value.pairs).filter(
+    (p): p is [string, string] => Array.isArray(p) && p.length === 2 && p.every(pairKey),
+  );
+  const bases = record(value.diffBases).flatMap(([path, v]): [string, DiffBase][] => {
+    const base = savedBase(v);
+    return base ? [[path, base]] : [];
+  });
+  const collapsed = record(value.collapsed).filter(
+    (e): e is [string, boolean] => typeof e[1] === "boolean",
+  );
+  return {
+    files: list(value.files).flatMap(savedFile).slice(-FILES_LIMIT),
+    pairs: pairs.slice(-PAIRS_LIMIT),
+    diffBases: Object.fromEntries(bases.slice(-BASES_LIMIT)),
+    collapsed: Object.fromEntries(collapsed.slice(-COLLAPSED_LIMIT)),
+  };
+}
+
+/** Each host's places of the last run, by `hostKey`; none when unreadable. */
+export function savedHostPlaces(
+  storage: Pick<Storage, "getItem"> | null = safeStorage(),
+): Record<string, HostPlaces> {
+  try {
+    const saved: unknown = JSON.parse(storage?.getItem(HOST_PLACES_STORAGE) ?? "{}");
+    const hosts = Object.entries(isObject(saved) ? saved : {}).slice(-HOSTS_LIMIT);
+    return Object.fromEntries(hosts.map(([host, places]) => [host, hostPlaces(places)]));
+  } catch {
+    return {};
+  }
+}
+
+/** The hosts' places as they are written (each list capped as when read). */
+const hostsText = (hosts: Record<string, HostPlaces>): string =>
+  JSON.stringify(
+    Object.fromEntries(
+      Object.entries(hosts)
+        .slice(-HOSTS_LIMIT)
+        .map(([host, places]) => [host, hostPlaces(places)]),
+    ),
+  );
+
+/** The hosts' places last written, or found at launch: the same places are not written again. */
+let hostsWritten = "";
+
+/** Takes `hosts` as the places already saved (at launch: those just read). */
+export function hostPlacesSaved(hosts: Record<string, HostPlaces>): void {
+  hostsWritten = hostsText(hosts);
+}
+
+/** Remembers each host's places (each list capped as when read); the same places write nothing. */
+export function saveHostPlaces(hosts: Record<string, HostPlaces>): void {
+  const text = hostsText(hosts);
+  if (text === hostsWritten) return;
+  hostsWritten = text;
+  try {
+    safeStorage()?.setItem(HOST_PLACES_STORAGE, text);
   } catch {
     // A full or blocked storage only loses the preference.
   }
