@@ -298,6 +298,17 @@ mod tests {
         assert_eq!(mode(&other), 0o646);
     }
 
+    /// Windows has no clone: the system copies the bytes.
+    #[cfg(windows)]
+    #[test]
+    fn on_windows_the_system_copies() {
+        let dir = tempfile::tempdir().unwrap();
+        let dst = dir.path().join("dst");
+        let how = copy_new(&System, source(dir.path()), &dst).unwrap();
+        assert_eq!(how, Copied::Copied);
+        assert_eq!(fs::read_to_string(&dst).unwrap(), "data");
+    }
+
     /// A clone refuses an existing destination and leaves it as it was.
     #[cfg(unix)]
     #[test]
