@@ -210,6 +210,13 @@ mod tests {
         fs::symlink_metadata(path).unwrap().permissions().mode() & 0o7777
     }
 
+    /// The mode of `path`, if anything is there.
+    #[cfg(unix)]
+    fn mode_if_any(path: &Path) -> Option<u32> {
+        use std::os::unix::fs::PermissionsExt;
+        Some(fs::symlink_metadata(path).ok()?.permissions().mode() & 0o7777)
+    }
+
     #[cfg(unix)]
     #[test]
     fn the_system_copy_keeps_bytes_and_mode() {
@@ -280,8 +287,10 @@ mod tests {
         #[cfg(target_os = "macos")]
         assert!(cloned);
         // A failed clone leaves no file; a clone has the bytes and the mode.
-        assert_eq!(fs::read(&dst).ok(), cloned.then(|| data.clone()));
-        assert_eq!(dst.exists().then(|| mode(&dst)), cloned.then_some(0o646));
+        // Eager values, no closure: on CI's Linux the clone always fails, and a closure that
+        // never runs would be a line no test covers.
+        assert_eq!(fs::read(&dst).ok(), cloned.then_some(data.clone()));
+        assert_eq!(mode_if_any(&dst), cloned.then_some(0o646));
         let other = dir.path().join("other");
         let how = copy_new(&System, File::open(&src).unwrap(), &other).unwrap();
         assert_eq!(how == Copied::Cloned, cloned);
