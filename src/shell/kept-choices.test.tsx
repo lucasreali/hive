@@ -114,7 +114,7 @@ test("the Actions branch filter is each worktree's, kept while the view closes",
   expect(branch()).toBe("All branches");
   // Another worktree starts on its own branch.
   act(() => select(checkout.id));
-  expect(branch()).toBe(checkout.branch);
+  expect(branch()).toBe(checkout.branch as string);
   // Back, and after the view closed: All branches, asked again.
   act(() => select(login.id));
   expect(branch()).toBe("All branches");
