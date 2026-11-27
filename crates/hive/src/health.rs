@@ -38,10 +38,12 @@ pub fn of(project: &Project, w: &Worktree, totals: Option<Totals>) -> Option<Wor
 }
 
 /// The branch `project`'s worktree `w` is counted against: the main worktree's, for any other
-/// worktree, when it has one. The Changes panel's `branch` base (9.11) compares with it too.
+/// worktree, when it has one; in a jj repository, whose main worktree is detached, its trunk
+/// (28.26). The Changes panel's `branch` base (9.11) compares with it too.
 pub fn branch<'a>(project: &'a Project, w: &Worktree) -> Option<&'a str> {
     let main = project.worktrees.iter().find(|w| w.main);
-    main.and_then(|m| m.branch.as_deref()).filter(|_| !w.main)
+    let main = main.and_then(|m| m.branch.as_deref());
+    main.or(project.trunk.as_deref()).filter(|_| !w.main)
 }
 
 /// Gives every worktree of `project` its status.
@@ -229,6 +231,8 @@ pub(crate) mod tests {
             group: false,
             folder: false,
             parent: None,
+            jj: false,
+            trunk: None,
         };
         fill(&mut project);
         let got: Vec<_> = project.worktrees.iter().map(|w| w.status.clone()).collect();
@@ -253,6 +257,17 @@ pub(crate) mod tests {
             of(&project, &project.worktrees[1], None),
             status((0, 0, 0), None)
         );
+        // In a jj repository (28.26) the others count against its trunk; the main one, still
+        // against nothing; the main worktree's own branch would come first.
+        project.trunk = Some("main".into());
+        assert_eq!(
+            of(&project, &project.worktrees[1], None),
+            status((0, 0, 0), Some((2, 1)))
+        );
+        assert_eq!(branch(&project, &project.worktrees[0]), None);
+        project.worktrees[0].branch = Some("merged".into());
+        assert_eq!(branch(&project, &project.worktrees[1]), Some("merged"));
+        (project.trunk, project.worktrees[0].branch) = (None, None);
         // Changes already counted are not counted again.
         let counted = Totals {
             files: 9,
