@@ -1,7 +1,7 @@
 import { afterEach, expect, mock, spyOn, test } from "bun:test";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { useState } from "react";
-import { Select, TYPE_AHEAD_MS } from "./Select";
+import { placeList, Select, TYPE_AHEAD_MS } from "./Select";
 
 afterEach(cleanup);
 
@@ -127,6 +127,64 @@ test("near the bottom of the window the list opens above the trigger", () => {
   fireEvent.mouseDown(trigger);
   const style = (list() as HTMLElement).style;
   expect([style.top, style.bottom, style.maxHeight]).toEqual(["", "42px", "240px"]);
+  mock.restore();
+});
+
+// 28.17: the list is placed where it fits, never outside the window.
+const VIEW = { width: 1000, height: 700 };
+const rect = (left: number, top: number, width = 120, height = 30) => ({
+  left,
+  top,
+  right: left + width,
+  bottom: top + height,
+});
+
+test("a list that fits opens under the trigger, left-aligned to it", () => {
+  expect(placeList(rect(100, 50), 200, VIEW)).toEqual({ left: 100, top: 82, maxHeight: 240 });
+  // Exactly up to the window's margin still fits.
+  expect(placeList(rect(792, 50), 200, VIEW).left).toBe(792);
+});
+
+test("a list that would pass the right edge is right-aligned to the trigger", () => {
+  // The trigger ends at 990; a 300 px list from 870 would end at 1170.
+  expect(placeList(rect(870, 50), 300, VIEW)).toEqual({ left: 690, top: 82, maxHeight: 240 });
+  // A trigger at the very edge: the list keeps the window's margin.
+  expect(placeList(rect(960, 50, 40), 300, VIEW).left).toBe(692);
+  // Wider than the trigger's right allows on the left: it keeps the left margin.
+  expect(placeList(rect(10, 50, 40), 990, VIEW).left).toBe(8);
+});
+
+test("a list that would pass the bottom edge opens above the trigger", () => {
+  expect(placeList(rect(100, 640), 200, VIEW)).toEqual({ left: 100, bottom: 62, maxHeight: 240 });
+  // With little room either way it takes the larger side, scrolling.
+  expect(placeList(rect(100, 100, 120, 30), 200, { width: 1000, height: 300 })).toEqual({
+    left: 100,
+    top: 132,
+    maxHeight: 162,
+  });
+  expect(placeList(rect(100, 170, 120, 30), 200, { width: 1000, height: 300 })).toEqual({
+    left: 100,
+    bottom: 132,
+    maxHeight: 162,
+  });
+  // Under the minimum room below it still opens there when above is smaller.
+  expect(placeList(rect(100, 20, 120, 30), 200, { width: 1000, height: 90 }).maxHeight).toBe(80);
+});
+
+test("the list in the DOM gets the placed position", () => {
+  const { trigger } = setup();
+  spyOn(trigger, "getBoundingClientRect").mockReturnValue(
+    DOMRect.fromRect({ x: window.innerWidth - 50, y: 40, width: 40, height: 30 }),
+  );
+  fireEvent.mouseDown(trigger);
+  const style = (list() as HTMLElement).style;
+  // happy-dom lays nothing out, so the list measures 0 px wide.
+  expect([style.left, style.top, style.minWidth, style.maxWidth]).toEqual([
+    `${window.innerWidth - 50}px`,
+    "72px",
+    "40px",
+    `${window.innerWidth - 16}px`,
+  ]);
   mock.restore();
 });
 

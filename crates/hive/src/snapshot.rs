@@ -49,6 +49,8 @@ const NESTED: usize = 256;
 const PRUNE_EVERY: Duration = Duration::from_secs(60);
 /// The tools whose `PostToolUse` is an edit: one before the snapshot is done makes it late.
 pub const EDITS: [&str; 4] = ["Edit", "MultiEdit", "Write", "NotebookEdit"];
+/// Why "since this turn" falls back to `HEAD` when the agent's turn has no snapshot kept.
+pub const NO_SNAPSHOT: &str = "No snapshot of this agent's last turn in this worktree";
 
 /// One kept snapshot: the worktree `worktree` at the start of turn `n` of `session`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -267,14 +269,16 @@ impl Snapshots {
 
     /// The last kept turn of `session`, when it is of the worktree at `worktree` (id `id`).
     pub fn since(&self, worktree: &Path, id: &str, session: &str) -> io::Result<Since> {
+        self.since_in(worktree, &self.turns(worktree, id), session)
+    }
+
+    /// [`Snapshots::since`] from `turns`, the worktree's [`Snapshots::turns`] read once: an
+    /// answer that lists them as well names the same turns as its base, though a snapshot is
+    /// taken or dropped meanwhile.
+    pub fn since_in(&self, worktree: &Path, turns: &[Turn], session: &str) -> io::Result<Since> {
         valid(session)?;
-        let turn = self
-            .turns(worktree, id)
-            .into_iter()
-            .find(|t| t.session == session);
-        let turn = turn.ok_or_else(|| {
-            io::Error::other("No snapshot of this agent's last turn in this worktree")
-        })?;
+        let turn = turns.iter().find(|t| t.session == session).cloned();
+        let turn = turn.ok_or_else(|| io::Error::other(NO_SNAPSHOT))?;
         let repo = Repo::of(worktree)?;
         let (store, lock) = self.store(&repo);
         Ok(Since {
@@ -331,6 +335,24 @@ impl Snapshots {
     }
 }
 
+/// A turn dropped (its `SessionEnd`, the caps, the sweep) after it was read, before its listing
+/// held the store: [`Since::list`]'s error then.
+#[derive(Debug)]
+pub struct Dropped;
+
+impl std::fmt::Display for Dropped {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(NO_SNAPSHOT)
+    }
+}
+
+impl std::error::Error for Dropped {}
+
+/// Whether `err` is [`Dropped`].
+pub fn dropped(err: &io::Error) -> bool {
+    err.get_ref().is_some_and(|inner| inner.is::<Dropped>())
+}
+
 impl Since {
     /// What changed in the worktree since the turn, through the worktree's snapshot index
     /// refreshed now: `git diff-index --cached --raw` and `--numstat` output, in that order.
@@ -347,6 +369,10 @@ impl Since {
     /// turn's tree: `--raw`, and `--numstat` when asked (else empty).
     fn diff(&self, numstat: bool) -> io::Result<(Vec<u8>, Vec<u8>)> {
         let _held = lock(&self.lock);
+        // Still kept, now that nothing can drop it: else its store may be gone.
+        if !self.store.read().turns.contains(&self.turn) {
+            return Err(io::Error::other(Dropped));
+        }
         let index = self.store.index(&self.turn.worktree);
         self.store.refresh(&self.worktree, &self.repo, &index)?;
         let run = |options: &[&str]| {
