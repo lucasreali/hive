@@ -236,3 +236,136 @@ fn a_sigterm_ends_the_users_statusline_and_prints_nothing() {
     // Its statusline ended with it.
     wait_until(|| env.processes().is_empty());
 }
+
+/// Claude Code's statusline input as its docs show it today (2.1.x: `rate_limits` with
+/// `five_hour`, `seven_day` and a gateway's `spend_limit`, among many other fields).
+fn current_input(now: u64) -> Value {
+    json!({
+        "cwd": "/current/working/directory",
+        "session_id": "abc123",
+        "session_name": "my-session",
+        "transcript_path": "/path/to/transcript.jsonl",
+        "model": { "id": "claude-opus-5-5", "display_name": "Opus" },
+        "workspace": {
+            "current_dir": "/current/working/directory",
+            "project_dir": "/original/project/directory",
+            "added_dirs": [],
+            "git_worktree": "feature-xyz",
+        },
+        "version": "2.1.332",
+        "output_style": { "name": "default" },
+        "cost": { "total_cost_usd": 0.01234, "total_duration_ms": 45000 },
+        "context_window": {
+            "total_input_tokens": 15500,
+            "context_window_size": 200000,
+            "used_percentage": 8,
+            "current_usage": { "input_tokens": 8500, "output_tokens": 1200 },
+        },
+        "exceeds_200k_tokens": false,
+        "prompt_cache": { "warm": true, "ttl": "1h", "expires_at": now + 600, "hit_ratio": 0.91 },
+        "fast_mode": false,
+        "effort": { "level": "high" },
+        "thinking": { "enabled": true },
+        "rate_limits": {
+            "five_hour": { "used_percentage": 23.5, "resets_at": now + 3600 },
+            "seven_day": { "used_percentage": 41.2, "resets_at": now + 86400 },
+            "spend_limit": {
+                "used_percentage": 62.8, "resets_at": now + 7 * 86400,
+                "used_usd": 314.12, "limit_usd": 500, "period": "monthly",
+            },
+        },
+        "vim": { "mode": "NORMAL" },
+        "worktree": { "name": "my-feature", "path": "/p", "branch": "b" },
+    })
+}
+
+#[tokio::test]
+async fn a_terminal_of_another_accounts_space_shows_that_accounts_usage() {
+    use std::os::unix::fs::PermissionsExt;
+    let repo = crate::worktree::Repo::new();
+    let env = &repo.env;
+    let mut daemon = env.daemon();
+    let mut app = env.app().await;
+    let add = Control::AddProject {
+        path: repo.root.display().to_string(),
+    };
+    app.send(0, add).await;
+    let added = app.control().await.1;
+    assert!(matches!(added, Control::ProjectAdded { .. }), "{added:?}");
+    let now = hive::hook::now_ms() / 1000;
+    // A Claude Code stand-in (never the real one): it runs the `statusLine` of the settings
+    // its `--settings` names, which outrank the user's (Claude Code's settings precedence),
+    // through `sh -c` with the current input on stdin, as Claude Code does.
+    let fake = env.path("fake");
+    std::fs::create_dir_all(&fake).unwrap();
+    let input = env.path("input.json");
+    std::fs::write(&input, current_input(now).to_string()).unwrap();
+    let script = format!(
+        "#!/bin/sh\nwhile [ $# -gt 0 ]; do\n  [ \"$1\" = --settings ] && settings=$2\n  shift\n\
+         done\ncommand=$(sed -n 's/^ *\"command\": \"\\(.* statusline\\)\",*$/\\1/p' \"$settings\")\n\
+         sh -c \"$command\" < '{}'\necho \"<status $?>\"\n",
+        input.display()
+    );
+    std::fs::write(fake.join("claude"), script).unwrap();
+    std::fs::set_permissions(fake.join("claude"), std::fs::Permissions::from_mode(0o755)).unwrap();
+
+    // An account with its own statusline, the current space's (22.5).
+    let work = env.path("data/hive/accounts/work");
+    user_statusline(&work, "printf mine");
+    let config_dir = work.to_string_lossy().into_owned();
+    let mut settings = Settings::default();
+    settings.claude.accounts.push(Account {
+        name: "Work".into(),
+        config_dir: config_dir.clone(),
+        // In Hive's folder, as an account Hive made (22.2).
+        hive_folder: true,
+    });
+    let set = Control::SetSettings {
+        settings: settings.clone(),
+    };
+    app.send(0, set).await;
+    assert_eq!(app.control().await, (0, Control::Settings { settings }));
+    let select = Control::UpdateSpace {
+        id: "default".into(),
+        name: "Default".into(),
+        env: hive_protocol::SpaceEnv {
+            claude_account: Some(config_dir),
+            ..Default::default()
+        },
+    };
+    app.send(0, select).await;
+
+    // `claude` in a terminal of that space's project: the wrapper, then the stand-in.
+    app.open_terminal(1, &repo.root).await;
+    let wrapper = env.path("data/hive/bin/claude");
+    let run = format!(
+        "env PATH='{}:/usr/bin:/bin' '{}'\r",
+        fake.display(),
+        wrapper.display()
+    );
+    app.input(1, &run).await;
+    let window = |used_percentage, resets_at| SessionWindow {
+        used_percentage,
+        resets_at,
+    };
+    let shown = Control::SessionUsage {
+        usage: Some(window(24, now + 3600)),
+        week: Some(window(41, now + 86400)),
+        limit_at: None,
+        week_limit_at: None,
+    };
+    // What the user's statusline printed reaches the terminal, and the account's windows the
+    // app, in either order.
+    let (mut output, mut usage) = (String::new(), None);
+    while !output.contains("mine<status 0>") || usage.is_none() {
+        let frame = app.next().await.expect("connection closed");
+        match frame.to_control() {
+            Ok(message @ Control::SessionUsage { usage: Some(_), .. }) => usage = Some(message),
+            Ok(_) => {}
+            Err(_) => output.push_str(&String::from_utf8_lossy(&frame.payload)),
+        }
+    }
+    assert_eq!(usage, Some(shown));
+    drop(app);
+    assert!(daemon.wait_exit().success());
+}
