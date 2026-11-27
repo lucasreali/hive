@@ -10,7 +10,7 @@ afterEach(() => useHive.setState(initialState, true));
 
 const withTheme = (theme: "one-dark" | "one-light" | "system") => ({
   ...DEFAULT_SETTINGS,
-  appearance: { theme },
+  appearance: { ...DEFAULT_SETTINGS.appearance, theme },
 });
 
 test("the theme shown is the setting's, or the system's for System", () => {

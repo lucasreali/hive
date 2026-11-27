@@ -53,6 +53,11 @@ export function App() {
     document.documentElement.dataset.theme = theme;
     nativeTheme(setting, theme);
   }, [setting, theme]);
+  // The diff's colours (28.6): their CSS variables hang off this one, in either theme.
+  const diffColors = useHive((s) => s.settings.appearance.diff_colors);
+  useEffect(() => {
+    document.documentElement.dataset.diffColors = diffColors;
+  }, [diffColors]);
   // The endless animations rest while Hive is not focused (D19.8, src/styles.css).
   useEffect(() => {
     document.documentElement.toggleAttribute("data-focused", focused);

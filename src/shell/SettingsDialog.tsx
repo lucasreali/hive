@@ -262,6 +262,11 @@ const THEMES = [
   { value: "system", label: "System" },
 ];
 
+const DIFF_COLORS = [
+  { value: "standard", label: "Standard" },
+  { value: "color-blind", label: "Color-blind (blue and orange)" },
+];
+
 /** Every setting, in section order; the search box filters them by label. */
 const FIELDS: Field[] = [
   {
@@ -392,6 +397,12 @@ const FIELDS: Field[] = [
     control: (id) => <Shell id={id} />,
   },
   { section: "Appearance", label: "Theme", control: (id) => <Theme id={id} /> },
+  {
+    section: "Appearance",
+    label: "Diff colors",
+    help: "Added and removed lines in the diff, the editor's gutter and the files panels.",
+    control: (id) => <DiffColors id={id} />,
+  },
   {
     section: "Notifications",
     label: "Alert volume",
@@ -651,6 +662,22 @@ function Theme({ id }: { id: string }) {
       onChange={(v) =>
         saveSettings((s) => {
           s.appearance.theme = v as Settings["appearance"]["theme"];
+        })
+      }
+    />
+  );
+}
+
+function DiffColors({ id }: { id: string }) {
+  const value = useHive((s) => s.settings.appearance.diff_colors);
+  return (
+    <Select
+      aria-labelledby={`${id}-label`}
+      value={value}
+      options={DIFF_COLORS}
+      onChange={(v) =>
+        saveSettings((s) => {
+          s.appearance.diff_colors = v as Settings["appearance"]["diff_colors"];
         })
       }
     />

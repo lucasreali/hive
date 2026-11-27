@@ -45,12 +45,13 @@ const theme = Prec.highest(
       // The selected text (15.1): oneDark's own selectors, so its fixed #3E4451 never wins.
       "&.cm-focused > .cm-scroller > .cm-selectionLayer .cm-selectionBackground, .cm-selectionBackground, .cm-content ::selection":
         { backgroundColor: "var(--editor-selection)" },
-      "&.cm-merge-b .cm-changedLine": { backgroundColor: "rgba(161, 193, 129, 0.12)" },
-      "&.cm-merge-b .cm-changedText": { background: "rgba(161, 193, 129, 0.25)" },
-      ".cm-deletedChunk": { backgroundColor: "rgba(208, 114, 119, 0.12)" },
-      ".cm-deletedChunk .cm-deletedText": { background: "rgba(208, 114, 119, 0.25)" },
-      "&.cm-merge-b .cm-changedLineGutter": { background: "var(--state-idle)" },
-      ".cm-deletedLineGutter": { background: "var(--state-error)" },
+      // The diff's colours (28.6): the `appearance.diff_colors` tokens in src/styles.css.
+      "&.cm-merge-b .cm-changedLine": { backgroundColor: "var(--diff-added-line)" },
+      "&.cm-merge-b .cm-changedText": { background: "var(--diff-added-text)" },
+      ".cm-deletedChunk": { backgroundColor: "var(--diff-removed-line)" },
+      ".cm-deletedChunk .cm-deletedText": { background: "var(--diff-removed-text)" },
+      "&.cm-merge-b .cm-changedLineGutter": { background: "var(--diff-added)" },
+      ".cm-deletedLineGutter": { background: "var(--diff-removed)" },
       // Lines with a review comment (6.7): a bar on the left, over any diff color.
       ".cm-commented": { boxShadow: "inset 3px 0 0 var(--accent)" },
       ".cm-collapsedLines": {

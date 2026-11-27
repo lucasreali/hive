@@ -260,7 +260,7 @@ export const DEFAULT_SETTINGS: Settings = {
     screen_reader: false,
     shell: "default",
   },
-  appearance: { theme: "one-dark" },
+  appearance: { theme: "one-dark", diff_colors: "standard" },
   notifications: { volume: 100, bounce: true, menu_bar: true, command_secs: 10 },
   agents: { silence_secs: 5, confirm_close: true, keep_awake: true },
   worktrees: { default_base: null },
@@ -946,7 +946,10 @@ export const useHive = create<HiveState>()(() => ({
   ...initialState,
   ...savedWidths(),
   // The theme of the last run until the service sends the settings, so it launches in it.
-  settings: { ...DEFAULT_SETTINGS, appearance: { theme: savedTheme() } },
+  settings: {
+    ...DEFAULT_SETTINGS,
+    appearance: { ...DEFAULT_SETTINGS.appearance, theme: savedTheme() },
+  },
   agentOrder: savedAgentOrder(),
   tabOrder: savedTabOrder(),
 }));

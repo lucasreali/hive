@@ -190,6 +190,24 @@ test("selects save the cursor style and the theme", async () => {
   expect(document.documentElement.dataset.theme).toBe("one-light");
 });
 
+test("the diff colors are saved and set on the page, Standard by default (28.6)", async () => {
+  open();
+  expect(document.documentElement.dataset.diffColors).toBe("standard");
+  section("Appearance");
+  const select = () => screen.getByRole("combobox", { name: "Diff colors" });
+  expect(select().textContent).toContain("Standard");
+  fireEvent.mouseDown(select());
+  fireEvent.click(screen.getByRole("option", { name: "Color-blind (blue and orange)" }));
+  await waitFor(() => expect(settings().appearance.diff_colors).toBe("color-blind"));
+  expect(document.documentElement.dataset.diffColors).toBe("color-blind");
+  // The theme is left alone.
+  expect(settings().appearance.theme).toBe("one-dark");
+  fireEvent.mouseDown(select());
+  fireEvent.click(screen.getByRole("option", { name: "Standard" }));
+  await waitFor(() => expect(settings().appearance.diff_colors).toBe("standard"));
+  expect(document.documentElement.dataset.diffColors).toBe("standard");
+});
+
 test("the service setting shows only where WSL or Windows is offered, and asks before switching (12.5.4)", () => {
   open();
   const service = () => screen.queryByRole("combobox", { name: "Service" });

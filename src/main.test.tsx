@@ -6,7 +6,12 @@ import { DEFAULT_SETTINGS, initialState, useHive } from "./store";
 test("mounts the app into #root", async () => {
   document.body.innerHTML = '<div id="root"></div>';
   // The last run's System theme, in a light system: the page starts light (18.33).
-  useHive.setState({ settings: { ...DEFAULT_SETTINGS, appearance: { theme: "system" } } });
+  useHive.setState({
+    settings: {
+      ...DEFAULT_SETTINGS,
+      appearance: { ...DEFAULT_SETTINGS.appearance, theme: "system" },
+    },
+  });
   const media = spyOn(window, "matchMedia");
   const { root } = await act(() => import("./main"));
   expect(media).toHaveBeenCalledWith("(prefers-color-scheme: dark)");
