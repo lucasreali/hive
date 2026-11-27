@@ -1,14 +1,14 @@
 ---
 name: fp-check
 description: "Systematically verifies suspected security bugs to eliminate false positives, producing a TRUE POSITIVE or FALSE POSITIVE verdict with documented evidence for each. Use when asked whether a specific finding is real, exploitable, or a false positive, or to verify or validate a suspected vulnerability — not for hunting or discovering new bugs."
-allowed-tools: Read Grep Glob LSP Bash Task AskUserQuestion TaskCreate TaskUpdate TaskList TaskGet
 ---
 
 # False Positive Check
 
 ## In Hive
 
-- **Threat model.** Hive's attackers usually act as the same OS user, not across a privilege boundary: a cloned repository's file and branch names, the content of files in a worktree, a hook payload or socket frame written by another local process, environment variables, `git` and `gh` output, the remote side of an SSH connection. "It crosses no privilege boundary" is therefore not by itself a false positive: ask what the attacker could already do, and what the finding adds (a panic that kills every terminal, a write outside the worktree, a command run with input in a flag position, session data readable by others). The trust boundaries are listed in `.claude/agents/security-reviewer.md`.
+- **Threat model.** Hive's attackers usually act as the same OS user, not across a privilege boundary: a cloned repository's file and branch names, the content of files in a worktree, a hook payload or socket frame written by another local process, environment variables, `git` and `gh` output, the remote side of an SSH connection. "It crosses no privilege boundary" is therefore not by itself a false positive: ask what the attacker could already do, and what the finding adds (a panic that kills every terminal, a write outside the worktree, a command run with input in a flag position, session data readable by others). The trust boundaries are listed in `.claude/agents/security-reviewer.md`. A denial of service of the service (a panic, a hang, unbounded memory) kills every terminal: it is real impact.
+- **`CLAUDE.md` baseline breaches are always reported, never dropped by this method:** a read of untrusted input without a size limit; a socket or lockfile not created `0600` (or with a window where it is wider); `unwrap()` / `expect()` (or another reachable panic) outside tests, since a panic in the service kills every terminal and that denial of service is real impact; a shell string built from input instead of separate process arguments; secrets or full hook payloads in logs at the default level.
 - **Read-only.** This skill never edits the repository. A PoC is pseudocode; an executable or unit-test PoC, when one is needed, lives in a fresh temp folder outside the repository with a temporary `HOME`/`XDG_*` (`CLAUDE.md` rule 5), is never committed and never runs the real `claude`. The regression test for a confirmed bug is written by the task that fixes it.
 - **Agents.** The deep path's two analysis agents are `fp-check-data-flow-analyzer` and `fp-check-exploitability-verifier` (`.claude/agents/`, read-only). There is no PoC-builder agent and no completeness hook.
 

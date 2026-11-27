@@ -52,6 +52,8 @@ Always understand API contracts before claiming buffer overflows. Some APIs have
 
 Internal storage systems (configuration stores, registries) are controlled by trusted components, not attackers. Values set during installation by trusted components are not attacker-controlled.
 
+In Hive this rarely applies: **Hive threat model.** Hook payloads, socket messages, file and branch names, environment variables, `git`/`gh` output and remote hosts (the SSH remote) are untrusted, even though they come from processes of the same OS user: a cloned repository, a forged hook or another local process controls them. Hive's own settings and state files are written by the user's processes too, so "internal" does not mean trusted. A denial of service of the service (a panic, a hang, unbounded memory) kills every terminal: it is real impact, not an operational issue. **`CLAUDE.md` baseline breaches are always reported, never dropped by this method:** a read of untrusted input without a size limit; a socket or lockfile not created `0600` (or with a window where it is wider); `unwrap()` / `expect()` (or another reachable panic) outside tests, since a panic in the service kills every terminal and that denial of service is real impact; a shell string built from input instead of separate process arguments; secrets or full hook payloads in logs at the default level.
+
 ### 9. Don't Confuse Pattern Recognition with Vulnerability Analysis
 
 Code patterns that "look vulnerable" may be safely implemented due to context and API contracts. Size parameters being modified doesn't mean buffer overflow if the API prevents writing beyond bounds.
@@ -64,9 +66,13 @@ Don't assume race conditions exist without proving concurrent access patterns. S
 
 Focus on vulnerabilities with actual security impact. Storage failure for non-critical data is an operational issue, not a security vulnerability. Ask: would this lead to code execution, privilege escalation, or information disclosure?
 
+In Hive, add denial of service of the service to that list: a panic, hang or unbounded allocation reachable from untrusted input kills every terminal. **Hive threat model.** Hook payloads, socket messages, file and branch names, environment variables, `git`/`gh` output and remote hosts (the SSH remote) are untrusted, even though they come from processes of the same OS user: a cloned repository, a forged hook or another local process controls them. Hive's own settings and state files are written by the user's processes too, so "internal" does not mean trusted. A denial of service of the service (a panic, a hang, unbounded memory) kills every terminal: it is real impact, not an operational issue. **`CLAUDE.md` baseline breaches are always reported, never dropped by this method:** a read of untrusted input without a size limit; a socket or lockfile not created `0600` (or with a window where it is wider); `unwrap()` / `expect()` (or another reachable panic) outside tests, since a panic in the service kills every terminal and that denial of service is real impact; a shell string built from input instead of separate process arguments; secrets or full hook payloads in logs at the default level.
+
 ### 12. Understand Defense-in-Depth vs Primary Controls
 
 Failure of defense-in-depth mechanisms is not always a vulnerability if primary protections exist. Token cleanup failure is not critical if tokens are single-use by design at the server.
+
+In Hive, the `CLAUDE.md` code baseline is not "defense in depth" that can be waived: **`CLAUDE.md` baseline breaches are always reported, never dropped by this method:** a read of untrusted input without a size limit; a socket or lockfile not created `0600` (or with a window where it is wider); `unwrap()` / `expect()` (or another reachable panic) outside tests, since a panic in the service kills every terminal and that denial of service is real impact; a shell string built from input instead of separate process arguments; secrets or full hook payloads in logs at the default level.
 
 ### 13. Apply the Checklist Rigorously, Not Superficially
 

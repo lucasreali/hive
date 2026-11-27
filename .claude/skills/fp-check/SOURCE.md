@@ -8,9 +8,10 @@
 
 ## What changed
 
-- Copied `skills/fp-check/SKILL.md` and all of `references/`; `Write` and `Edit` removed from `allowed-tools`; added an "In Hive" section (same-user threat model, read-only, PoCs only in a temp folder outside the repository).
+- Copied `skills/fp-check/SKILL.md` and all of `references/`; `allowed-tools` removed (nothing pre-approves Bash); added an "In Hive" section (same-user threat model, denial of service of the service as real impact, `CLAUDE.md` baseline breaches always reported, read-only, PoCs only in a temp folder outside the repository).
+- `references/false-positive-patterns.md`: items 8, 11 and 12 gain Hive notes (untrusted inputs, DoS is impact, the code baseline is never waived as defence in depth).
 - `references/deep-verification.md`: Phase 4 (PoC) is done directly, with executable or unit-test PoCs only in a temp folder; agent names updated.
-- The two read-only agents became `.claude/agents/fp-check-data-flow-analyzer.md` and `.claude/agents/fp-check-exploitability-verifier.md` (renamed, otherwise unchanged).
+- The two read-only agents became `.claude/agents/fp-check-data-flow-analyzer.md` and `.claude/agents/fp-check-exploitability-verifier.md` (renamed; each gains the Hive threat-model paragraph).
 - Not copied: `hooks/hooks.json` (prompt hooks on every Stop and SubagentStop), `agents/poc-builder.md` (writes and runs PoCs in the repository), `agents/openai.yaml`, `assets/`.
 
 ## License notice
