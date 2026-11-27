@@ -63,6 +63,8 @@ Standard (28.24): the git status colors' hues, lightened in One Dark and darkene
 
 Code in the Markdown preview (14.6): `--syn-keyword`, `--syn-name`, `--syn-function`, `--syn-constant`, `--syn-type`, `--syn-operator`, `--syn-comment`, `--syn-string`, the editor's One Dark groups (`#C678DD`, `#E06C75`, `#61AFEF`, `#D19A66`, `#E5C07B`, `#56B6C2`, `#7F848E`, `#98C379`); One Light uses Atom One Light's.
 
+Code in the editor and the viewer (28.25): `codeHighlightStyle` (`src/viewer/editor.ts`), One Dark's highlight style rule for rule with each color a token, so it switches with the theme: the `--syn-*` above (except the comment), plus `--syn-plain` (text outside any token and definitions: `#ABB2BF`, One Light `#383A42`), `--editor-comment` (`#7D8799`, oneDark's; One Light `#A0A1A7`) and `--editor-invalid` (`#FFFFFF`; One Light `#383A42`).
+
 `color-scheme` follows the theme (D20.5): `dark` in One Dark, `light` in One Light, so anything still native (a `<select>`'s popup, date inputs) matches the page.
 
 ### Typography

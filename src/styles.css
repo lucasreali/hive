@@ -89,6 +89,11 @@
   --syn-operator: #56b6c2;
   --syn-comment: #7f848e;
   --syn-string: #98c379;
+  --syn-plain: #abb2bf; /* the editor's text outside any token (28.25) */
+  /* The editor's comments and invalid code: oneDark's; the Markdown preview's comments are
+     Zed's --syn-comment. */
+  --editor-comment: #7d8799;
+  --editor-invalid: #ffffff;
 
   --font-sans: "IBM Plex Sans", system-ui, sans-serif;
   --font-mono: "IBM Plex Mono", monospace;
@@ -163,6 +168,9 @@
   --syn-operator: #0184bc;
   --syn-comment: #a0a1a7;
   --syn-string: #50a14f;
+  --syn-plain: #383a42; /* Atom One Light's plain text (28.25) */
+  --editor-comment: #a0a1a7;
+  --editor-invalid: #383a42;
 
   color-scheme: light;
 }
