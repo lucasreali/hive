@@ -35,14 +35,47 @@ test("who wrote a line: a session's edit opens its row; an unknown line answers 
   );
   const row = panel.locator(".session[data-focused]");
   await expect(row.locator(".session-title .label")).toHaveText("Fix the login redirect");
-  await expect(row.locator(".session-edit")).toHaveText(
-    /^Edit · \d+h ago · lines 39–41 · you changed it before accepting$/,
+  const told = row.locator(".session-edit");
+  await expect(told).toHaveText(
+    /^Edited lines 39–41 · \d+h ago · you changed it before accepting$/,
   );
   const files = row.getByRole("list", { name: "Files changed" });
-  await expect(files.locator(".session-file[data-focused] .session-file-path")).toHaveText(
+  await expect(files.locator(".session-file[aria-current]")).toHaveAttribute(
+    "title",
     "src/auth/session.ts",
   );
+  // One line per file (28.22), inside the card: a deep folder is cut, not wrapped.
+  const rows = files.locator(".session-file");
+  await expect(rows).toHaveCount(4);
+  const card = await row.boundingBox();
+  for (const r of await rows.all()) {
+    const box = await r.boundingBox();
+    expect(box?.height).toBe(22);
+    expect(box && card && box.x > card.x + 12 && box.x + box.width < card.x + card.width - 8).toBe(
+      true,
+    );
+  }
+  const deep = rows.filter({ hasText: "intent.ts" });
+  const head = deep.locator(".session-file-head");
+  expect(await head.evaluate((e) => e.clientWidth > 0 && e.scrollWidth > e.clientWidth)).toBe(true);
+  const tail = deep.locator(".session-file-tail");
+  await expect(tail).toHaveText("/handlers");
+  expect(await tail.evaluate((e) => e.scrollWidth <= e.clientWidth)).toBe(true);
   await page.screenshot({ path: "target/e2e/line-author-session.png" });
+  for (const theme of ["one-dark", "one-light"]) {
+    await page.evaluate((t) => {
+      document.documentElement.dataset.theme = t;
+    }, theme);
+    await panel.screenshot({ path: `target/e2e/line-author-session-${theme}.png` });
+  }
+  await page.evaluate(() => {
+    document.documentElement.dataset.theme = "one-dark";
+  });
+
+  // The edit's line opens the file at its first line: the cursor goes there.
+  await number(1).scrollIntoViewIfNeeded();
+  await told.click();
+  await expect(view.locator(".cm-activeLineGutter", { hasText: /^39$/ })).toBeVisible();
 
   // Any other line has only its commit: the popover by the line says so.
   await number(10).scrollIntoViewIfNeeded();

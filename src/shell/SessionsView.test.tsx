@@ -445,7 +445,7 @@ test("a session's changed files: counted on its row, listed once opened, each op
   const asked = spyOn(transport, "listSessionFiles").mockResolvedValue();
   spyOn(transport, "openFile").mockResolvedValue();
   act(() => apply({ type: "sessions", sessions: MOCK_SESSIONS, error: null, truncated: false }));
-  const toggle = screen.getByRole("button", { name: "2 files" });
+  const toggle = screen.getByRole("button", { name: "4 files" });
   expect(toggle.getAttribute("aria-expanded")).toBe("false");
   fireEvent.click(toggle);
   expect(asked).toHaveBeenCalledWith(fix.id);
@@ -453,14 +453,19 @@ test("a session's changed files: counted on its row, listed once opened, each op
   act(() => apply(changed(true)));
   const files = screen.getByRole("list", { name: "Files changed" });
   const rows = within(files).getAllByRole("button");
-  expect(rows.map((r) => r.querySelector(".session-file-path")?.textContent)).toEqual([
-    "src/auth/session.ts",
-    "src/auth/login.ts",
+  // One line each: the name, then the folder in two halves (cut in the middle), then the
+  // numbers; the whole path only in the tooltip (28.22).
+  const part = (r: HTMLElement, name: string) =>
+    r.querySelector(`.session-file-${name}`)?.textContent;
+  expect(rows.map((r) => [part(r, "name"), part(r, "head"), part(r, "tail")])).toEqual([
+    ["session.ts", "src", "/auth"],
+    ["login.ts", "src", "/auth"],
   ]);
+  expect(rows.map((r) => r.title)).toEqual(["src/auth/session.ts", "src/auth/login.ts"]);
   // Another worktree's file names it.
   expect(rows.map((r) => r.querySelector(".session-meta")?.textContent)).toEqual([
-    "3 edits · 3 lines now · 3h ago",
-    "main · 1 edit · 1 line now · 4h ago",
+    "3 edits · 3 lines · 3h ago",
+    "main · 1 edit · 1 line · 4h ago",
   ]);
   expect(within(files).getByText("More files are not listed.")).toBeDefined();
   // No file is the one an edit was found in.
@@ -475,7 +480,7 @@ test("a session's changed files: counted on its row, listed once opened, each op
   expect(useHive.getState().openFile).toEqual({ worktree: shop.id, path: "src/auth/login.ts" });
   expect(useHive.getState().gotoLine).toBeNull();
 
-  fireEvent.click(screen.getByRole("button", { name: "2 files" }));
+  fireEvent.click(screen.getByRole("button", { name: "4 files" }));
   expect(screen.queryByRole("list", { name: "Files changed" })).toBeNull();
   // One file says so.
   act(() => {
@@ -504,12 +509,21 @@ test("a live answer: the session's row selected, its edit told and its file high
   });
   const row = list().querySelector("[data-focused]") as HTMLElement;
   expect(row.querySelector(".session-title .label")?.textContent).toBe(fix.title as string);
-  expect(row.querySelector(".session-edit")?.textContent).toBe(
-    "Edit · 3h ago · lines 39–41 · you changed it before accepting",
-  );
+  // The edit is a line of the row, apart from the button that resumes the session (28.22).
+  const told = within(row).getByRole("button", {
+    name: "Edited lines 39–41 · 3h ago · you changed it before accepting",
+  });
+  expect(told.closest(".session-main")).toBeNull();
   act(() => apply(changed()));
-  const marked = row.querySelector(".session-file[data-focused] .session-file-path");
-  expect(marked?.textContent).toBe(path);
+  const marked = row.querySelectorAll(".session-file[aria-current]");
+  expect([...marked].map((r) => (r as HTMLElement).title)).toEqual([path]);
+  expect(marked[0].hasAttribute("data-focused")).toBe(true);
+  // The edit opens its file at its first line.
+  spyOn(transport, "openFile").mockResolvedValue();
+  fireEvent.click(told);
+  const s = useHive.getState();
+  expect(s.openFile).toEqual({ worktree: FIX_LOGIN, path });
+  expect(s.gotoLine).toEqual({ worktree: FIX_LOGIN, path, line: 39 });
   // Listed here: nothing shows on top.
   expect(screen.queryByRole("region", { name: /^From / })).toBeNull();
 });
@@ -540,7 +554,7 @@ test("a session of another worktree shows on top, under From, without switching"
   const gone = screen.getByRole("region", { name: "From fix-login" });
   expect(gone.querySelector(".session-title .label")?.textContent).toBe(fix.title as string);
   expect(gone.querySelector(".session-edit")?.textContent).toBe(
-    "Edit · 3h ago · lines 39–41 · you changed it before accepting · session deleted",
+    "Edited lines 39–41 · 3h ago · you changed it before accepting · session deleted",
   );
   // A worktree no longer followed is named by its path.
   act(() =>
