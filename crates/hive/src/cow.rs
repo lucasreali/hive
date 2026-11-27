@@ -2,8 +2,9 @@
 //! source's blocks until either side changes: macOS `fclonefileat` (APFS), Linux's `FICLONE`
 //! ioctl (Btrfs, XFS). Where the filesystem has no clones, a plain copy of the bytes.
 //!
-//! The source is opened without following a symlink and must be a regular file; the
-//! destination is always a new file, never an existing path.
+//! The caller opens the source (`hive::worktree` through `file::open_plain`, which never
+//! follows a link in any part of its path); the destination is always a new file, never an
+//! existing path.
 
 use std::fs::{File, OpenOptions};
 use std::io;
@@ -43,39 +44,16 @@ impl Copier for System {
     }
 }
 
-/// Copies the regular file `src` to the new path `dst`: a clone where the filesystem allows,
-/// else a plain copy. Refuses a `src` that is a symlink or not a regular file, and an
-/// existing `dst` (never overwritten, never written through).
-pub fn copy_new(copier: &dyn Copier, src: &Path, dst: &Path) -> io::Result<Copied> {
-    let mut file = open_regular(src)?;
-    match copier.clone_file(&file, dst) {
+/// Copies the open regular file `src` to the new path `dst`: a clone where the filesystem
+/// allows, else a plain copy. Refuses an existing `dst` (never overwritten, never written
+/// through).
+pub fn copy_new(copier: &dyn Copier, mut src: File, dst: &Path) -> io::Result<Copied> {
+    match copier.clone_file(&src, dst) {
         Ok(()) => Ok(Copied::Cloned),
         // Something appeared at `dst`: a copy would refuse it too.
         Err(err) if err.kind() == io::ErrorKind::AlreadyExists => Err(err),
-        Err(_) => copier.copy_file(&mut file, dst).map(|()| Copied::Copied),
+        Err(_) => copier.copy_file(&mut src, dst).map(|()| Copied::Copied),
     }
-}
-
-/// Opens `path` for reading if it is a regular file, never through a symlink at its last
-/// component (`O_NOFOLLOW`) and never blocking on a FIFO put there meanwhile (`O_NONBLOCK`,
-/// which a regular file's reads ignore).
-fn open_regular(path: &Path) -> io::Result<File> {
-    let mut options = OpenOptions::new();
-    options.read(true);
-    #[cfg(unix)]
-    {
-        use nix::fcntl::OFlag;
-        use std::os::unix::fs::OpenOptionsExt;
-        options.custom_flags(OFlag::O_NOFOLLOW.union(OFlag::O_NONBLOCK).bits());
-    }
-    let file = options.open(path)?;
-    if !file.metadata()?.is_file() {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            format!("{} is not a regular file", path.display()),
-        ));
-    }
-    Ok(file)
 }
 
 /// A new file at `path`; an existing one (a symlink included) is refused.
@@ -179,17 +157,17 @@ mod tests {
         }
     }
 
-    fn source(dir: &Path) -> std::path::PathBuf {
+    fn source(dir: &Path) -> File {
         let src = dir.join("src");
         fs::write(&src, "data").unwrap();
-        src
+        File::open(src).unwrap()
     }
 
     #[test]
     fn a_clone_is_tried_first_and_kept() {
         let dir = tempfile::tempdir().unwrap();
         let fake = Fake::new(None, None);
-        let got = copy_new(&fake, &source(dir.path()), &dir.path().join("dst")).unwrap();
+        let got = copy_new(&fake, source(dir.path()), &dir.path().join("dst")).unwrap();
         assert_eq!(got, Copied::Cloned);
         assert_eq!(*fake.calls.borrow(), ["clone"]);
     }
@@ -197,7 +175,6 @@ mod tests {
     #[test]
     fn a_refused_clone_falls_back_to_a_copy() {
         let dir = tempfile::tempdir().unwrap();
-        let src = source(dir.path());
         let dst = dir.path().join("dst");
         for kind in [
             io::ErrorKind::Unsupported,
@@ -206,7 +183,10 @@ mod tests {
             io::ErrorKind::Other,
         ] {
             let fake = Fake::new(Some(kind), None);
-            assert_eq!(copy_new(&fake, &src, &dst).unwrap(), Copied::Copied);
+            assert_eq!(
+                copy_new(&fake, source(dir.path()), &dst).unwrap(),
+                Copied::Copied
+            );
             assert_eq!(*fake.calls.borrow(), ["clone", "copy"]);
         }
     }
@@ -218,7 +198,7 @@ mod tests {
             Some(io::ErrorKind::Unsupported),
             Some(io::ErrorKind::StorageFull),
         );
-        let err = copy_new(&fake, &source(dir.path()), &dir.path().join("dst")).unwrap_err();
+        let err = copy_new(&fake, source(dir.path()), &dir.path().join("dst")).unwrap_err();
         assert_eq!(err.kind(), io::ErrorKind::StorageFull);
     }
 
@@ -226,38 +206,9 @@ mod tests {
     fn an_existing_destination_is_never_copied_over() {
         let dir = tempfile::tempdir().unwrap();
         let fake = Fake::new(Some(io::ErrorKind::AlreadyExists), None);
-        let err = copy_new(&fake, &source(dir.path()), &dir.path().join("dst")).unwrap_err();
+        let err = copy_new(&fake, source(dir.path()), &dir.path().join("dst")).unwrap_err();
         assert_eq!(err.kind(), io::ErrorKind::AlreadyExists);
         assert_eq!(*fake.calls.borrow(), ["clone"]);
-    }
-
-    #[test]
-    fn only_regular_files_are_opened() {
-        let dir = tempfile::tempdir().unwrap();
-        let fake = Fake::new(None, None);
-        let dst = dir.path().join("dst");
-        let err = copy_new(&fake, dir.path(), &dst).unwrap_err();
-        assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
-        assert!(err.to_string().ends_with("is not a regular file"), "{err}");
-        let missing = copy_new(&fake, &dir.path().join("missing"), &dst).unwrap_err();
-        assert_eq!(missing.kind(), io::ErrorKind::NotFound);
-        assert!(fake.calls.borrow().is_empty());
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn symlinks_and_fifos_are_never_followed() {
-        let dir = tempfile::tempdir().unwrap();
-        let fake = Fake::new(None, None);
-        let dst = dir.path().join("dst");
-        let link = dir.path().join("link");
-        std::os::unix::fs::symlink(source(dir.path()), &link).unwrap();
-        assert!(copy_new(&fake, &link, &dst).is_err());
-        let fifo = dir.path().join("fifo");
-        nix::unistd::mkfifo(&fifo, nix::sys::stat::Mode::S_IRWXU).unwrap();
-        let err = copy_new(&fake, &fifo, &dst).unwrap_err();
-        assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
-        assert!(fake.calls.borrow().is_empty());
     }
 
     #[cfg(unix)]
@@ -305,7 +256,7 @@ mod tests {
         assert_eq!(fs::read(&dst).ok(), cloned.then(|| data.clone()));
         assert_eq!(dst.exists().then(|| mode(&dst)), cloned.then_some(0o640));
         let other = dir.path().join("other");
-        let how = copy_new(&System, &src, &other).unwrap();
+        let how = copy_new(&System, File::open(&src).unwrap(), &other).unwrap();
         assert_eq!(how == Copied::Cloned, cloned);
         assert_eq!(fs::read(&other).unwrap(), data);
         assert_eq!(mode(&other), 0o640);
@@ -319,9 +270,7 @@ mod tests {
         let src = source(dir.path());
         let dst = dir.path().join("dst");
         fs::write(&dst, "mine").unwrap();
-        let err = System
-            .clone_file(&File::open(&src).unwrap(), &dst)
-            .unwrap_err();
+        let err = System.clone_file(&src, &dst).unwrap_err();
         assert_eq!(err.kind(), io::ErrorKind::AlreadyExists);
         assert_eq!(fs::read_to_string(&dst).unwrap(), "mine");
     }

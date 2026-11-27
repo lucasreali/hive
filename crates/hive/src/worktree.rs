@@ -508,26 +508,32 @@ fn included_files(root: &Path) -> io::Result<Vec<u8>> {
 
 /// Copies `included` (from [`included_files`]) from `root` into the new worktree. Only
 /// regular files are copied, never over an existing path nor through a symlink, each cloned
-/// where the filesystem allows (28.9, [`cow::copy_new`]). Returns how many were copied.
+/// where the filesystem allows (28.9, [`cow::copy_new`]). A source is opened with no link in
+/// any part of its path (`file::open_plain`): a folder swapped for a link after git listed it
+/// fails the copy instead of reading from outside the project. Returns how many were copied.
 fn copy_included(
     copier: &dyn cow::Copier,
     root: &Path,
     worktree: &Path,
     included: &[u8],
 ) -> io::Result<usize> {
+    let root = canonical(root)?;
     let mut copied = 0;
     for rel in included
         .split(|&b| b == 0)
         .map(|p| PathBuf::from(git::os_string(p)))
     {
-        let src = root.join(&rel);
-        let is_file = src.symlink_metadata().is_ok_and(|m| m.is_file());
+        let is_file = root
+            .join(&rel)
+            .symlink_metadata()
+            .is_ok_and(|m| m.is_file());
         if !is_file || unsafe_target(worktree, &rel) {
             continue;
         }
+        let src = crate::file::open_plain(&root, &rel)?;
         let dst = worktree.join(&rel);
         std::fs::create_dir_all(dst.parent().unwrap_or(worktree))?;
-        cow::copy_new(copier, &src, &dst)?;
+        cow::copy_new(copier, src, &dst)?;
         copied += 1;
     }
     Ok(copied)
@@ -839,6 +845,24 @@ worktree /repo/.claude/worktrees/c\0HEAD 3333\0branch refs/heads/worktree-c\0pru
             ("tracked".into(), some("the branch's")),
         ];
         assert_eq!(trees, [expected.clone(), expected]);
+    }
+
+    /// A folder that git listed but that is a link by the time of the copy (swapped in
+    /// meanwhile) is never read through: the copy fails instead of leaving the project.
+    #[cfg(unix)]
+    #[test]
+    fn a_source_folder_swapped_for_a_link_fails_the_copy() {
+        let root = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        std::fs::write(outside.path().join("secret"), "outside").unwrap();
+        std::os::unix::fs::symlink(outside.path(), root.path().join("cache")).unwrap();
+        let worktree = tempfile::tempdir().unwrap();
+        let err =
+            copy_included(&cow::System, root.path(), worktree.path(), b"cache/secret").unwrap_err();
+        // `O_NOFOLLOW | O_DIRECTORY` on a link: ENOTDIR on macOS, ELOOP on Linux.
+        let refused = [nix::libc::ENOTDIR, nix::libc::ELOOP].map(Some);
+        assert!(refused.contains(&err.raw_os_error()), "{err}");
+        assert!(!worktree.path().join("cache").exists());
     }
 
     #[test]
