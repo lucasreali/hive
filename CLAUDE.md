@@ -15,7 +15,8 @@ Hive is a desktop companion for Claude Code agents: a Tauri app (macOS, the main
 | `COVERAGE_EXCLUSIONS.md` | Approved coverage exclusions (created when the first one is approved) |
 | `.claude/skills/stage/` | How to develop a whole stage: the orchestrator procedure (`SKILL.md`, `/stage <N>`) and the brief every task agent follows (`task-brief.md`) |
 | `.claude/skills/gates/`, `release/` | `/gates` runs every gate safely; `/release <version>` tags a release and pushes it with `main` |
-| `.claude/agents/` | `gate-integrity-reviewer` (run before merging a task) and `security-reviewer` (trust boundaries in the service/app) |
+| `.claude/skills/<name>/` (copied, each with a `SOURCE.md`) | Process: `verification-before-completion`, `test-driven-development`, `systematic-debugging`, `receiving-code-review`. Testing: `property-based-testing`, `playwright-cli`. Rust: `rust-best-practices`. Frontend: `react-best-practices`, `composition-patterns`, `web-design-guidelines`, `accessibility`, `animate`, `review-animations`. Security: `fp-check`, `sharp-edges`, `semgrep` + `sarif-parsing` (Semgrep is a host tool the human installs) |
+| `.claude/agents/` | `gate-integrity-reviewer` and `code-reviewer` (task fit and correctness), run before merging a task; `security-reviewer` (trust boundaries in the service/app); `fp-check-data-flow-analyzer` and `fp-check-exploitability-verifier` (spawned by `fp-check`) |
 | `.claude/settings.json` + `hooks/` | Hooks: `guard.py` blocks edits to read-only files, npm/npx/pnpm/yarn, any push but `task/*` branches, `main` and `v<x.y.z>` tags, rebase, force and global git config; `format.sh` runs `cargo fmt` / biome after each edit |
 
 ## Hard rules

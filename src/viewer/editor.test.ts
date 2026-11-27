@@ -1,11 +1,15 @@
 import { afterEach, expect, spyOn, test } from "bun:test";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { syntaxTree } from "@codemirror/language";
 import { getOriginalDoc } from "@codemirror/merge";
 import { SearchQuery, setSearchQuery } from "@codemirror/search";
 import { EditorState } from "@codemirror/state";
 import { runScopeHandlers } from "@codemirror/view";
+import { type Tag, tags as t } from "@lezer/highlight";
 import { toText } from "./buffer";
 import {
+  codeHighlightStyle,
   createEditor,
   createViewer,
   type Editor,
@@ -294,5 +298,95 @@ test("the selection is painted with the theme's token, in the editor and the vie
     expect(fixed).toBeGreaterThanOrEqual(0);
     expect(ours).toBeGreaterThan(fixed);
     expect(rules[ours]).toContain("::selection");
+  }
+});
+
+/** The colour `codeHighlightStyle` gives `tag`, as written in its rule. */
+function tokenColor(tag: Tag): string | undefined {
+  const cls = codeHighlightStyle.style([tag])?.split(" ")[0];
+  const rules = (codeHighlightStyle.module?.getRules() ?? "").split("\n");
+  const rule = rules.find((r) => cls !== undefined && r.startsWith(`.${cls} `));
+  return /color: ?(var\(--[\w-]+\))/.exec(rule ?? "")?.[1];
+}
+
+test("the code's colours are the theme's tokens, One Dark's highlight style rule for rule (28.25)", () => {
+  // oneDarkHighlightStyle's groups, each with its token.
+  const groups: [Tag, string][] = [
+    [t.keyword, "--syn-keyword"],
+    [t.propertyName, "--syn-name"],
+    [t.function(t.variableName), "--syn-function"],
+    [t.constant(t.name), "--syn-constant"],
+    [t.bool, "--syn-constant"],
+    [t.definition(t.name), "--syn-plain"],
+    [t.typeName, "--syn-type"],
+    [t.number, "--syn-type"],
+    [t.operator, "--syn-operator"],
+    [t.regexp, "--syn-operator"],
+    [t.comment, "--editor-comment"],
+    [t.link, "--editor-comment"],
+    [t.heading, "--syn-name"],
+    [t.string, "--syn-string"],
+    [t.invalid, "--editor-invalid"],
+  ];
+  for (const [tag, token] of groups) {
+    expect({ tag: `${tag}`, color: tokenColor(tag) }).toEqual({
+      tag: `${tag}`,
+      color: `var(${token})`,
+    });
+  }
+  // Every colour of the style is a token: none of One Dark's fixed ones is left.
+  const rules = codeHighlightStyle.module?.getRules() ?? "";
+  expect(rules).not.toMatch(/#[0-9a-f]{3,8}/i);
+  expect(rules).toMatch(/font-weight: ?bold/);
+  expect(rules).toMatch(/text-decoration: ?underline/);
+});
+
+test("the editor and the viewer paint code with the highlight style and the theme's plain text (28.25)", async () => {
+  const { view } = editing("const a = 1;\n", "src/a.ts");
+  viewer = createViewer(document.body, "src/b.ts");
+  viewer.show({ content: "const b = 2;\n", original: null });
+  const keyword = codeHighlightStyle.style([t.keyword])?.split(" ")[0] ?? "none";
+  for (const v of [view, viewer.view]) {
+    await until(() => v.contentDOM.querySelector(`.${keyword}`) !== null);
+    expect(v.contentDOM.querySelector(`.${keyword}`)?.textContent).toBe("const");
+    // oneDark's fixed #abb2bf text stays loaded; ours, the theme's plain, comes after it.
+    const rules = rulesFor(v, "color");
+    const fixed = rules.findIndex((r) => /^\.\S+ \{ color: #abb2bf;/i.test(r));
+    const ours = rules.findIndex((r) =>
+      /^\.\S+ \{ height: 100%;.* color: var\(--syn-plain\);/.test(r),
+    );
+    expect(fixed).toBeGreaterThanOrEqual(0);
+    expect(ours).toBeGreaterThan(fixed);
+  }
+});
+
+// The tokens in both themes: One Dark's editor colours, and Atom One Light's.
+test("the style sheet gives the code's tokens One Dark's and One Light's colours (28.25)", () => {
+  const css = readFileSync(join(import.meta.dir, "..", "styles.css"), "utf8");
+  const block = (selector: string) => {
+    const start = css.indexOf(`\n${selector} {\n`);
+    return css.slice(start, css.indexOf("\n}", start));
+  };
+  const value = (selector: string, token: string) =>
+    new RegExp(`\\n\\s*${token}: ([^;]+);`).exec(block(selector))?.[1];
+  const expected = {
+    "--syn-keyword": ["#c678dd", "#a626a4"],
+    "--syn-name": ["#e06c75", "#e45649"],
+    "--syn-function": ["#61afef", "#4078f2"],
+    "--syn-constant": ["#d19a66", "#986801"],
+    "--syn-type": ["#e5c07b", "#c18401"],
+    "--syn-operator": ["#56b6c2", "#0184bc"],
+    "--syn-string": ["#98c379", "#50a14f"],
+    "--syn-plain": ["#abb2bf", "#383a42"],
+    "--editor-comment": ["#7d8799", "#a0a1a7"],
+    "--editor-invalid": ["#ffffff", "#383a42"],
+  };
+  for (const [token, [dark, light]] of Object.entries(expected)) {
+    const found = {
+      token,
+      dark: value(":root", token),
+      light: value(':root[data-theme="one-light"]', token),
+    };
+    expect(found).toEqual({ token, dark, light });
   }
 });
