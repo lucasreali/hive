@@ -206,9 +206,9 @@ export const COMMANDS: readonly Command[] = [
   },
   {
     id: "send-reference",
-    label: "Send the selected lines' reference to the terminal",
+    label: "Send the selected lines' reference to the agent",
     keys: "Ctrl+Shift+L",
-    run: sendReference,
+    run: () => sendReference(),
   },
   {
     id: "comment",

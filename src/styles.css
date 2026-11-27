@@ -392,6 +392,11 @@ label:has(> input[type="checkbox"]:disabled) {
   overflow-y: auto;
 }
 
+/* The agents a comment or a reference can go to (28.21). */
+.send-menu {
+  max-width: 340px;
+}
+
 .inbox-meta {
   color: var(--text-3);
   font-size: 11px;

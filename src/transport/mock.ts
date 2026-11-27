@@ -2237,6 +2237,10 @@ export function createMockTransport(
         if (terminal.agent && line.startsWith("state ") && URGENCY.includes(next)) {
           setState(terminal.agent, next);
         }
+        // `title <name>` names its session, as Claude Code's own title would (`agent_title`).
+        if (terminal.agent && line.startsWith("title ")) {
+          later({ type: "agent_title", channel: id, id: terminal.agent, title: line.slice(6) });
+        }
         if (line.startsWith("touch ")) touch(terminal.cwd, line.slice(6));
         if (line.startsWith("write ")) write(terminal.cwd, line.slice(6));
         if (line.startsWith("worktree-remove ")) removeWorktree(line.slice(16));

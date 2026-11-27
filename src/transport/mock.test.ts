@@ -513,6 +513,16 @@ test("/clear in an agent ends its session, clears the screen and starts a new se
   expect(printed.filter((p) => p === "\x1b[2J\x1b[3J\x1b[H")).toHaveLength(1);
 });
 
+test("title names a running agent's session; without an agent it is a line like any other", async () => {
+  const { transport, messages } = await connected();
+  const id = await transport.openTerminal("/w", 80, 24, () => {});
+  await transport.writeTerminal(id, "title early\rclaude\rtitle fix the login\r");
+  await tick();
+  expect(messages.filter((m) => m.type === "agent_title")).toEqual([
+    { type: "agent_title", channel: id, id: "mock-session-1", title: "fix the login" },
+  ]);
+});
+
 test("hive badge sets and clears the terminal's badge", async () => {
   const { transport, messages } = await connected();
   const id = await transport.openTerminal("/w", 80, 24, () => {});
