@@ -67,7 +67,7 @@ async fn the_first_start_leaves_nothing_of_the_agents_browser() {
     let wrapper = std::fs::read_to_string(env.path("data/hive/bin/claude")).unwrap();
     assert!(!wrapper.contains("mcp-config"), "{wrapper}");
 
-    let Control::Settings { settings: read } = app.control().await.1 else {
+    let Control::Settings { settings: read, .. } = app.control().await.1 else {
         panic!("no settings first");
     };
     assert_eq!(read.agents.silence_secs, 7);

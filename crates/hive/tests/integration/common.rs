@@ -240,6 +240,7 @@ impl Env {
         if role == Role::App {
             let settings = Control::Settings {
                 settings: Default::default(),
+                problems: Vec::new(),
             };
             assert_eq!(conn.control().await, (0, settings));
         }

@@ -12,6 +12,8 @@ use bytes::{Buf, BufMut, Bytes, BytesMut};
 use serde::{Deserialize, Serialize};
 use tokio_util::codec::{Decoder, Encoder};
 
+pub mod keymap;
+
 /// Bumped on every incompatible change to frames or control messages.
 pub const PROTOCOL_VERSION: u32 = 1;
 
@@ -1399,8 +1401,12 @@ pub enum Control {
     Resync,
     /// The service's settings (`~/.hive/settings.json`): sent to the app right
     /// after `Welcome`, and in answer to `GetSettings` and to a saved `SetSettings`.
+    /// `problems`: one line per problem of a setting that is ignored but never refuses the
+    /// file (the keymap's, [`keymap::check`]); empty when none.
     Settings {
         settings: Settings,
+        #[serde(default)]
+        problems: Vec<String>,
     },
     /// App → service: checks and saves the whole settings; answered by `Settings`, or by
     /// `SettingsFailed` with nothing saved.
@@ -1560,6 +1566,8 @@ pub struct Settings {
     pub claude: ClaudeSettings,
     pub gh: GhSettings,
     pub remote: RemoteSettings,
+    /// The user's shortcuts (28.7): only their changes to #35's defaults.
+    pub keymap: keymap::Keymap,
 }
 
 /// The remote hosts the app connects to over ssh (26.17), kept in the local service's settings.
@@ -4590,13 +4598,14 @@ mod tests {
         assert_eq!(&resync.payload[..], br#"{"type":"resync"}"#);
         let settings = Control::Settings {
             settings: Settings::default(),
+            problems: vec!["p".into()],
         };
         assert_eq!(
             &Frame::control(0, &settings).payload[..],
-            br#"{"type":"settings","settings":{"terminal":{"font_family":"\"Hive Mono\", \"Symbols Nerd Font\", monospace","font_size":13,"scrollback":5000,"cursor_style":"block","cursor_blink":false,"copy_on_select":false,"option_as_meta":"off","screen_reader":false,"shell":"default"},"appearance":{"theme":"one-dark","diff_colors":"standard"},"notifications":{"volume":100,"bounce":true,"menu_bar":true,"command_secs":10},"agents":{"silence_secs":5,"confirm_close":true,"keep_awake":true},"worktrees":{"default_base":null},"projects":{},"claude":{"accounts":[],"default_name":"Default","share_sessions":false},"gh":{"config_dirs":[]},"remote":{"hosts":[],"keep_minutes":1440}}}"#
+            br#"{"type":"settings","settings":{"terminal":{"font_family":"\"Hive Mono\", \"Symbols Nerd Font\", monospace","font_size":13,"scrollback":5000,"cursor_style":"block","cursor_blink":false,"copy_on_select":false,"option_as_meta":"off","screen_reader":false,"shell":"default"},"appearance":{"theme":"one-dark","diff_colors":"standard"},"notifications":{"volume":100,"bounce":true,"menu_bar":true,"command_secs":10},"agents":{"silence_secs":5,"confirm_close":true,"keep_awake":true},"worktrees":{"default_base":null},"projects":{},"claude":{"accounts":[],"default_name":"Default","share_sessions":false},"gh":{"config_dirs":[]},"remote":{"hosts":[],"keep_minutes":1440},"keymap":{}},"problems":["p"]}"#
         );
         let partial: Control = serde_json::from_str(
-            r#"{"type":"set_settings","settings":{"terminal":{"cursor_style":"bar","shell":"git_bash"},"appearance":{"theme":"one-light","diff_colors":"color-blind"},"projects":{"/r":{"later":1}},"claude":{"accounts":[{"name":"Work","config_dir":"/w"}],"account":"/w"},"unknown":1}}"#,
+            r#"{"type":"set_settings","settings":{"terminal":{"cursor_style":"bar","shell":"git_bash"},"appearance":{"theme":"one-light","diff_colors":"color-blind"},"projects":{"/r":{"later":1}},"claude":{"accounts":[{"name":"Work","config_dir":"/w"}],"account":"/w"},"keymap":{"palette":"Cmd+K","comment":3},"unknown":1}}"#,
         )
         .unwrap();
         let mut expected = Settings::default();
@@ -4609,6 +4618,7 @@ mod tests {
         expected.terminal.shell = TerminalShell::GitBash;
         expected.appearance.theme = Theme::OneLight;
         expected.appearance.diff_colors = DiffColors::ColorBlind;
+        expected.keymap = keymap::Keymap(serde_json::json!({"palette": "Cmd+K", "comment": 3}));
         expected
             .projects
             .insert("/r".into(), ProjectSettings::default());

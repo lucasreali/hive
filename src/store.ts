@@ -276,6 +276,7 @@ export const DEFAULT_SETTINGS: Settings = {
   claude: { accounts: [], default_name: "Default", share_sessions: false },
   gh: { config_dirs: [] },
   remote: { hosts: [], keep_minutes: 1440 },
+  keymap: {},
 };
 
 /** A tab of the terminal area: a terminal, and the worktree path it was opened in (its title's source). */
@@ -507,6 +508,8 @@ export type HiveState = {
   settings: Settings;
   /** Why the last `set_settings` was refused, or the settings file was ignored. */
   settingsError: string | null;
+  /** The problems the service found in the settings it sent (the keymap's, 28.7). */
+  settingsProblems: string[];
   /** A `set_settings` sent and not answered yet: the next save waits for its answer (9.24). */
   settingsPending: boolean;
   /** The last `diagnostics`, or null until asked. */
@@ -689,6 +692,7 @@ export const initialState: HiveState = {
   usageLimits: { session: null, week: null },
   settings: DEFAULT_SETTINGS,
   settingsError: null,
+  settingsProblems: [],
   settingsPending: false,
   diagnostics: null,
   shared: null,

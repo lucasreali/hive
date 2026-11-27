@@ -69,6 +69,7 @@ async fn terminals_get_their_projects_space_account_and_every_accounts_sessions_
     };
     let saved = Control::Settings {
         settings: settings.clone(),
+        problems: Vec::new(),
     };
     assert_eq!(request(&mut app, set).await, saved);
     // A space's account must be one of the accounts (22.5).
@@ -213,6 +214,7 @@ async fn the_spaces_claude_folders_become_accounts_once() {
         let mut app = repo.env.handshake(Role::App).await;
         let settings = Control::Settings {
             settings: expected.clone(),
+            problems: Vec::new(),
         };
         assert_eq!(app.control().await, (0, settings));
         let saved = std::fs::read_to_string(&file).unwrap();
@@ -267,6 +269,7 @@ async fn the_account_selected_before_spaces_had_one_becomes_every_spaces() {
         let mut app = repo.env.handshake(Role::App).await;
         let settings = Control::Settings {
             settings: expected.clone(),
+            problems: Vec::new(),
         };
         assert_eq!(app.control().await, (0, settings));
         app.send(0, Control::ListProjects).await;
@@ -415,7 +418,13 @@ async fn each_account_says_whether_it_logged_in() {
     let set = Control::SetSettings {
         settings: settings.clone(),
     };
-    assert_eq!(request(&mut app, set).await, Control::Settings { settings });
+    assert_eq!(
+        request(&mut app, set).await,
+        Control::Settings {
+            settings,
+            problems: Vec::new()
+        }
+    );
     let login = |config_dir: Option<&str>, name: &str, logged_in| ClaudeLogin {
         config_dir: config_dir.map(String::from),
         name: name.into(),
@@ -467,7 +476,13 @@ async fn a_session_moves_into_another_accounts_folder() {
     let set = Control::SetSettings {
         settings: settings.clone(),
     };
-    assert_eq!(request(&mut app, set).await, Control::Settings { settings });
+    assert_eq!(
+        request(&mut app, set).await,
+        Control::Settings {
+            settings,
+            problems: Vec::new()
+        }
+    );
     let mut ask = async |id: &str, config_dir: Option<&str>| {
         let config_dir = config_dir.map(Into::into);
         let id = id.into();
@@ -534,7 +549,7 @@ async fn hive_makes_a_new_accounts_private_folder_and_deletes_only_its_own() {
     assert_eq!(mode(&accounts), 0o700);
     let mut app = env.connect(Role::App).await;
     let create = |name: &str| Control::CreateAccount { name: name.into() };
-    let Control::Settings { settings } = request(&mut app, create("Work")).await else {
+    let Control::Settings { settings, .. } = request(&mut app, create("Work")).await else {
         panic!("not created");
     };
     let work = accounts.join("work");
@@ -557,7 +572,8 @@ async fn hive_makes_a_new_accounts_private_folder_and_deletes_only_its_own() {
     let message = format!("Hive did not make {home}: it is never deleted");
     let refused = request(&mut app, remove(&home, true)).await;
     assert_eq!(refused, Control::SettingsFailed { message });
-    let Control::Settings { settings } = request(&mut app, remove(&made.config_dir, true)).await
+    let Control::Settings { settings, .. } =
+        request(&mut app, remove(&made.config_dir, true)).await
     else {
         panic!("not removed");
     };

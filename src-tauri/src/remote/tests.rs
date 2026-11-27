@@ -1129,7 +1129,15 @@ async fn the_local_settings_link_the_hosts_and_requests_go_to_each_host_s_link()
     local.control().await;
     let mut settings = hive_protocol::Settings::default();
     settings.remote = self::settings(&["gpu", "-bad"], 5);
-    local.send(0, Control::Settings { settings }).await;
+    local
+        .send(
+            0,
+            Control::Settings {
+                settings,
+                problems: Vec::new(),
+            },
+        )
+        .await;
     let mut remote = Service::accept(&listener).await;
     remote.welcome(300).await;
     until(&mut rx, "connected").await;
@@ -1329,7 +1337,15 @@ async fn the_local_settings_link_the_hosts_and_requests_go_to_each_host_s_link()
     let link = hive.on(Some("gpu")).unwrap().link;
     let mut settings = hive_protocol::Settings::default();
     settings.remote = self::settings(&["gpu"], 7);
-    local.send(0, Control::Settings { settings }).await;
+    local
+        .send(
+            0,
+            Control::Settings {
+                settings,
+                problems: Vec::new(),
+            },
+        )
+        .await;
     let remotes = hive.remotes().unwrap();
     let kept = async {
         while remotes.keep_secs.load(SeqCst) != 7 * 60 {
@@ -1341,7 +1357,15 @@ async fn the_local_settings_link_the_hosts_and_requests_go_to_each_host_s_link()
     assert_eq!(lab.runs().len(), 1);
     // A host taken out of the settings ends its link.
     let settings = hive_protocol::Settings::default();
-    local.send(0, Control::Settings { settings }).await;
+    local
+        .send(
+            0,
+            Control::Settings {
+                settings,
+                problems: Vec::new(),
+            },
+        )
+        .await;
     until(&mut reloaded, "removed").await;
     let gone = hive.on(Some("gpu")).err();
     assert_eq!(gone, Some("no link to the host gpu".into()));
@@ -1393,7 +1417,15 @@ async fn linked_to_gpu(lab: &Lab) -> (Hive, crate::tests::Service, Service) {
     local.control().await;
     let mut settings = hive_protocol::Settings::default();
     settings.remote = self::settings(&["gpu"], 5);
-    local.send(0, Control::Settings { settings }).await;
+    local
+        .send(
+            0,
+            Control::Settings {
+                settings,
+                problems: Vec::new(),
+            },
+        )
+        .await;
     let mut remote = Service::accept(&listener).await;
     remote.welcome(300).await;
     until(&mut rx, "connected").await;

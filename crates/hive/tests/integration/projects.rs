@@ -921,6 +921,7 @@ async fn a_removed_project_takes_its_settings_and_ports_along_and_leaves_its_fil
         } else {
             let settings_gone = Control::Settings {
                 settings: Settings::default(),
+                problems: Vec::new(),
             };
             assert_eq!(settings, settings_gone);
             assert!(!blocks.contains(&root), "{blocks}");

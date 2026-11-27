@@ -64,7 +64,16 @@ async fn an_upgrade_moves_the_old_files_into_the_hive_folder() {
     // The settings the service reads are the old ones, now in `~/.hive`.
     let mut settings = Settings::default();
     settings.terminal.font_size = 20;
-    assert_eq!(app.control().await, (0, Control::Settings { settings }));
+    assert_eq!(
+        app.control().await,
+        (
+            0,
+            Control::Settings {
+                settings,
+                problems: Vec::new()
+            }
+        )
+    );
     let home = env.path("home/.hive");
     let mode = std::fs::metadata(&home).unwrap().permissions().mode();
     assert_eq!(mode & 0o777, 0o700);
@@ -113,7 +122,16 @@ async fn files_that_cannot_move_keep_the_old_folders_and_the_status_bar_says_so(
     );
     let mut settings = Settings::default();
     settings.terminal.font_size = 20;
-    assert_eq!(app.control().await, (0, Control::Settings { settings }));
+    assert_eq!(
+        app.control().await,
+        (
+            0,
+            Control::Settings {
+                settings,
+                problems: Vec::new()
+            }
+        )
+    );
     // The wrapper is written in the old place.
     let wrapper = env.path("home/.local/share/hive/bin/claude");
     assert!(wrapper.is_file());

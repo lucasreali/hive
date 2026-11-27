@@ -136,8 +136,20 @@ function reduce(s: HiveState, m: HostMessage): Partial<HiveState> {
     case "app_mode":
       // First on every connect (12.5.4): a new connection is on its way, once there is a mode.
       return { appMode: { mode: m.mode, wsl: m.wsl }, connection: { status: "connecting" } };
-    case "settings":
-      return { settings: m.settings, settingsError: null, settingsPending: false };
+    case "settings": {
+      // A new list of problems says so once (a hand edit of the file is otherwise silent).
+      const problems = m.problems ?? [];
+      const n = problems.length;
+      const told = n > 0 && problems.join("\n") !== s.settingsProblems.join("\n");
+      const text = `The keymap has ${n === 1 ? "a problem" : `${n} problems`}: see Settings → Keyboard`;
+      return {
+        settings: m.settings,
+        settingsProblems: problems,
+        settingsError: null,
+        settingsPending: false,
+        ...(told ? withNotice(s, "error", text) : {}),
+      };
+    }
     case "settings_failed":
       return {
         settingsError: m.message,

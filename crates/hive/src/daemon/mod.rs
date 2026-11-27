@@ -766,7 +766,7 @@ impl State {
     /// The settings, then why the settings file was ignored, if it was.
     async fn send_settings(&self) {
         let (settings, warning) = self.settings.get();
-        self.to_app(0, &Control::Settings { settings }).await;
+        self.to_app(0, &crate::settings::message(settings)).await;
         if let Some(message) = warning {
             self.to_app(0, &Control::SettingsFailed { message }).await;
         }
@@ -1218,7 +1218,7 @@ impl State {
         tokio::task::block_in_place(|| self.forget_comments(&worktrees));
         for id in inside.into_iter().chain([id]) {
             let reply = match tokio::task::block_in_place(|| self.settings.forget(&id)) {
-                Ok(settings) => settings.map(|settings| Control::Settings { settings }),
+                Ok(settings) => settings.map(crate::settings::message),
                 Err(message) => Some(Control::SettingsFailed { message }),
             };
             if let Some(reply) = reply {

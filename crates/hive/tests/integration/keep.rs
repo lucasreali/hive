@@ -34,6 +34,7 @@ async fn kept_app(
     let mut app = welcomed(env, keep_secs, app_id).await;
     let settings = Control::Settings {
         settings: Default::default(),
+        problems: Vec::new(),
     };
     let (kept, first) = match app.control().await {
         (0, Control::TerminalsKept { terminals }) => (terminals, app.control().await),
@@ -175,6 +176,7 @@ async fn the_same_app_takes_over_a_stale_connection_and_another_is_refused() {
     taken.send(0, Control::GetSettings).await;
     let settings = Control::Settings {
         settings: Default::default(),
+        problems: Vec::new(),
     };
     assert_eq!(taken.control().await, (0, settings));
     // Once it dropped, another app may come.

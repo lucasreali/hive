@@ -10,8 +10,8 @@ use std::sync::{Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 
 use hive_protocol::{
-    Account, AccountDir, ClaudeSettings, DEFAULT_ACCOUNT, GhSettings, HOST_LIMIT, ProjectScripts,
-    Settings, check_host,
+    Account, AccountDir, ClaudeSettings, Control, DEFAULT_ACCOUNT, GhSettings, HOST_LIMIT,
+    ProjectScripts, Settings, check_host, keymap,
 };
 
 use crate::git::read_limited;
@@ -417,10 +417,18 @@ fn save(file: &Path, settings: &Settings) -> io::Result<()> {
     write_atomic(file, &json, 0o600)
 }
 
-/// An empty default account name is [`DEFAULT_ACCOUNT`] (21.4).
+/// The `settings` message for `settings`, with the keymap's problems (28.7): a bad keymap
+/// entry is ignored and listed, never a refused file.
+pub fn message(settings: Settings) -> Control {
+    let problems = keymap::check(&settings.keymap, keymap::CURRENT);
+    Control::Settings { settings, problems }
+}
+
 /// Each account's folder without trailing separators ([`spaces::trimmed`], 22.2), as a space
-/// names it: before [`check`], which would take `/x/` for a blank or padded folder.
+/// names it: before [`check`], which would take `/x/` for a blank or padded folder. The
+/// keymap's valid entries in one form (28.7, [`keymap::normalize`]).
 fn tidy(settings: &mut Settings) {
+    keymap::normalize(&mut settings.keymap, keymap::CURRENT);
     for account in &mut settings.claude.accounts {
         account.config_dir = spaces::trimmed(&account.config_dir).to_owned();
     }
@@ -707,6 +715,66 @@ mod tests {
         assert_eq!(store.forget("/r"), Ok(Some(settings.clone())));
         assert_eq!(store.scripts("/r"), ProjectScripts::default());
         assert_eq!(Store::load(file).get(), (settings, None));
+    }
+
+    #[test]
+    fn a_bad_keymap_never_refuses_the_file_and_its_problems_go_with_the_settings() {
+        let tmp = tempfile::tempdir().unwrap();
+        let file = tmp.path().join("settings.json");
+        std::fs::write(
+            &file,
+            r#"{"agents":{"silence_secs":9},"keymap":{"comment":3,"palette":"ctrl+shift+k","palete":"Ctrl+J"}}"#,
+        )
+        .unwrap();
+        let (settings, warning) = Store::load(file.clone()).get();
+        assert_eq!(warning, None);
+        assert_eq!(settings.agents.silence_secs, 9);
+        // The valid entry in its one form, the bad ones as written.
+        let keymap =
+            serde_json::json!({"comment": 3, "palette": "Ctrl+Shift+K", "palete": "Ctrl+J"});
+        assert_eq!(settings.keymap.0, keymap);
+        let Control::Settings { problems, .. } = message(settings) else {
+            panic!("not the settings")
+        };
+        assert_eq!(
+            problems,
+            [
+                r#"keymap.comment: a shortcut is a text like "Ctrl+Alt+M" or a list of them (got a number)"#,
+                r#"keymap: Hive has no command "palete""#,
+            ]
+        );
+        // Even a keymap of the wrong type.
+        std::fs::write(&file, r#"{"agents":{"silence_secs":9},"keymap":[1]}"#).unwrap();
+        let (settings, warning) = Store::load(file).get();
+        assert_eq!((settings.agents.silence_secs, warning), (9, None));
+        let Control::Settings { problems, .. } = message(settings) else {
+            panic!("not the settings")
+        };
+        assert_eq!(problems.len(), 1);
+        assert_eq!(
+            message(Settings::default()),
+            Control::Settings {
+                settings: Settings::default(),
+                problems: Vec::new()
+            }
+        );
+    }
+
+    #[test]
+    fn a_saved_keymap_keeps_a_bad_entry_as_written_and_the_rest_normalised() {
+        let (tmp, store) = store();
+        let settings = Settings {
+            keymap: keymap::Keymap(serde_json::json!({
+                "comment": ["Hyper+M"],
+                "palette": ["alt+shift+k", "Alt+Shift+K"],
+            })),
+            ..Settings::default()
+        };
+        let saved = store.set(settings).unwrap();
+        let keymap = serde_json::json!({"comment": ["Hyper+M"], "palette": "Alt+Shift+K"});
+        assert_eq!(saved.keymap.0, keymap);
+        let file = tmp.path().join("hive/settings.json");
+        assert_eq!(Store::load(file).get().0.keymap.0, keymap);
     }
 
     #[test]

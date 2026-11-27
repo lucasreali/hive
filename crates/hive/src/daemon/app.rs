@@ -398,7 +398,7 @@ async fn app_frame(
             let using_gh = |dir: &str| state.projects.using_gh(dir);
             let set = || state.settings.set_with(settings, &using, &using_gh);
             let reply = match tokio::task::block_in_place(set) {
-                Ok(settings) => Control::Settings { settings },
+                Ok(settings) => crate::settings::message(settings),
                 Err(message) => Control::SettingsFailed { message },
             };
             let saved = matches!(reply, Control::Settings { .. });
@@ -412,7 +412,7 @@ async fn app_frame(
         }
         Ok(Control::CreateAccount { name }) => {
             let reply = match tokio::task::block_in_place(|| state.settings.create_account(&name)) {
-                Ok(settings) => Control::Settings { settings },
+                Ok(settings) => crate::settings::message(settings),
                 Err(message) => Control::SettingsFailed { message },
             };
             state.to_app(0, &reply).await;
@@ -432,7 +432,7 @@ async fn app_frame(
                 Err(message) => (None, Some(message)),
             };
             if let Some(settings) = settings {
-                state.to_app(0, &Control::Settings { settings }).await;
+                state.to_app(0, &crate::settings::message(settings)).await;
             }
             if let Some(message) = why {
                 state.to_app(0, &Control::SettingsFailed { message }).await;
@@ -1368,6 +1368,7 @@ mod tests {
         // The settings come first.
         let settings = Control::Settings {
             settings: Default::default(),
+            problems: Vec::new(),
         };
         assert_eq!(got[0], (0, settings));
         check(&got[1..]);

@@ -102,7 +102,13 @@ async fn the_archive_script_runs_before_a_removal_and_can_cancel_it() {
     let set = Control::SetSettings {
         settings: settings.clone(),
     };
-    assert_eq!(request(&mut app, set).await, Control::Settings { settings });
+    assert_eq!(
+        request(&mut app, set).await,
+        Control::Settings {
+            settings,
+            problems: Vec::new()
+        }
+    );
 
     let remove = |path: String, force: bool| Control::RemoveWorktree { path, force };
     // A failed script keeps the worktree, with its output.
@@ -199,7 +205,13 @@ async fn git_and_scripts_get_the_users_login_path_once_it_is_known() {
     let set = Control::SetSettings {
         settings: settings.clone(),
     };
-    assert_eq!(request(&mut app, set).await, Control::Settings { settings });
+    assert_eq!(
+        request(&mut app, set).await,
+        Control::Settings {
+            settings,
+            problems: Vec::new()
+        }
+    );
     let remove = |path: String| Control::RemoveWorktree { path, force: false };
     let removed = |reply: &Control| matches!(reply, Control::WorktreeRemoved { .. });
     let read = |file: &std::path::Path| std::fs::read_to_string(file).unwrap_or_default();

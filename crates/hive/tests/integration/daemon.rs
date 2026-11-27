@@ -342,6 +342,7 @@ async fn settings_are_read_checked_and_saved_by_the_service() {
     let mut app = env.handshake(Role::App).await;
     let defaults = Control::Settings {
         settings: Settings::default(),
+        problems: Vec::new(),
     };
     assert_eq!(app.control().await, (0, defaults));
     let (_, warning) = app.control().await;
@@ -361,11 +362,51 @@ async fn settings_are_read_checked_and_saved_by_the_service() {
     // Valid settings are saved, privately, and answered.
     settings.agents.silence_secs = 2;
     app.send(0, set(settings.clone())).await;
-    let saved = Control::Settings { settings };
+    let saved = Control::Settings {
+        settings,
+        problems: Vec::new(),
+    };
     assert_eq!(app.control().await, (0, saved.clone()));
     assert_eq!(mode(file), 0o600);
     app.send(0, Control::GetSettings).await;
     assert_eq!(app.control().await, (0, saved));
+    drop(app);
+    assert!(daemon.wait_exit().success());
+}
+
+#[tokio::test]
+async fn a_bad_keymap_is_listed_with_the_settings_and_never_refuses_a_save() {
+    let env = Env::new();
+    std::fs::create_dir_all(env.path("data/hive")).unwrap();
+    let file = env.path("data/hive/settings.json");
+    let seeded = r#"{"agents":{"silence_secs":9},"keymap":{"palette":"Hyper+P"}}"#;
+    std::fs::write(&file, seeded).unwrap();
+    let mut daemon = env.daemon();
+    let mut app = env.handshake(Role::App).await;
+    let (_, sent) = app.control().await;
+    let Control::Settings { settings, problems } = sent else {
+        panic!("{sent:?}")
+    };
+    assert_eq!(settings.agents.silence_secs, 9);
+    let problem = r#"keymap.palette: "Hyper+P" is not a shortcut: "Hyper" is not a modifier"#;
+    assert_eq!(problems, [problem]);
+    // A save keeps the bad entry as written, the valid one in its one form, and answers why.
+    let mut changed = settings.clone();
+    changed.keymap.0["comment"] = serde_json::json!("ctrl+alt+m");
+    app.send(0, Control::SetSettings { settings: changed })
+        .await;
+    let (_, saved) = app.control().await;
+    let Control::Settings { settings, problems } = saved else {
+        panic!("{saved:?}")
+    };
+    let keymap = serde_json::json!({"comment": "Ctrl+Alt+M", "palette": "Hyper+P"});
+    assert_eq!(
+        (settings.keymap.0, problems),
+        (keymap.clone(), vec![problem.to_owned()])
+    );
+    let written: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&file).unwrap()).unwrap();
+    assert_eq!(written["keymap"], keymap);
     drop(app);
     assert!(daemon.wait_exit().success());
 }

@@ -235,6 +235,7 @@ async fn the_service_serves_the_app_over_its_pipe_and_ends_with_it() {
     app.wait_for(0, welcome).await;
     let settings = Control::Settings {
         settings: Default::default(),
+        problems: Vec::new(),
     };
     app.wait_for(0, settings).await;
     app.send(0, Control::ListProjects).await;
@@ -315,7 +316,14 @@ async fn the_service_serves_the_app_over_its_pipe_and_ends_with_it() {
             settings: settings.clone(),
         };
         app.send(0, set).await;
-        app.wait_for(0, Control::Settings { settings }).await;
+        app.wait_for(
+            0,
+            Control::Settings {
+                settings,
+                problems: Vec::new(),
+            },
+        )
+        .await;
         open(&mut app, channel, &cwd).await;
         app.type_line(channel, line).await;
         app.shows(channel, shown).await;
@@ -512,7 +520,14 @@ async fn with_worktree(env: &Env, shell: TerminalShell, archive: String) -> (Chi
         settings: settings.clone(),
     };
     app.send(0, set).await;
-    app.wait_for(0, Control::Settings { settings }).await;
+    app.wait_for(
+        0,
+        Control::Settings {
+            settings,
+            problems: Vec::new(),
+        },
+    )
+    .await;
     let create = Control::CreateWorktree {
         project: project.id,
         name: "a".into(),

@@ -112,6 +112,7 @@ async fn the_session_window_reaches_the_app_and_the_users_statusline_prints_unch
         0,
         Control::Settings {
             settings: settings.clone(),
+            problems: Vec::new(),
         },
     );
     assert_eq!(app.control().await, answer);
@@ -131,7 +132,16 @@ async fn the_session_window_reaches_the_app_and_the_users_statusline_prints_unch
     // The space's account is kept in the spaces.
     let mut daemon = env.daemon();
     let mut app = env.handshake(hive_protocol::Role::App).await;
-    assert_eq!(app.control().await, (0, Control::Settings { settings }));
+    assert_eq!(
+        app.control().await,
+        (
+            0,
+            Control::Settings {
+                settings,
+                problems: Vec::new()
+            }
+        )
+    );
     assert_eq!(app.control().await, usage(7, now + 3600));
     app.send(0, Control::ListProjects).await;
     let projects = Control::Projects { projects: vec![] };
@@ -380,7 +390,16 @@ async fn a_terminal_of_another_accounts_space_shows_that_accounts_usage() {
         settings: settings.clone(),
     };
     app.send(0, set).await;
-    assert_eq!(app.control().await, (0, Control::Settings { settings }));
+    assert_eq!(
+        app.control().await,
+        (
+            0,
+            Control::Settings {
+                settings,
+                problems: Vec::new()
+            }
+        )
+    );
     let select = Control::UpdateSpace {
         id: "default".into(),
         name: "Default".into(),

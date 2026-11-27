@@ -128,7 +128,15 @@ async fn to_gpu(
     local.control().await;
     let mut settings = hive_protocol::Settings::default();
     settings.remote = super::settings(&["gpu"], 5);
-    local.send(0, Control::Settings { settings }).await;
+    local
+        .send(
+            0,
+            Control::Settings {
+                settings,
+                problems: Vec::new(),
+            },
+        )
+        .await;
     let mut remote = Service::accept(&listener).await;
     remote.welcome(300).await;
     until(&mut rx, "connected").await;

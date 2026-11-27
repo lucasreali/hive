@@ -441,7 +441,16 @@ async fn zsh_marks_its_commands_unless_the_user_config_does() {
             settings: settings.clone(),
         };
         app.send(0, set).await;
-        assert_eq!(app.control().await, (0, Control::Settings { settings }));
+        assert_eq!(
+            app.control().await,
+            (
+                0,
+                Control::Settings {
+                    settings,
+                    problems: Vec::new()
+                }
+            )
+        );
         app.open_terminal(1, &home).await;
         app.input(1, "echo \"hive=${+functions[_hive_precmd]}.\"\r")
             .await;
@@ -601,7 +610,16 @@ async fn shell_marks_progress_and_notifications_reach_the_app() {
         settings: settings.clone(),
     };
     app.send(0, set).await;
-    assert_eq!(app.control().await, (0, Control::Settings { settings }));
+    assert_eq!(
+        app.control().await,
+        (
+            0,
+            Control::Settings {
+                settings,
+                problems: Vec::new()
+            }
+        )
+    );
     app.open_terminal(1, &repo.root).await;
     app.open_terminal(2, &repo.root).await;
     // An agent runs in terminal 2, which is in view of the focused window: terminal 1's

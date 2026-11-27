@@ -843,6 +843,7 @@ fn samples() -> Vec<Control> {
         },
         Settings {
             settings: hive_protocol::Settings::default(),
+            problems: vec![m()],
         },
         SettingsFailed { message: m() },
         Diagnostics {

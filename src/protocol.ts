@@ -17,7 +17,8 @@ export type ServiceMessage =
   // `warning`: why the service still uses the folders of Hive before 22.1, its files not moved
   // into `~/.hive` (shown in the status bar).
   | { type: "welcome"; version: string; distro: string | null; warning?: string | null }
-  | { type: "settings"; settings: Settings }
+  // `problems`: the keymap's (28.7), each a line; the entries they name are ignored.
+  | { type: "settings"; settings: Settings; problems?: string[] }
   // A refused `set_settings`, or a settings file the service ignored (then `settings` holds
   // the defaults).
   | { type: "settings_failed"; message: string }
@@ -854,7 +855,16 @@ export type Settings = {
    * 10080 minutes).
    */
   remote: { hosts: string[]; keep_minutes: number };
+  /**
+   * The user's shortcuts (28.7): a command id mapped to a chord, a list of chords, or `[]` /
+   * null for none; only the changes to the defaults. Any other value is the service's problem
+   * to name and passed back untouched; the keymap itself may be anything a hand edit wrote.
+   */
+  keymap: Keymap;
 };
+
+/** Mirrors `hive_protocol::keymap::Keymap`: what the file holds, checked by the service. */
+export type Keymap = Record<string, string | string[] | null | unknown>;
 
 /**
  * Mirrors `hive_protocol::Account`: a Claude account, a name and its `CLAUDE_CONFIG_DIR`.
