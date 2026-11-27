@@ -1,0 +1,87 @@
+# Scan Modes Reference
+
+## Mode: Run All
+
+Full scan with all rulesets and severity levels. Current default behavior. No filtering applied — all findings are reported and triaged.
+
+## Mode: Important Only
+
+Focused on high-confidence security vulnerabilities. Excludes code quality, best practices, and low-confidence audit findings.
+
+### Pre-Filter: CLI Severity Flag
+
+Add these flags to every `semgrep` command:
+
+```bash
+--severity WARNING --severity ERROR
+```
+
+This excludes INFO findings at scan time, reducing output volume before post-filtering.
+
+`--severity` takes `INFO`, `WARNING`, or `ERROR`, and nothing else. Anything else exits 2 before
+scanning, with no output written. The `LOW`/`MEDIUM`/`HIGH`/`CRITICAL` scale in the table below
+belongs to the rule metadata, which the post-filter reads. The two are not interchangeable.
+
+The two scales do not nest. A registry rule can carry CLI severity `INFO` and metadata
+`impact: HIGH`, and this flag drops it at scan time before the post-filter sees it. The volume
+reduction is why the pre-filter runs at scan time, but it makes important-only "WARNING and
+above, then filtered on metadata" rather than "everything the metadata filter would keep".
+Check a missing finding against a run-all scan before concluding the rule did not fire.
+
+### Post-Filter: Metadata Criteria
+
+After scanning, filter each JSON result file to keep only findings matching ALL of:
+
+| Metadata Field | Accepted Values | Rationale |
+|---|---|---|
+| `extra.metadata.category` | `"security"` | Excludes correctness, best-practice, maintainability, performance |
+| `extra.metadata.confidence` | `"MEDIUM"`, `"HIGH"` | Excludes low-precision rules (high false positive rate) |
+| `extra.metadata.impact` | `"MEDIUM"`, `"HIGH"` | Excludes low-impact informational findings |
+
+Some registry rules (`p/secrets` among them) may not have `confidence`/`impact`/`category` metadata. Findings **without** these metadata fields are **kept by the post-filter** — we cannot filter what is not annotated.
+
+This exemption applies only to findings that reach the post-filter. The pre-filter above runs first, so an unannotated rule with CLI `severity: INFO` is dropped at scan time and never becomes a finding the exemption can keep.
+
+### Semgrep Metadata Background
+
+Semgrep security rules have these metadata fields (required for `category: security` in the official registry):
+
+| Field | Purpose | Metadata values (never CLI `--severity` values) |
+|---|---|---|
+| `severity` (top-level) | Overall rule severity, derived from likelihood × impact | `LOW`, `MEDIUM`, `HIGH`, `CRITICAL` |
+| `category` | Rule category | `security`, `correctness`, `best-practice`, `maintainability`, `performance` |
+| `confidence` | True positive rate of the rule (precision) | `LOW`, `MEDIUM`, `HIGH` |
+| `impact` | Potential damage if vulnerability is exploited | `LOW`, `MEDIUM`, `HIGH` |
+| `likelihood` | How likely the vulnerability is exploitable | `LOW`, `MEDIUM`, `HIGH` |
+| `subcategory` | Finding type | `vuln`, `audit`, `secure default` |
+
+Key relationship: `severity = f(likelihood, impact)` while `confidence` is independent (describes rule quality, not vulnerability severity).
+
+### Post-Filter jq Command
+
+Apply to each JSON result file after scanning:
+
+```bash
+# Filter a single result file
+jq '{
+  results: [.results[] |
+    ((.extra.metadata.category // "security") | ascii_downcase) as $cat |
+    ((.extra.metadata.confidence // "HIGH") | ascii_upcase) as $conf |
+    ((.extra.metadata.impact // "HIGH") | ascii_upcase) as $imp |
+    select(
+      ($cat == "security") and
+      ($conf == "MEDIUM" or $conf == "HIGH") and
+      ($imp == "MEDIUM" or $imp == "HIGH")
+    )
+  ],
+  errors: .errors,
+  paths: .paths
+}' "$f" > "${f%.json}-important.json"
+```
+
+Default values (`// "security"`, `// "HIGH"`) handle rules without metadata — they pass all filters by default.
+
+The filter reads semgrep's JSON shape (`results.json` in the Hive skill); it cannot be pointed at a
+`.sarif` file, which has no `extra.metadata`. Write its output to a new file next to the original
+(e.g. `results-important.json`), never over its own input.
+
