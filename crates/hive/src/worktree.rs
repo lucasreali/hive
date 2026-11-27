@@ -731,6 +731,10 @@ worktree /repo/.claude/worktrees/c\0HEAD 3333\0branch refs/heads/worktree-c\0pru
         // Only an exact name: a pattern also lists the refs below it.
         assert_eq!(trunk(b"refs/heads/main/x\nrefs/remotes/main\n"), None);
         assert_eq!(trunk(b""), None);
+        // A git that fails is an error, which the listing reads as no trunk.
+        let tmp = tempfile::tempdir().unwrap();
+        let missing = tmp.path().join("missing");
+        assert!(super::trunk(&missing).is_err());
     }
 
     #[test]
