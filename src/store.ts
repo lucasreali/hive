@@ -8,13 +8,17 @@ import {
   type Side,
   saveAgentOrder,
   savedAgentOrder,
+  savedLayout,
   savedPlaces,
   savedTabOrder,
   savedTheme,
+  savedUnseenOnly,
   savedWidths,
+  saveLayout,
   savePlaces,
   saveTabOrder,
   saveTheme,
+  saveUnseenOnly,
   saveWidths,
   widthKey,
 } from "./persist";
@@ -400,8 +404,9 @@ export type HiveState = {
     screenRecording: NotificationPermission;
     accessibility: NotificationPermission;
   };
+  /** Whether the right panel's view is open (Ctrl+Shift+B closes it); kept between runs (28.27). */
   rightPanel: RightPanel;
-  /** Whether the left sidebar shows (the View menu hides it, 17.13). */
+  /** Whether the left sidebar shows (the View menu hides it, 17.13); kept between runs (28.27). */
   sidebarShown: boolean;
   /** What the right panel shows, for the shown worktree. */
   panelView: PanelView;
@@ -579,7 +584,7 @@ export type HiveState = {
   changesSeen: Record<string, number>;
   /** By worktree path: the base picked in the Changes panel (UI state, this run only). */
   diffBases: Record<string, DiffBase>;
-  /** The Diff view lists only the files not marked seen (27.1; UI state, this run only). */
+  /** The Diff view lists only the files not marked seen (27.1; kept between runs, 28.27). */
   unseenOnly: boolean;
   /** The last `file` the service sent; shown only while it is the open file. */
   file: FileText | null;
@@ -963,6 +968,8 @@ export function stepAgent(id: string, step: -1 | 1): void {
 export const useHive = create<HiveState>()(() => ({
   ...initialState,
   ...savedWidths(),
+  ...savedLayout(),
+  unseenOnly: savedUnseenOnly(),
   // The theme of the last run until the service sends the settings, so it launches in it.
   settings: {
     ...DEFAULT_SETTINGS,
@@ -977,6 +984,8 @@ useHive.subscribe(savePlaces);
 useHive.subscribe(followPlaces);
 useHive.subscribe(saveAgentOrder);
 useHive.subscribe(saveTheme);
+useHive.subscribe(saveLayout);
+useHive.subscribe(saveUnseenOnly);
 
 /** What `followPlaces` reads: any other change leaves the places as they are. */
 const PLACE_FIELDS = [

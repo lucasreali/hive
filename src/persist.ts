@@ -45,11 +45,57 @@ export function safeStorage(): Storage | null {
   }
 }
 
-/** Remembers the widths of `s` between runs. */
-export function saveWidths(s: Pick<HiveState, "sidebarWidth" | "panelWidth" | "splitPercent">) {
-  const { sidebarWidth, panelWidth, splitPercent } = s;
+/** Whether the right panel's view is open and the sidebar shows (28.27), kept with the widths. */
+export type Layout = Pick<HiveState, "rightPanel" | "sidebarShown">;
+
+/** The layout of the last run: both open unless closed then (and when none or unreadable). */
+export function savedLayout(storage: Pick<Storage, "getItem"> | null = safeStorage()): Layout {
   try {
-    safeStorage()?.setItem(STORAGE, JSON.stringify({ sidebarWidth, panelWidth, splitPercent }));
+    const saved = JSON.parse(storage?.getItem(STORAGE) ?? "{}");
+    return {
+      rightPanel: saved.rightPanel === null ? null : "files",
+      sidebarShown: saved.sidebarShown !== false,
+    };
+  } catch {
+    return { rightPanel: "files", sidebarShown: true };
+  }
+}
+
+/** Remembers the widths of `s`, and its layout (28.27), between runs. */
+export function saveWidths(
+  s: Pick<HiveState, "sidebarWidth" | "panelWidth" | "splitPercent"> & Layout,
+) {
+  const { sidebarWidth, panelWidth, splitPercent, rightPanel, sidebarShown } = s;
+  const saved = { sidebarWidth, panelWidth, splitPercent, rightPanel, sidebarShown };
+  try {
+    safeStorage()?.setItem(STORAGE, JSON.stringify(saved));
+  } catch {
+    // A full or blocked storage only loses the preference.
+  }
+}
+
+/** Remembers the layout whenever the right panel opens or closes or the sidebar shows or hides. */
+export function saveLayout(s: HiveState, prev: HiveState): void {
+  if (s.rightPanel !== prev.rightPanel || s.sidebarShown !== prev.sidebarShown) saveWidths(s);
+}
+
+/** Where "Unseen only" (27.1) is remembered between runs (28.27): one switch for every worktree. */
+const UNSEEN_STORAGE = "hive.unseenOnly";
+
+/** Whether the Diff view listed only the files not seen in the last run; off when unreadable. */
+export function savedUnseenOnly(storage: Pick<Storage, "getItem"> | null = safeStorage()): boolean {
+  try {
+    return storage?.getItem(UNSEEN_STORAGE) === "true";
+  } catch {
+    return false;
+  }
+}
+
+/** Remembers "Unseen only" whenever it changes. */
+export function saveUnseenOnly(s: HiveState, prev: HiveState): void {
+  if (s.unseenOnly === prev.unseenOnly) return;
+  try {
+    safeStorage()?.setItem(UNSEEN_STORAGE, String(s.unseenOnly));
   } catch {
     // A full or blocked storage only loses the preference.
   }
