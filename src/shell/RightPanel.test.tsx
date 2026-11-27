@@ -374,11 +374,11 @@ test("clicking a file opens it in a tab; folders collapse; the tab's close close
   );
   expect(view.textContent).not.toContain("No changes in this file.");
   // Nothing selected yet: the reference cannot be sent, and the button says why.
-  const send = screen.getByRole("button", { name: "Send to terminal" }) as HTMLButtonElement;
+  const send = screen.getByRole("button", { name: "Send to agent" }) as HTMLButtonElement;
   expect(send.disabled).toBe(true);
   expect(send.title).toBe("Select lines to send their reference");
   act(() => useHive.setState({ selectedLines: { from: 1, to: 1 } }));
-  expect(send.title).toBe("No terminal open");
+  expect(send.title).toBe("No agent in this worktree");
 
   fireEvent.click(treeRow("auth"));
   expect(screen.queryByRole("treeitem", { name: /token\.ts/ })).toBeNull();

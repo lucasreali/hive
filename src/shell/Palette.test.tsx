@@ -354,7 +354,7 @@ test("agents show their name, state and worktree; Enter goes to the agent", () =
   });
 });
 
-test("Send open comments shows once the shown worktree has some for the active terminal", () => {
+test("Send open comments shows once the shown worktree has some and an agent", () => {
   open();
   const comment = {
     id: 1,
@@ -380,8 +380,13 @@ test("Send open comments shows once the shown worktree has some for the active t
   );
   type("send open comments");
   expect(screen.queryByRole("button", { name: /^Send open comments/ })).toBeNull();
+  // Open comments, but only a plain terminal: still nothing to send them to.
   act(() => useHive.setState({ comments: { [fixLogin.path]: [comment] } }));
   type("send open comment");
+  expect(screen.queryByRole("button", { name: /^Send open comments/ })).toBeNull();
+  const agent = { id: "a", terminal: 3, project: shop.id, worktree: fixLogin.id, cwd: null };
+  act(() => useHive.setState({ agents: { a: agent } }));
+  type("send open comments");
   fireEvent.click(screen.getByRole("button", { name: /^Send open comments/ }));
   expect(useHive.getState().modal).toBeNull();
 });

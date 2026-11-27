@@ -305,17 +305,22 @@ test("in a terminal, shortcuts run once and never reach it; other keys do", asyn
   write.mockRestore();
 });
 
-test("Ctrl+Shift+L writes the selected lines' reference into the terminal and focuses it", async () => {
+test("Ctrl+Shift+L writes the selected lines' reference into the agent and focuses it", async () => {
   const write = spyOn(transport, "writeTerminal").mockImplementation(async () => {});
   app();
   const worktree = shop.worktrees[1].path;
   const id = await act(() => openTerminal(worktree));
-  // Lets the mock's first messages for the new terminal arrive.
+  // A plain terminal, active after it, takes nothing.
+  const plain = await act(() => openTerminal(worktree));
+  // Lets the mock's first messages for the new terminals arrive.
   await act(() => new Promise((resolve) => setTimeout(resolve, 10)));
+  const agent = { id: "a", terminal: id, project: shop.id, worktree, cwd: worktree };
   act(() => {
     useHive.setState({
       openFile: { worktree, path: "src/auth/session.ts" },
       selectedLines: { from: 12, to: 12 },
+      agents: { a: agent },
+      activeTab: plain,
     });
     (document.activeElement as HTMLElement | null)?.blur();
   });

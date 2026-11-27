@@ -4,14 +4,17 @@ import { ago } from "../sessions";
 import { CloseIcon } from "../shell/icons";
 import { useKeptScroll, viewKey } from "../shell/panelPlace";
 import { type HiveState, panelWorktree, setOpenFile, useHive } from "../store";
-import { pasteToTerminal, showTerminal, terminal } from "../terminals";
+import { pasteToTerminal, terminal } from "../terminals";
 import { transport } from "../transport";
 import { composing, keyText } from "../window";
-import { reference, terminalIn } from "./reference";
+import { reference, showAgentTerminal } from "./reference";
+import { SendButton } from "./SendButton";
+import { terminalIn } from "./target";
 
 // Review comments (6.7, 27.3): notes on lines of a worktree's files, kept by the service, which
 // moves each one with its code as the file changes (outdated once the code is gone). Sent to
-// the worktree's terminal as pasted text for the agent to read. Nothing is submitted: no Enter.
+// an agent of the worktree as pasted text, the one the user picks (28.21), never a plain
+// terminal. Nothing is submitted: no Enter.
 
 /**
  * Ctrl+Shift+M and the file view's "Comment": opens the comment input for the selected lines
@@ -38,17 +41,20 @@ export const sendable = (c: ReviewComment) => !c.resolved && !c.outdated;
 export const reviewText = (comments: ReviewComment[]) =>
   comments.map((c) => `${reference(c.file, c)}— ${c.body}`).join("\n");
 
+const NONE_OPEN = "No open comments to send";
+
 /**
- * Where and what sending `comments` of `worktree` pastes: into the terminal a reference would go
- * to; or why it cannot.
+ * Where and what sending `comments` of `worktree` pastes: into an agent's terminal there
+ * (`chosen`, a terminal picked in the menu, else the target, 28.21); or why it cannot.
  */
 export function commentsTarget(
   s: HiveState,
   worktree: string,
   comments: ReviewComment[],
+  chosen?: number,
 ): { terminal: number; text: string } | { why: string } {
-  if (comments.length === 0) return { why: "No open comments to send" };
-  const target = terminalIn(s, worktree);
+  if (comments.length === 0) return { why: NONE_OPEN };
+  const target = terminalIn(s, worktree, chosen);
   if ("why" in target) return target;
   return { ...target, text: reviewText(comments) };
 }
@@ -60,14 +66,13 @@ export function openComments(s: HiveState): { worktree: string; comments: Review
 }
 
 /**
- * Shows and focuses the terminal (in front of a file's tab: xterm pastes only into a terminal it
- * has shown) and pastes `comments` of `worktree` into it. They stay until resolved.
+ * Shows and focuses the agent's terminal (in front of a file's tab: xterm pastes only into a
+ * terminal it has shown) and pastes `comments` of `worktree` into it. They stay until resolved.
  */
-export function sendComments(worktree: string, comments: ReviewComment[]): void {
-  const target = commentsTarget(useHive.getState(), worktree, comments);
+export function sendComments(worktree: string, comments: ReviewComment[], chosen?: number): void {
+  const target = commentsTarget(useHive.getState(), worktree, comments, chosen);
   if ("why" in target || !terminal(target.terminal)) return;
-  useHive.setState({ fileShown: false });
-  showTerminal(target.terminal);
+  showAgentTerminal(target.terminal);
   pasteToTerminal(target.terminal, target.text);
 }
 
@@ -103,16 +108,8 @@ export function CommentInput({ worktree, path }: { worktree: string; path: strin
   );
 }
 
-/** Why `comments` of `worktree` cannot be sent now, or null. */
-const useUnsendable = (worktree: string, comments: ReviewComment[]) =>
-  useHive((s) => {
-    const target = commentsTarget(s, worktree, comments);
-    return "why" in target ? target.why : null;
-  });
-
 /** One comment: where it is (a click opens the file there), its code, text and actions. */
 function CommentItem({ worktree, comment: c }: { worktree: string; comment: ReviewComment }) {
-  const unsendable = useUnsendable(worktree, [c]);
   return (
     <li className="comment-item" data-outdated={c.outdated || undefined}>
       <div className="comment-head">
@@ -130,15 +127,15 @@ function CommentItem({ worktree, comment: c }: { worktree: string; comment: Revi
       <p className="comment-body">{c.body}</p>
       <div className="comment-actions">
         {sendable(c) && (
-          <button
-            type="button"
+          <SendButton
+            worktree={worktree}
+            why={null}
             className="ghost text"
-            title={unsendable ?? "Paste the comment into the terminal, without Enter"}
-            disabled={unsendable !== null}
-            onClick={() => sendComments(worktree, [c])}
+            title="Paste the comment into the agent's terminal, without Enter"
+            onSend={(chosen) => sendComments(worktree, [c], chosen)}
           >
             Send
-          </button>
+          </SendButton>
         )}
         <button
           type="button"
@@ -185,7 +182,6 @@ const NONE: ReviewComment[] = [];
 export function CommentsView({ worktree }: { worktree: string }) {
   const comments = useHive((s) => s.comments[worktree]) ?? NONE;
   const open = comments.filter(sendable);
-  const unsendable = useUnsendable(worktree, open);
   // Its scroll, as this worktree's comments were left (28.19).
   const host = useHive((s) => s.host);
   const scroller = useRef<HTMLDivElement>(null);
@@ -206,15 +202,15 @@ export function CommentsView({ worktree }: { worktree: string }) {
   return (
     <div className="comments" ref={scroller} onScroll={onScroll}>
       <div className="comments-bar">
-        <button
-          type="button"
+        <SendButton
+          worktree={worktree}
+          why={open.length === 0 ? NONE_OPEN : null}
           className="ghost text"
-          title={unsendable ?? "Paste the open comments into the terminal, without Enter"}
-          disabled={unsendable !== null}
-          onClick={() => sendComments(worktree, open)}
+          title="Paste the open comments into the agent's terminal, without Enter"
+          onSend={(chosen) => sendComments(worktree, open, chosen)}
         >
           {`Send all open (${open.length})`}
-        </button>
+        </SendButton>
       </div>
       <Group title="Open" worktree={worktree} comments={open} />
       <Group
