@@ -794,6 +794,12 @@ Designs for the next stages (old 28.1, 34.1, 35.1):
 
   Deliver `docs/spike/themes.md`. ⏸ Checkpoint.
 
+### Small fixes the human found in use
+
+Reported by the human from v0.32.0 onward, to be spread over the next stages; each is a small fix in one area (D4: straight to `main` unless it grows).
+
+- [ ] **28.17 A select's menu opens inside the window.** · 2 pts `main` — The human, 2026-11-27 (screenshot of v0.32.0): the Diff view's base menu (27.2, "HEAD", "Since … turn", "A commit…") is a `Select` (`src/ui/Select.tsx`) at the right edge of the right panel, and its menu opens to the right, past the panel and the window's edge, so its items are cut off. Expected: a select's menu is placed where it fits — aligned to the trigger's right edge when it would overflow on the right (and above the trigger when it would overflow at the bottom), never outside the window. A fix in `Select` itself, so every select benefits. Tests: bun (placement from the trigger's and the window's rects: fits, overflows right, overflows bottom); e2e on the mock (the Diff base menu fully visible with the right panel at its narrowest), Chromium and WebKit.
+
 ## Stage 29 — Pinned tabs, and working together over SSH
 
 ≈ 98 points, 89 of them reserved for the multiplayer build that 28.14's design will define. D27.1. Today a remote service serves **one** app: a second one with another `app_id` is refused ("another app is already connected", `docs/spike/ssh.md` §6; "two laptops on one host is out for now").
