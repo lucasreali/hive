@@ -1544,17 +1544,6 @@ mod tests {
         agent.feed("s", &tool("PreToolUse", None, "Run tests"), now);
         agent.feed("s", &hook("SubagentStart", Some("a"), json!({})), now);
         let listed = agent.listed("s");
-        let Control::AgentState {
-            state,
-            pending,
-            subagents,
-            activity,
-            since_ms,
-            ..
-        } = agent.message("s")
-        else {
-            panic!("not an agent_state");
-        };
         let expected = ListedAgent {
             id: "s".into(),
             terminal: 4,
@@ -1562,13 +1551,29 @@ mod tests {
             worktree: Some("/r/w".into()),
             cwd: Some("/r/w/x".into()),
             title: Some("fix".into()),
-            state,
-            pending,
-            since_ms,
-            activity,
-            subagents,
+            state: listed.state,
+            pending: listed.pending,
+            since_ms: listed.since_ms,
+            activity: listed.activity.clone(),
+            subagents: listed.subagents.clone(),
             usage: None,
         };
+        // The state, pending, since, activity and subagents are the `agent_state`'s.
+        assert_eq!(
+            agent.message("s"),
+            Control::AgentState {
+                id: "s".into(),
+                state: listed.state,
+                urgency: listed.state.urgency(),
+                pending: listed.pending,
+                interrupted: false,
+                alert: None,
+                notify: false,
+                subagents: listed.subagents.clone(),
+                activity: listed.activity.clone(),
+                since_ms: listed.since_ms,
+            }
+        );
         assert_eq!(listed, expected);
         assert_eq!(listed.state, WithSubagents);
         assert_eq!(listed.subagents.len(), 1);

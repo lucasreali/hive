@@ -137,7 +137,7 @@ async fn hook_connection<R, W>(
         return;
     }
     match frame.to_control() {
-        Ok(Control::ListAgents) => list_agents(writer, state).await,
+        Ok(Control::ListAgents) => list_agents(writer, state, LIST_TIME).await,
         Ok(Control::Badge { text }) => {
             let channel = frame.channel;
             // Held while sending, so a badge cannot follow the terminal's `terminal_exited`.
@@ -193,8 +193,12 @@ async fn hook_connection<R, W>(
 
 /// Answers `hive agents` (28.10): every live agent, in terminal order, then `agents_listed`.
 /// They are copied first, so a client that does not read never holds the agents lock; and it
-/// gets [`LIST_TIME`] to read them all.
-async fn list_agents<W: AsyncWrite + Unpin>(mut writer: FramedWrite<W, FrameCodec>, state: &State) {
+/// gets `time` ([`LIST_TIME`]) to read them all.
+async fn list_agents<W: AsyncWrite + Unpin>(
+    mut writer: FramedWrite<W, FrameCodec>,
+    state: &State,
+    time: std::time::Duration,
+) {
     let mut agents: Vec<_> = {
         let agents = state.agents.lock().await;
         agents.iter().map(|(id, agent)| agent.listed(id)).collect()
@@ -210,7 +214,7 @@ async fn list_agents<W: AsyncWrite + Unpin>(mut writer: FramedWrite<W, FrameCode
         writer.flush().await
     };
     // A client gone or too slow just gets less.
-    let _ = tokio::time::timeout(LIST_TIME, sent).await;
+    let _ = tokio::time::timeout(time, sent).await;
 }
 
 /// How long `hive agents` has to read the agents.
@@ -1214,6 +1218,41 @@ mod tests {
             got.push((frame.channel, frame.to_control().unwrap()));
         }
         got
+    }
+
+    #[tokio::test]
+    async fn a_client_that_does_not_read_the_agents_neither_holds_their_lock_nor_the_service() {
+        let dir = tempfile::tempdir().unwrap();
+        let state = test_state(dir.path());
+        let mut agents = HashMap::new();
+        for n in 0..64u32 {
+            let mut agent = Agent::new(n, Instant::now(), 0);
+            agent.title = Some("a title long enough to fill the pipe".repeat(4));
+            agents.insert(format!("s{n}"), agent);
+        }
+        *state.agents.lock().await = agents;
+        // A pipe far smaller than the list, never read.
+        let (client, server) = tokio::io::duplex(64);
+        let time = std::time::Duration::from_millis(300);
+        let started = Instant::now();
+        let listing = {
+            let state = state.clone();
+            tokio::spawn(async move {
+                list_agents(FramedWrite::new(server, FrameCodec), &state, time).await;
+            })
+        };
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        assert!(!listing.is_finished(), "the write waits for the client");
+        assert!(
+            state.agents.try_lock().is_ok(),
+            "the agents lock is free while the write waits"
+        );
+        tokio::time::timeout(std::time::Duration::from_secs(5), listing)
+            .await
+            .expect("the service gives up on the client")
+            .unwrap();
+        assert!(started.elapsed() >= time);
+        drop(client);
     }
 
     #[tokio::test]

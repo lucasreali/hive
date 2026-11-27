@@ -198,11 +198,12 @@ pub fn worktrees_json(worktrees: &[Worktree]) -> String {
     json!({ "worktrees": worktrees }).to_string()
 }
 
-/// `text` with its control characters (a tab, a newline, an escape sequence's ESC) as spaces,
-/// so it stays one field and cannot drive the terminal.
+/// `text` with its control and invisible characters (a tab, a newline, an escape sequence's
+/// ESC, a bidi override, a zero-width space) as spaces, so it stays one field, cannot drive the
+/// terminal and shows what it holds.
 fn clean(text: &str) -> String {
     text.chars()
-        .map(|c| if c.is_control() { ' ' } else { c })
+        .map(|c| if crate::adapter::invisible(c) { ' ' } else { c })
         .collect()
 }
 
@@ -246,11 +247,9 @@ mod tests {
             ));
             let ask = reader.next().await.unwrap().unwrap().to_control().unwrap();
             assert_eq!(ask, Control::ListAgents);
-            // The client may stop reading early (an error): the rest is not sent.
+            // The client may stop reading early (an error): what it leaves is dropped.
             for message in answer {
-                if writer.send(Frame::control(0, &message)).await.is_err() {
-                    break;
-                }
+                let _ = writer.send(Frame::control(0, &message)).await;
             }
         });
         let result = ask(client).await;
@@ -390,7 +389,8 @@ mod tests {
         });
         let mut second = agent(2);
         second.cwd = Some("/home/y".into());
-        second.worktree = Some("/r/w".into());
+        // A bidi override or a zero-width space shows as a space, not reordering the line.
+        second.worktree = Some("/r/w\u{202E}t\u{200B}x".into());
         // No window known: no percent.
         second.usage = Some(ListedUsage {
             context_tokens: 1,
@@ -400,7 +400,7 @@ mod tests {
         assert_eq!(
             agents_text(&[first, second, agent(3)]),
             "1\twaiting_permission\t/home/x\t75%\tfix login [31m\tRunning tests\n\
-             2\tworking\t/r/w\t-\t-\t-\n\
+             2\tworking\t/r/w t x\t-\t-\t-\n\
              3\tworking\t-\t-\t-\t-\n"
         );
         assert_eq!(agents_text(&[]), "");
