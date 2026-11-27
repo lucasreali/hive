@@ -439,7 +439,7 @@ export type HiveState = {
   tabHistory: Record<string, string[]>;
   /** By worktree (`placeKey`): the right panel's view it showed last (28.19), kept between runs. */
   panelViews: Record<string, PanelView>;
-  /** Every open file's tab, in the order they opened. */
+  /** Every open file's tab, in the order they opened; reopened after a restart (28.27). */
   openFiles: FileTab[];
   /** The file of the file tabs whose view shows (when `fileShown`) and whose state is live. */
   openFile: OpenFile | null;
@@ -466,7 +466,8 @@ export type HiveState = {
   /**
    * Collapsed tree nodes: a project by its id, a worktree by `worktree:<id>` (a main worktree
    * has its project's id), a folder of the Files or Diff tree by `files:` or `changes:<worktree>/<path>`
-   * (folders start collapsed: one is open only when its entry is false).
+   * (folders start collapsed: one is open only when its entry is false). Kept between runs
+   * (28.27).
    */
   collapsed: Record<string, boolean>;
   /** Terminal tabs in the order they opened, and the one shown. */
@@ -602,7 +603,7 @@ export type HiveState = {
   scriptRuns: Record<number, { worktree: string; name: string; command: string }>;
   /** By worktree path: how many `changes` arrived, equal ones too (the open file re-asks). */
   changesSeen: Record<string, number>;
-  /** By worktree path: the base picked in the Changes panel (UI state, this run only). */
+  /** By worktree path: the base picked in the Changes panel (UI state, kept between runs). */
   diffBases: Record<string, DiffBase>;
   /** The Diff view lists only the files not marked seen (27.1; kept between runs, 28.27). */
   unseenOnly: boolean;
