@@ -121,6 +121,30 @@ test("a space's Claude account is one of the accounts, kept as its folder (22.5)
   update.mockRestore();
 });
 
+test("a new space's Claude account goes back to the default when another host is picked (27.11)", () => {
+  const create = spyOn(transport, "createSpace").mockResolvedValue();
+  spyOn(transport, "listClaudeLogins").mockResolvedValue();
+  show([home], "default");
+  const accounts = [{ name: "Work account", config_dir: "/w" }];
+  act(() => {
+    const s = useHive.getState().settings;
+    apply({ type: "settings", settings: { ...s, claude: { ...s.claude, accounts } } });
+    apply({ type: "host_link", host: "vps", state: "connected" });
+  });
+  pick("New space…");
+  fireEvent.mouseDown(screen.getByRole("combobox", { name: "Claude account" }));
+  fireEvent.click(screen.getByRole("option", { name: "Work account" }));
+  // Picking the host shown again keeps it.
+  const where = screen.getByRole("listbox", { name: "Where" });
+  fireEvent.click(within(where).getByRole("option", { name: "This Mac" }));
+  // Another host: this Mac's account folder never goes to it.
+  fireEvent.click(within(where).getByRole("option", { name: "vps" }));
+  fireEvent.change(screen.getByLabelText("Name"), { target: { value: "Remote" } });
+  fireEvent.click(screen.getByRole("button", { name: "Create space" }));
+  expect(create).toHaveBeenCalledWith("Remote", NO_ENV);
+  create.mockRestore();
+});
+
 test("a remote space's Claude account is one of its host's, never this Mac's (27.11)", () => {
   const update = spyOn(transport, "updateSpace").mockResolvedValue();
   spyOn(transport, "listClaudeLogins").mockResolvedValue();

@@ -305,7 +305,16 @@ export function SpaceDialog({ editing }: { editing: boolean }) {
               autoComplete="off"
             />
           </div>
-          {hosts && <HostPicker value={host} onChange={showHostHere} />}
+          {hosts && (
+            <HostPicker
+              value={host}
+              onChange={(picked) => {
+                // A Claude account is one host's own (27.11): another host starts on its default.
+                if (picked !== host) setEnv((e) => ({ ...e, claude_account: null }));
+                showHostHere(picked);
+              }}
+            />
+          )}
           <ClaudeAccountField env={env} setEnv={setEnv} />
           {FIELDS.map((f) => (
             <div className="field" key={f.key}>
