@@ -12,14 +12,24 @@ import {
   UserCircleIcon,
 } from "@phosphor-icons/react";
 import { type CSSProperties, Fragment, type ReactNode, useEffect, useRef, useState } from "react";
+import { useShallow } from "zustand/react/shallow";
 import { version as appVersion } from "../../package.json";
 import type { Account, AppMode, ClaudeLogin, ProjectScripts, Settings } from "../protocol";
 import { commandKeys, platformCommands } from "../shortcuts";
-import { ask, onRemote, openModal, panelWorktree, scriptsOf, useHive } from "../store";
+import {
+  ask,
+  type HiveState,
+  inSpace,
+  onRemote,
+  openModal,
+  panelWorktree,
+  scriptsOf,
+  useHive,
+} from "../store";
 import { MAC_TERMINAL_KEYS, openClaude, showOpenFailure } from "../terminals";
 import { transport } from "../transport";
 import { NumberInput } from "../ui/NumberInput";
-import { Select } from "../ui/Select";
+import { Select, type SelectGroup, type SelectOption } from "../ui/Select";
 import { openSettingsFile, openSharedFolder } from "../viewer/external";
 import { homeText, isMac } from "../window";
 import { FolderField, useFolderListing } from "./FolderField";
@@ -747,11 +757,44 @@ const script = (text: string) => (text.trim() === "" ? null : text);
  * Per-project scripts (6.8), the user's own: they live in the settings only, never in the
  * repository. The service checks them.
  */
+/**
+ * The Project select's options (28.18): a group per space of the host shown, the current space's
+ * first, each with its projects (a group's repositories too, 14.1), so a project in two spaces
+ * is in both; a project in no space last, under "No space". One flat list until the spaces
+ * arrive. Grouping for display only: the spaces and their projects are the service's.
+ */
+export function projectChoices(
+  s: Pick<HiveState, "projects" | "spaces" | "currentSpace">,
+): (SelectOption | SelectGroup)[] {
+  const all = Object.values(s.projects ?? {});
+  const option = (p: { id: string; name: string }) => ({ value: p.id, label: p.name });
+  if (!s.spaces) return all.map(option);
+  const spaces = [
+    ...s.spaces.filter((space) => space.id === s.currentSpace),
+    ...s.spaces.filter((space) => space.id !== s.currentSpace),
+  ];
+  const groups = spaces.map((space) => ({
+    group: space.name,
+    options: all.filter((p) => inSpace(space, p)).map(option),
+  }));
+  const none = all.filter((p) => !spaces.some((space) => inSpace(space, p))).map(option);
+  return [...groups, { group: "No space", options: none }].filter((g) => g.options.length > 0);
+}
+
 function ProjectScriptsSection() {
-  const projects = Object.values(useHive((s) => s.projects) ?? {});
+  const choices = projectChoices(
+    useHive(
+      useShallow((s) => ({
+        projects: s.projects,
+        spaces: s.spaces,
+        currentSpace: s.currentSpace,
+      })),
+    ),
+  );
+  const projects = choices.flatMap((o) => ("group" in o ? o.options : [o]));
   // Opened for a project (the Scripts tab's link, 23.4): that one first.
   const [picked, setPicked] = useState<string | null>(() => useHive.getState().modalProject);
-  const id = projects.find((p) => p.id === picked)?.id ?? projects[0]?.id;
+  const id = projects.find((p) => p.value === picked)?.value ?? projects[0]?.value;
   if (id === undefined) return <p className="field-help">Add a project to give it scripts.</p>;
   return (
     <>
@@ -762,7 +805,7 @@ function ProjectScriptsSection() {
         <Select
           aria-labelledby="setting-project-label"
           value={id}
-          options={projects.map((p) => ({ value: p.id, label: p.name }))}
+          options={choices}
           onChange={setPicked}
         />
         <p className="field-help">

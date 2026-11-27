@@ -3052,6 +3052,14 @@ button.chevron:hover {
   color: var(--accent);
 }
 
+/* A group's label in a select's list (28.18): not an option, like the commit picker's headings. */
+.select-group {
+  padding: 6px 10px 2px;
+  font-size: var(--fs-meta);
+  color: var(--text-2);
+  white-space: nowrap;
+}
+
 /* The space switcher's list (27.8): a section per host, its header with the link's dot. */
 .space-list {
   display: flex;

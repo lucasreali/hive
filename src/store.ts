@@ -1619,8 +1619,12 @@ export function spacePlace(s: HiveState): string | null {
 export function spaceProjects(s: HiveState): Project[] {
   const all = Object.values(s.projects ?? {});
   const space = currentSpace(s);
-  return space ? all.filter((p) => space.projects.includes(p.parent ?? p.id)) : all;
+  return space ? all.filter((p) => inSpace(space, p)) : all;
 }
+
+/** Whether `space` lists project `p`, itself or through its group (14.1). */
+export const inSpace = (space: Space, p: Project): boolean =>
+  space.projects.includes(p.parent ?? p.id);
 
 /**
  * Agents in the sidebar's order (project, worktree, then the user's order within it, 8.2);
