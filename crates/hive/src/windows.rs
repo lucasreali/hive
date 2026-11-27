@@ -1489,6 +1489,28 @@ pub fn on_path(name: &OsStr, path: &OsStr) -> Option<PathBuf> {
     found.find(|file| file.is_file())
 }
 
+/// For `file::PlainFiles` on Windows: paths from `root`, each file opened by [`open_parts`].
+pub struct PlainFiles {
+    root: PathBuf,
+}
+
+impl PlainFiles {
+    pub fn new(root: &Path) -> io::Result<Self> {
+        let root = root.to_path_buf();
+        Ok(Self { root })
+    }
+
+    pub fn open_parts(&mut self, folders: &[&OsStr], name: &OsStr) -> io::Result<File> {
+        open_parts(&self.root, folders, name)
+    }
+}
+
+/// For `cow`: Windows has no clone Hive uses (ReFS block cloning is not tried), so every file
+/// is a plain copy.
+pub fn clone_file(_src: &File, _dst: &Path) -> io::Result<()> {
+    Err(io::ErrorKind::Unsupported.into())
+}
+
 /// The file at `root`'s `folders` and `name`, for `file::open_plain`: a link at its end is
 /// opened itself (then refused there), never followed.
 // shortcut: Windows has no `openat`, so a folder of the path swapped for a junction after the

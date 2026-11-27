@@ -336,6 +336,30 @@ pub fn rename_new(from: &Path, to: &Path) -> io::Result<()> {
     }
 }
 
+/// For `cow`: clones the open file `src` into the new path `dst` with `fclonefileat` (APFS),
+/// which makes `dst` itself, atomically, so a failure leaves nothing behind. Mode, ACLs and
+/// extended attributes come with the clone; the owner is the caller. An existing `dst` is
+/// refused (`EEXIST`).
+pub fn clone_file(src: &std::fs::File, dst: &Path) -> io::Result<()> {
+    use std::os::fd::AsRawFd;
+    // `<sys/clonefile.h>`; the libc crate does not define it.
+    const CLONE_NOOWNERCOPY: u32 = 0x0002;
+    let dst = CString::new(dst.as_os_str().as_bytes()).map_err(io::Error::other)?;
+    // SAFETY: `src` is an open descriptor and `dst` a NUL-terminated string, both alive until
+    // the call returns.
+    match unsafe {
+        libc::fclonefileat(
+            src.as_raw_fd(),
+            libc::AT_FDCWD,
+            dst.as_ptr(),
+            CLONE_NOOWNERCOPY,
+        )
+    } {
+        0 => Ok(()),
+        _ => Err(io::Error::last_os_error()),
+    }
+}
+
 /// What `statfs` says of a folder's volume: its mount flags and its file system type.
 pub type Volume = (u32, String);
 

@@ -81,41 +81,24 @@ fn mirror_mode(src: &File, out: &File) -> io::Result<()> {
     out.set_permissions(src.metadata()?.permissions())
 }
 
-/// `fclonefileat` makes `dst` itself, atomically, so a failure leaves nothing behind. Mode,
-/// ACLs and extended attributes come with the clone; the owner is the caller.
+/// `fclonefileat` (APFS), in `hive::macos` with the rest of the macOS-only code.
 #[cfg(target_os = "macos")]
-fn clone_file(src: &File, dst: &Path) -> io::Result<()> {
-    use std::ffi::CString;
-    use std::os::fd::AsRawFd;
-    use std::os::unix::ffi::OsStrExt;
-    // `<sys/clonefile.h>`; the libc crate does not define it.
-    const CLONE_NOOWNERCOPY: u32 = 0x0002;
-    let dst = CString::new(dst.as_os_str().as_bytes()).map_err(io::Error::other)?;
-    // SAFETY: `src` is an open descriptor and `dst` a NUL-terminated string, both alive until
-    // the call returns.
-    let done = unsafe {
-        libc::fclonefileat(
-            src.as_raw_fd(),
-            libc::AT_FDCWD,
-            dst.as_ptr(),
-            CLONE_NOOWNERCOPY,
-        )
-    };
-    nix::errno::Errno::result(done)
-        .map(drop)
-        .map_err(io::Error::from)
-}
+use crate::macos::clone_file;
+
+/// Windows has no clone Hive uses: every file is a plain copy.
+#[cfg(windows)]
+use crate::windows::clone_file;
 
 /// `FICLONE` clones into a file already open, so a new `dst` is made first and removed again
 /// when the clone fails.
 #[cfg(target_os = "linux")]
 fn clone_file(src: &File, dst: &Path) -> io::Result<()> {
     let out = create_new(dst, src)?;
-    let done = mirror_mode(src, &out).and_then(|()| ficlone(src, &out));
-    if done.is_err() {
-        let _ = std::fs::remove_file(dst);
-    }
-    done
+    mirror_mode(src, &out)
+        .and_then(|()| ficlone(src, &out))
+        .inspect_err(|_| {
+            let _ = std::fs::remove_file(dst);
+        })
 }
 
 #[cfg(target_os = "linux")]
@@ -128,11 +111,6 @@ fn ficlone(src: &File, out: &File) -> io::Result<()> {
     nix::errno::Errno::result(done)
         .map(drop)
         .map_err(io::Error::from)
-}
-
-#[cfg(not(any(target_os = "macos", target_os = "linux")))]
-fn clone_file(_src: &File, _dst: &Path) -> io::Result<()> {
-    Err(io::ErrorKind::Unsupported.into())
 }
 
 #[cfg(test)]
@@ -240,13 +218,15 @@ mod tests {
         let src = dir.path().join("src");
         let data: Vec<u8> = (0..200_000u32).map(|i| (i % 251) as u8).collect();
         fs::write(&src, &data).unwrap();
-        fs::set_permissions(&src, fs::Permissions::from_mode(0o751)).unwrap();
+        // Others may write: a bit the umask takes from a new file, which only the copy of the
+        // mode gives back.
+        fs::set_permissions(&src, fs::Permissions::from_mode(0o757)).unwrap();
         let dst = dir.path().join("dst");
         System
             .copy_file(&mut File::open(&src).unwrap(), &dst)
             .unwrap();
         assert_eq!(fs::read(&dst).unwrap(), data);
-        assert_eq!(mode(&dst), 0o751);
+        assert_eq!(mode(&dst), 0o757);
         let again = System.copy_file(&mut File::open(&src).unwrap(), &dst);
         assert_eq!(again.unwrap_err().kind(), io::ErrorKind::AlreadyExists);
     }
@@ -293,19 +273,20 @@ mod tests {
         let src = dir.path().join("src");
         let data: Vec<u8> = (0..100_000u32).map(|i| (i % 241) as u8).collect();
         fs::write(&src, &data).unwrap();
-        fs::set_permissions(&src, fs::Permissions::from_mode(0o640)).unwrap();
+        // Others may write, as above: the umask would take it from a new file.
+        fs::set_permissions(&src, fs::Permissions::from_mode(0o646)).unwrap();
         let dst = dir.path().join("dst");
         let cloned = System.clone_file(&File::open(&src).unwrap(), &dst).is_ok();
         #[cfg(target_os = "macos")]
         assert!(cloned);
         // A failed clone leaves no file; a clone has the bytes and the mode.
         assert_eq!(fs::read(&dst).ok(), cloned.then(|| data.clone()));
-        assert_eq!(dst.exists().then(|| mode(&dst)), cloned.then_some(0o640));
+        assert_eq!(dst.exists().then(|| mode(&dst)), cloned.then_some(0o646));
         let other = dir.path().join("other");
         let how = copy_new(&System, File::open(&src).unwrap(), &other).unwrap();
         assert_eq!(how == Copied::Cloned, cloned);
         assert_eq!(fs::read(&other).unwrap(), data);
-        assert_eq!(mode(&other), 0o640);
+        assert_eq!(mode(&other), 0o646);
     }
 
     /// A clone refuses an existing destination and leaves it as it was.

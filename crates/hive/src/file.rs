@@ -361,15 +361,15 @@ pub(crate) fn open_plain(root: &Path, rel: &Path) -> io::Result<File> {
 /// git lists them) cost about one `openat` each instead of one per part of their path (28.9:
 /// tens of thousands of `.worktreeinclude` files). A kept folder is the one reached without a
 /// link, even if a link takes its name afterwards.
+#[cfg(unix)]
 pub(crate) struct PlainFiles {
-    #[cfg(unix)]
     root: std::os::fd::OwnedFd,
     /// The folders of the last file opened, each with its descriptor.
-    #[cfg(unix)]
     open: Vec<(std::ffi::OsString, std::os::fd::OwnedFd)>,
-    #[cfg(windows)]
-    root: PathBuf,
 }
+
+#[cfg(windows)]
+pub(crate) use crate::windows::PlainFiles;
 
 impl PlainFiles {
     /// The regular file `rel` (normal parts only) of `root`, opened for reading.
@@ -434,18 +434,6 @@ impl PlainFiles {
         let parent = self.open.last().map_or(&self.root, |(_, fd)| fd);
         let flags = READ.union(OFlag::O_NOFOLLOW).union(OFlag::O_NONBLOCK);
         Ok(File::from(openat(parent, name, flags, Mode::empty())?))
-    }
-}
-
-#[cfg(windows)]
-impl PlainFiles {
-    pub(crate) fn new(root: &Path) -> io::Result<Self> {
-        let root = root.to_path_buf();
-        Ok(Self { root })
-    }
-
-    fn open_parts(&mut self, folders: &[&OsStr], name: &OsStr) -> io::Result<File> {
-        crate::windows::open_parts(&self.root, folders, name)
     }
 }
 
