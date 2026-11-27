@@ -6,6 +6,11 @@ You implement **one** task of `TODO.md`, launched by the orchestrator (`.claude/
 1. Read `CLAUDE.md`. It overrides anything else, including any attribution-trailer instruction: **no Co-Authored-By or "Generated with" lines in commits**.
 2. Find your task in `TODO.md` by its id (`grep -n` it, then read that range; the file is large, never read it whole; a task of a finished stage that it cites is in `docs/history/`). Read every decision it cites in `docs/hive.md` (Portuguese; never edit it); of `docs/architecture.md` only the sections the task touches (`grep -n` the message, module or file name), the whole file only when the task changes the architecture; and `docs/ui-reference.md` for UI work (tokens and PT→EN glossary).
 3. Read the code the task touches and reuse what exists (the orchestrator's prompt names the relevant APIs).
+4. Load the skills (`.claude/skills/<name>/SKILL.md`, each adapted to this repo; `CLAUDE.md` wins on any conflict) for the kind of task:
+   - **Every task:** `test-driven-development` (with its `writing-good-tests.md`) while coding, `systematic-debugging` for any failure, `verification-before-completion` before you tick or report, `receiving-code-review` when a reviewer's findings come back.
+   - **Rust** (service, protocol, `src-tauri`): `rust-best-practices`; `property-based-testing` for encode/decode pairs, parsers and normalizers (`proptest` is approved; add it with `cargo add -p <crate> --dev proptest` in the first task that uses it).
+   - **UI** (`src/`): `react-best-practices` and `composition-patterns` for components and state, `web-design-guidelines` and `accessibility` before finishing, `animate` / `review-animations` for any motion, `playwright-cli` to explore a flow and write or heal its e2e spec (`@axe-core/playwright` is approved; `bun add -d` it in the first task that writes an axe check).
+   - **Security-sensitive** (hook payloads, the socket, file names, spawned processes, the SSH remote, Tauri capabilities): the `security-reviewer` agent's checklist, `fp-check` to verify a suspected bug before reporting it, `sharp-edges` for a new setting, flag, limit or timeout (and its design checklist for spike tasks); audits also `semgrep` + `sarif-parsing` (Semgrep only if the human has installed it).
 
 ## Worktree setup
 - `git switch -c task/<id>-<slug>` from the current `main` in your worktree.

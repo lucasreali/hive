@@ -74,10 +74,11 @@ test("the diff colours follow the setting, Standard or Color-blind, in One Dark 
   const view = page.getByRole("region", { name: "src/auth/session.ts" });
   await expect(view.locator(".cm-changedLine").first()).toBeVisible();
 
-  // Standard: the git status colours.
+  // Standard: the git status colours' hues, at AA contrast (28.24).
   const root = page.locator("html");
   await expect(root).toHaveAttribute("data-diff-colors", "standard");
-  expect(await color(page, "--diff-added")).toBe(await color(page, "--git-added"));
+  expect(await cssVar(page, "--diff-added")).toBe("#a4c384");
+  expect(await cssVar(page, "--diff-removed")).toBe("#f5a3a7");
   await check(page, panel, view);
   await page.screenshot({ path: "target/e2e/diff-colors-standard-dark.png" });
 
@@ -97,7 +98,8 @@ test("the diff colours follow the setting, Standard or Color-blind, in One Dark 
 
   await pick(page, "Diff colors", "Standard");
   await expect(root).toHaveAttribute("data-diff-colors", "standard");
-  await expect.poll(() => color(page, "--diff-added")).toBe(await color(page, "--git-added"));
+  await expect.poll(() => cssVar(page, "--diff-added")).toBe("#406338");
+  expect(await cssVar(page, "--diff-removed")).toBe("#a03728");
   await check(page, panel, view);
   await page.screenshot({ path: "target/e2e/diff-colors-standard-light.png" });
 });
