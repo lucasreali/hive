@@ -1,5 +1,5 @@
 import type { Settings } from "./protocol";
-import type { HiveState } from "./store";
+import type { HiveState, PanelView } from "./store";
 
 // The window's own preferences, kept in its `localStorage` between runs (not service data, #37).
 
@@ -139,6 +139,75 @@ export function saveTheme(s: HiveState, prev: HiveState): void {
   if (theme === prev.settings.appearance.theme) return;
   try {
     safeStorage()?.setItem(THEME_STORAGE, theme);
+  } catch {
+    // A full or blocked storage only loses the preference.
+  }
+}
+
+/**
+ * Where each worktree was left (28.19), remembered between runs beside the tab order (#57, a
+ * per-window preference, #37): the bar keys of the tabs it showed, the most recent last, and
+ * its right panel's view. Keyed by `placeKey` (tabs.ts).
+ */
+const PLACES_STORAGE = "hive.places";
+/** The right panel's views a saved place may name. */
+const VIEWS: readonly PanelView[] = [
+  "files",
+  "changes",
+  "comments",
+  "sessions",
+  "pulls",
+  "actions",
+  "scripts",
+];
+/** How many shown tabs each worktree remembers; the oldest are forgotten first. */
+export const HISTORY_LIMIT = 20;
+/** How many worktrees' places are remembered; the least recently changed are forgotten first. */
+export const PLACES_LIMIT = 200;
+
+export type SavedPlaces = Pick<HiveState, "tabHistory" | "panelViews">;
+
+/** `record` with `key` set to `value` and moved last, the oldest keys past the limit dropped. */
+export function remembered<T>(record: Record<string, T>, key: string, value: T): Record<string, T> {
+  const { [key]: _, ...rest } = record;
+  return Object.fromEntries([...Object.entries(rest).slice(1 - PLACES_LIMIT), [key, value]]);
+}
+
+/** A plain terminal's key names a channel of one run only (as in `savedTabOrder`). */
+const lasting = (key: unknown): key is string =>
+  typeof key === "string" && !key.startsWith("tab:") && !key.startsWith("browser:");
+
+/**
+ * The places remembered from the last run, none when unreadable: files' and sessions' tabs only,
+ * as for the tab order, and only the views the panel has.
+ */
+export function savedPlaces(storage: Pick<Storage, "getItem"> | null = safeStorage()): SavedPlaces {
+  try {
+    const saved: Partial<Record<keyof SavedPlaces, unknown>> =
+      JSON.parse(storage?.getItem(PLACES_STORAGE) ?? "{}") ?? {};
+    const entries = (record: unknown) =>
+      typeof record === "object" && record !== null
+        ? Object.entries(record).slice(-PLACES_LIMIT)
+        : [];
+    const tabs = entries(saved.tabHistory).flatMap(([place, keys]): [string, string[]][] => {
+      const kept = Array.isArray(keys) ? keys.filter(lasting).slice(-HISTORY_LIMIT) : [];
+      return kept.length > 0 ? [[place, kept]] : [];
+    });
+    const views = entries(saved.panelViews).filter((e): e is [string, PanelView] =>
+      VIEWS.includes(e[1] as PanelView),
+    );
+    return { tabHistory: Object.fromEntries(tabs), panelViews: Object.fromEntries(views) };
+  } catch {
+    return { tabHistory: {}, panelViews: {} };
+  }
+}
+
+/** Remembers the places whenever they change. */
+export function savePlaces(s: HiveState, prev: HiveState): void {
+  if (s.tabHistory === prev.tabHistory && s.panelViews === prev.panelViews) return;
+  const { tabHistory, panelViews } = s;
+  try {
+    safeStorage()?.setItem(PLACES_STORAGE, JSON.stringify({ tabHistory, panelViews }));
   } catch {
     // A full or blocked storage only loses the preference.
   }

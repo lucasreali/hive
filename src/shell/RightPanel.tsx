@@ -21,6 +21,7 @@ import {
   useEffect,
   useId,
   useMemo,
+  useReducer,
   useRef,
   useState,
 } from "react";
@@ -96,6 +97,7 @@ import {
 } from "./icons";
 import { Markdown } from "./Markdown";
 import { PullsView } from "./PullsView";
+import { keepViewPlace, useKeptScroll, viewKey, viewPlace } from "./panelPlace";
 import { RunsView } from "./RunsView";
 import { ResizeHandle } from "./resize";
 import { ScriptsView } from "./ScriptsView";
@@ -907,7 +909,17 @@ function FileTree({ worktree, changedOnly }: { worktree: string; changedOnly: bo
     () => fileRows(worktree, root, collapsed, changedOnly ? "changes" : "files"),
     [worktree, root, collapsed, changedOnly],
   );
-  const [active, setActive] = useState(0);
+  // Its active row and scroll, as this view of this worktree was left (28.19).
+  const host = useHive((s) => s.host);
+  const place = viewKey(changedOnly ? "changes" : "files", host, worktree);
+  const [, rendered] = useReducer((n: number) => n + 1, 0);
+  const kept = viewPlace(place);
+  const keptAt = kept?.row === undefined ? -1 : rows.findIndex((r) => r.key === kept.row);
+  const active = keptAt >= 0 ? keptAt : (kept?.index ?? 0);
+  const setActive = (index: number) => {
+    keepViewPlace(place, { row: rows[index]?.key, index });
+    rendered();
+  };
   const scroller = useRef<HTMLDivElement>(null);
   const id = useId();
   const virtual = useVirtualizer({
@@ -916,6 +928,8 @@ function FileTree({ worktree, changedOnly }: { worktree: string; changedOnly: bo
     estimateSize: () => 22,
     overscan: 8,
   });
+  // After the virtualizer's, whose own effect starts it at the top.
+  const onScroll = useKeptScroll(place, scroller, changedOnly ? !!changes : !!listing);
   const at = Math.min(active, rows.length - 1);
   // The Diff tab opens a file as its diff; the Files tab as editable text (#31).
   const pick = (row: FileRow) =>
@@ -939,10 +953,11 @@ function FileTree({ worktree, changedOnly }: { worktree: string; changedOnly: bo
     moved === null ? -1 : rows.findIndex((r) => (r.kind === "folder" ? r.path : r.key) === moved);
   useEffect(() => {
     if (movedAt < 0) return;
-    setActive(movedAt);
+    keepViewPlace(place, { row: rows[movedAt]?.key, index: movedAt });
+    rendered();
     virtual.scrollToIndex(movedAt);
     useHive.setState({ movedRow: null });
-  }, [movedAt, virtual]);
+  }, [movedAt, virtual, place, rows]);
   const onKeyDown = (event: KeyboardEvent) => {
     const row = rows[at];
     if (!row) return;
@@ -968,6 +983,7 @@ function FileTree({ worktree, changedOnly }: { worktree: string; changedOnly: bo
     <div
       className="files-tree hive-scroll"
       ref={scroller}
+      onScroll={onScroll}
       data-file-drop={drag.over === ""}
       {...(changedOnly ? {} : drag.handlers)}
     >

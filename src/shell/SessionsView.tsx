@@ -37,6 +37,7 @@ import {
 } from "../store";
 import { transport } from "../transport";
 import { ICON, RefreshIcon, StateIcon } from "./icons";
+import { useKeptScroll, viewKey } from "./panelPlace";
 import { leaveFile } from "./RightPanel";
 import { SearchField } from "./SearchField";
 import { Submenu } from "./TerminalArea";
@@ -103,6 +104,8 @@ export function SessionsView({ worktree }: { worktree: string }) {
     estimateSize: () => 72,
     overscan: 6,
   });
+  // Its scroll, as this worktree's sessions were left (28.19).
+  const onScroll = useKeptScroll(viewKey("sessions", host, worktree), scroller, sessions !== null);
   const scrolled = useRef<SessionFocus | null>(null);
   useEffect(() => {
     if (focusAt < 0 || scrolled.current === focus) return;
@@ -135,7 +138,7 @@ export function SessionsView({ worktree }: { worktree: string }) {
       {focus && !listsFocus(sessions ?? [], worktree, focus) && (
         <FocusFrom focus={focus} worktree={worktree} sessions={sessions ?? []} />
       )}
-      <div className="sessions hive-scroll" ref={scroller}>
+      <div className="sessions hive-scroll" ref={scroller} onScroll={onScroll}>
         <ul aria-label="Sessions" style={{ height: virtual.getTotalSize(), position: "relative" }}>
           {sessions && shown.length === 0 && (
             <li className="hint">No Claude sessions in this worktree.</li>
