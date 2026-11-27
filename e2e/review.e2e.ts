@@ -17,7 +17,7 @@ async function recordWrites(page: Page): Promise<() => Promise<string[]>> {
   return () => page.evaluate(() => (window as unknown as { writes: string[] }).writes);
 }
 
-test("review comments on the diff are kept, listed, pasted into the terminal and resolved", async ({
+test("review comments on the diff are kept, listed, pasted into the agent and resolved", async ({
   page,
 }) => {
   await page.goto("/");
@@ -26,6 +26,10 @@ test("review comments on the diff are kept, listed, pasted into the terminal and
   await page.getByTitle("New terminal or file").click();
   await page.getByRole("menuitem", { name: "Terminal" }).click();
   await expect(page.locator(".terminal-pane:visible textarea")).toBeFocused();
+  // Claude runs in it: comments go to an agent (28.21).
+  await page.keyboard.type("claude");
+  await page.keyboard.press("Enter");
+  await expect(tree.locator(".tree-row.agent")).toHaveCount(1);
   // The program in the terminal asks for bracketed paste, as Claude Code does.
   await page.evaluate(async () => {
     const url = "/src/terminals.ts";

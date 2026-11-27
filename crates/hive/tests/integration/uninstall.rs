@@ -266,7 +266,7 @@ async fn the_app_uninstalls_hive_after_its_terminals_ended() {
     };
     let report = Control::StatuslineUsage {
         claude_dir: home.path(".claude").display().to_string(),
-        usage: window,
+        usage: Some(window),
         week: None,
     };
     hook.send(0, report).await;

@@ -146,3 +146,41 @@ test("settings: Accounts fits the dialog narrow and wide, no button clipped (22.
     expect(Math.abs(chars - Math.round(chars))).toBeLessThan(0.05);
   }
 });
+
+// 28.18: with two spaces, Settings → Projects groups the projects by space, the current first.
+test("settings: the Project select groups the projects by space", async ({ page }) => {
+  await page.goto("/");
+  const tree = page.getByRole("navigation", { name: "Projects" });
+  await tree.getByRole("combobox", { name: "Space" }).click();
+  await page.getByRole("option", { name: "New space…" }).click();
+  const spaceDialog = page.getByRole("dialog", { name: "New space" });
+  await spaceDialog.getByLabel("Name", { exact: true }).fill("Work");
+  await spaceDialog.getByLabel("Name", { exact: true }).press("Enter");
+  await expect(spaceDialog).toHaveCount(0);
+  await page.keyboard.press(`${mod}+Shift+O`);
+  const add = page.getByRole("dialog", { name: "Add project" });
+  await add.getByLabel("Folder", { exact: true }).fill("/home/user/dotfiles");
+  await expect(add.getByRole("button", { name: /^Add project/ })).toBeEnabled();
+  await add.getByLabel("Folder", { exact: true }).press("Enter");
+  await expect(add).toHaveCount(0);
+
+  await page.keyboard.press(`${mod}+Comma`);
+  const dialog = page.getByRole("dialog", { name: "Settings" });
+  await dialog.getByRole("button", { name: "Projects" }).click();
+  const select = dialog.getByRole("combobox", { name: "Project" });
+  await expect(select).toHaveText("dotfiles");
+  await select.click();
+  const groups = page.getByRole("listbox").getByRole("group");
+  await expect(groups.locator(".select-group")).toHaveText(["Work", "Default"]);
+  await expect(groups.first().getByRole("option")).toHaveText(["dotfiles"]);
+  await expect(groups.nth(1).getByRole("option", { name: "dotfiles" })).toHaveCount(0);
+  await expect(groups.nth(1).getByRole("option", { name: "shop", exact: true })).toBeVisible();
+  await page.screenshot({ path: "target/e2e/settings-project-groups.png" });
+  // ↓ goes from Work's last project to Default's first, past its label.
+  await page.keyboard.press("ArrowDown");
+  const firstOther = await groups.nth(1).getByRole("option").first().getAttribute("id");
+  await expect(select).toHaveAttribute("aria-activedescendant", firstOther as string);
+  const name = (await groups.nth(1).getByRole("option").first().textContent()) ?? "";
+  await page.keyboard.press("Enter");
+  await expect(select).toHaveText(name);
+});

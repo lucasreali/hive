@@ -1,10 +1,12 @@
 import { afterEach, expect, mock, spyOn, test } from "bun:test";
 import { type HiveState, initialState, useHive } from "../store";
 import { transport } from "../transport";
-import { reference, referenceTarget, sendReference } from "./reference";
+import { noSelection, reference, referenceTarget, sendReference } from "./reference";
+import { savePick } from "./target";
 
 afterEach(() => {
   mock.restore();
+  window.localStorage.clear();
   useHive.setState(initialState, true);
 });
 
@@ -19,63 +21,51 @@ test("a reference names the path and its lines, with a trailing space", () => {
 });
 
 const wt = "/home/u/shop";
+const agent = (id: string, terminal: number) => ({
+  id,
+  terminal,
+  project: wt,
+  worktree: wt,
+  cwd: wt,
+});
+// Tab 2, active, is a plain terminal of the worktree (a dev server); 1 and 3 run its agents.
 const ready: Partial<HiveState> = {
   openFile: { worktree: wt, path: "src/a.ts" },
   selectedLines: { from: 3, to: 5 },
-  tabs: [
-    { id: 1, cwd: "/home/u/other" },
-    { id: 2, cwd: wt },
-  ],
+  tabs: [1, 2, 3].map((id) => ({ id, cwd: wt })),
   activeTab: 2,
+  agents: { a: agent("a", 1) },
 };
-const target = (patch: Partial<HiveState>) =>
-  referenceTarget({ ...initialState, ...ready, ...patch });
+const target = (patch: Partial<HiveState>, chosen?: number) =>
+  referenceTarget({ ...initialState, ...ready, ...patch }, chosen);
+const text = "@src/a.ts (lines 3–5) ";
 
-test("the target is the active terminal of the open file's worktree", () => {
-  expect(target({})).toEqual({ terminal: 2, text: "@src/a.ts (lines 3–5) " });
-  const agent = { id: "s", terminal: 1, project: null, worktree: wt, cwd: null };
-  // An agent placed by the service in the file's worktree counts, wherever its tab opened.
-  expect(target({ activeTab: 1, agents: { s: agent } })).toEqual({
-    terminal: 1,
-    text: "@src/a.ts (lines 3–5) ",
-  });
-  expect(target({ agents: { s: { ...agent, terminal: 2, worktree: null } } })).toEqual({
-    why: "The active terminal is in another worktree",
-  });
-  // A terminal opened in a subfolder or through a link: where the service placed it.
-  const placed = { id: 1, exited: false, code: null, unhooked: false, worktree: wt, account: null };
-  expect(target({ activeTab: 1, terminals: { 1: placed } })).toEqual({
-    terminal: 1,
-    text: "@src/a.ts (lines 3–5) ",
-  });
+test("the target is an agent of the file's worktree, never the active plain terminal", () => {
+  expect(target({})).toEqual({ terminal: 1, text });
+  const two = { a: agent("a", 1), b: agent("b", 3) };
+  expect(target({ agents: two })).toEqual({ terminal: 1, text });
+  expect(target({ agents: two }, 3)).toEqual({ terminal: 3, text });
+  savePick(wt, "b");
+  expect(target({ agents: two })).toEqual({ terminal: 3, text });
 });
 
-test("without selected lines or a live terminal in that worktree, it says why", () => {
+test("without selected lines or an agent in that worktree, it says why", () => {
   expect(target({ selectedLines: null })).toEqual({ why: "Select lines to send their reference" });
   expect(target({ openFile: null })).toEqual({ why: "Select lines to send their reference" });
-  expect(target({ activeTab: null })).toEqual({ why: "No terminal open" });
-  const exited = { id: 2, exited: true, code: 0, unhooked: false, worktree: wt, account: null };
-  expect(target({ terminals: { 2: exited } })).toEqual({
-    why: "The terminal has exited",
-  });
-  expect(target({ activeTab: 1 })).toEqual({ why: "The active terminal is in another worktree" });
+  expect(noSelection({ openFile: null, selectedLines: null })).toBe(
+    "Select lines to send their reference",
+  );
+  expect(noSelection({ ...initialState, ...ready })).toBeNull();
+  expect(target({ agents: {} })).toEqual({ why: "No agent in this worktree" });
+  expect(target({}, 2)).toEqual({ why: "That agent has ended" });
 });
 
-test("sending puts the terminal in front of the file", () => {
-  const write = spyOn(transport, "writeTerminal").mockImplementation(async () => {});
-  useHive.setState({ ...ready, fileShown: true });
-  sendReference();
-  expect(write).toHaveBeenCalled();
-  expect(useHive.getState().fileShown).toBe(false);
-  write.mockRestore();
-});
-
-test("sending writes the reference as input, without Enter, only when it can", () => {
+test("sending writes the reference as input, without Enter, and shows the agent's tab", () => {
   const write = spyOn(transport, "writeTerminal").mockImplementation(async () => {});
   sendReference();
   expect(write).not.toHaveBeenCalled();
   useHive.setState({ ...ready, fileShown: true });
   sendReference();
-  expect(write).toHaveBeenCalledWith(2, "@src/a.ts (lines 3–5) ");
-  expect(useHive.getState().fileShown).toBe(false);
+  expect(write).toHaveBeenCalledWith(1, text);
+  expect(useHive.getState()).toMatchObject({ fileShown: false, activeTab: 1 });
 });

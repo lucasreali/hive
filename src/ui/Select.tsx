@@ -1,9 +1,22 @@
 import { CaretDownIcon } from "@phosphor-icons/react";
-import { type KeyboardEvent, useEffect, useId, useLayoutEffect, useRef, useState } from "react";
+import {
+  Fragment,
+  type KeyboardEvent,
+  useEffect,
+  useId,
+  useLayoutEffect,
+  useRef,
+  useState,
+} from "react";
 import { CheckIcon } from "../shell/icons";
 
 /** An option; a `disabled` one shows but cannot be picked; `title` is its tooltip. */
 export type SelectOption = { value: string; label: string; disabled?: boolean; title?: string };
+/**
+ * A labelled group of options (28.18); the label is never an option, so the keys and type-ahead
+ * skip it. The same value may appear in several groups: each is the same choice.
+ */
+export type SelectGroup = { group: string; options: SelectOption[] };
 
 /** How long a pause in typing starts a new type-ahead search. */
 export const TYPE_AHEAD_MS = 500;
@@ -46,14 +59,15 @@ export function placeList(
  */
 export function Select(props: {
   value: string;
-  options: SelectOption[];
+  options: (SelectOption | SelectGroup)[];
   onChange: (value: string) => void;
   "aria-label"?: string;
   "aria-labelledby"?: string;
   disabled?: boolean;
   className?: string;
 }) {
-  const { value, options, onChange } = props;
+  const { value, onChange } = props;
+  const options = props.options.flatMap((o) => ("group" in o ? o.options : [o]));
   const current = Math.max(
     0,
     options.findIndex((o) => o.value === value),
@@ -144,6 +158,29 @@ export function Select(props: {
     e.preventDefault();
   };
 
+  const option = ({ o, at }: { o: SelectOption; at: number }) => (
+    // biome-ignore lint/a11y/useKeyWithClickEvents: the trigger handles the keys.
+    <div
+      key={at}
+      id={`${id}-${at}`}
+      role="option"
+      tabIndex={-1}
+      aria-selected={o.value === options[current]?.value}
+      aria-disabled={o.disabled || undefined}
+      title={o.title}
+      data-active={at === active}
+      onMouseMove={() => setActive(at)}
+      onClick={() => choose(at)}
+    >
+      <span className="select-value">{o.label}</span>
+      {o.value === options[current]?.value && (
+        <span className="select-check">
+          <CheckIcon />
+        </span>
+      )}
+    </div>
+  );
+
   const listId = `${id}-list`;
   return (
     <div className={props.className ? `select ${props.className}` : "select"}>
@@ -185,30 +222,43 @@ export function Select(props: {
           // The focus stays on the trigger.
           onMouseDown={(e) => e.preventDefault()}
         >
-          {options.map((o, at) => (
-            // biome-ignore lint/a11y/useKeyWithClickEvents: the trigger handles the keys.
-            <div
-              key={o.value}
-              id={`${id}-${at}`}
-              role="option"
-              tabIndex={-1}
-              aria-selected={at === current}
-              aria-disabled={o.disabled || undefined}
-              title={o.title}
-              data-active={at === active}
-              onMouseMove={() => setActive(at)}
-              onClick={() => choose(at)}
-            >
-              <span className="select-value">{o.label}</span>
-              {at === current && (
-                <span className="select-check">
-                  <CheckIcon />
-                </span>
-              )}
-            </div>
-          ))}
+          {groups(props.options).map((g, k) =>
+            g.label === null ? (
+              // biome-ignore lint/suspicious/noArrayIndexKey: runs are only told apart by place.
+              <Fragment key={k}>{g.items.map(option)}</Fragment>
+            ) : (
+              // biome-ignore lint/suspicious/noArrayIndexKey: groups are only told apart by place.
+              // biome-ignore lint/a11y/useSemanticElements: a listbox's groups are role="group" (ARIA).
+              <div key={k} role="group" aria-labelledby={`${id}-g${k}`}>
+                <div id={`${id}-g${k}`} className="select-group" role="presentation">
+                  {g.label}
+                </div>
+                {g.items.map(option)}
+              </div>
+            ),
+          )}
         </div>
       )}
     </div>
   );
+}
+
+/**
+ * The options in runs to render: each group under its label, the options outside a group in
+ * runs with none; each option with its place in the flat list the keys move through.
+ */
+function groups(items: (SelectOption | SelectGroup)[]) {
+  const runs: { label: string | null; items: { o: SelectOption; at: number }[] }[] = [];
+  let at = 0;
+  for (const item of items) {
+    if ("group" in item) {
+      runs.push({ label: item.group, items: item.options.map((o) => ({ o, at: at++ })) });
+    } else {
+      const last = runs[runs.length - 1];
+      const run = last?.label === null ? last : { label: null, items: [] };
+      if (run !== last) runs.push(run);
+      run.items.push({ o: item, at: at++ });
+    }
+  }
+  return runs;
 }

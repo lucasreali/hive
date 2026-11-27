@@ -293,3 +293,85 @@ test("an unknown value shows the first option; disabled and a class pass through
   expect(trigger.getAttribute("aria-labelledby")).toBe("l");
   expect(trigger.parentElement?.className).toBe("select compact");
 });
+
+// 28.18: labelled groups; the labels are not options, and the same value may be in two groups.
+test("groups show under their labels; keys and type-ahead skip the labels", () => {
+  const changed = mock((_: string) => {});
+  const options = [
+    { value: "none", label: "None" },
+    { value: "all", label: "All" },
+    {
+      group: "Work",
+      options: [
+        { value: "hive", label: "hive" },
+        { value: "one", label: "one" },
+      ],
+    },
+    {
+      group: "Home",
+      options: [
+        { value: "hive", label: "hive" },
+        { value: "garden", label: "garden" },
+      ],
+    },
+    { value: "other", label: "Other" },
+  ];
+  render(<Select aria-label="Project" value="hive" options={options} onChange={changed} />);
+  const trigger = screen.getByRole("combobox", { name: "Project" });
+  expect(trigger.textContent).toBe("hive");
+  key(trigger, "ArrowDown");
+  const groups = screen.getAllByRole("group");
+  expect(groups.map((g) => g.getAttribute("aria-labelledby"))).toEqual(
+    groups.map((g) => g.firstElementChild?.id ?? null),
+  );
+  expect(groups.map((g) => g.firstElementChild?.textContent)).toEqual(["Work", "Home"]);
+  expect(groups.map((g) => screen.getByRole("listbox").contains(g))).toEqual([true, true]);
+  const shown = screen.getAllByRole("option");
+  expect(shown.map((o) => o.textContent)).toEqual([
+    "None",
+    "All",
+    "hive",
+    "one",
+    "hive",
+    "garden",
+    "Other",
+  ]);
+  // The value is selected in both groups; the active option starts on its first.
+  expect(shown.map((o) => o.getAttribute("aria-selected"))).toEqual([
+    "false",
+    "false",
+    "true",
+    "false",
+    "true",
+    "false",
+    "false",
+  ]);
+  expect(shown.filter((o) => o.querySelector(".select-check")).length).toBe(2);
+  expect(active(trigger)).toBe("hive");
+  // ↓ from Work's last option goes to Home's first, past its label; ↑ comes back.
+  key(trigger, "ArrowDown");
+  key(trigger, "ArrowDown");
+  expect(document.getElementById(trigger.getAttribute("aria-activedescendant") ?? "")).toBe(
+    shown[4],
+  );
+  key(trigger, "ArrowUp");
+  expect(active(trigger)).toBe("one");
+  // Type-ahead finds options only, never a label ("Work", "Home").
+  const now = spyOn(Date, "now").mockReturnValue(10_000);
+  key(trigger, "h");
+  expect(document.getElementById(trigger.getAttribute("aria-activedescendant") ?? "")).toBe(
+    shown[4],
+  );
+  now.mockReturnValue(20_000);
+  key(trigger, "w");
+  expect(document.getElementById(trigger.getAttribute("aria-activedescendant") ?? "")).toBe(
+    shown[4],
+  );
+  // Picking the same project in the other group changes nothing; another option does.
+  key(trigger, "Enter");
+  expect(changed).not.toHaveBeenCalled();
+  fireEvent.mouseDown(trigger);
+  fireEvent.click(screen.getByRole("option", { name: "garden" }));
+  expect(changed).toHaveBeenCalledWith("garden");
+  now.mockRestore();
+});

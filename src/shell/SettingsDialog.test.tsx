@@ -13,11 +13,12 @@ import {
   MOCK_ACCOUNTS_DIR,
   MOCK_CLAUDE_DIR,
   MOCK_DIAGNOSTICS,
+  MOCK_GROUP,
   MOCK_REPOS,
   MOCK_SHARED,
 } from "../transport/mock";
 import { isMac } from "../window";
-import { SECTIONS } from "./SettingsDialog";
+import { projectChoices, SECTIONS } from "./SettingsDialog";
 
 detachAfterAll();
 
@@ -337,6 +338,85 @@ test("the projects section edits each project's scripts", async () => {
   fireEvent.mouseDown(screen.getByRole("combobox", { name: "Project" }));
   fireEvent.click(screen.getByRole("option", { name: api.name }));
   expect(input("Archive script").value).toBe("");
+});
+
+// 28.18: the Project select lists the projects grouped by space, the current space's first.
+const NO_ENV = { git_name: null, git_email: null, gh_account: null, claude_account: null };
+const space = (id: string, name: string, projects: string[]) => ({
+  id,
+  name,
+  projects,
+  env: NO_ENV,
+});
+
+test("the projects are grouped by space, the current one's first, a shared project in each", () => {
+  const [shop, api, dotfiles] = MOCK_REPOS;
+  const [work, backend, frontend] = MOCK_GROUP;
+  const all = [shop, api, dotfiles, work, backend, frontend];
+  const projects = Object.fromEntries(all.map((p) => [p.id, p]));
+  const options = (...ps: typeof all) => ps.map((p) => ({ value: p.id, label: p.name }));
+  // Until the spaces arrive: one flat list, in the service's order.
+  expect(projectChoices({ projects, spaces: null, currentSpace: null })).toEqual(options(...all));
+  expect(projectChoices({ projects: null, spaces: null, currentSpace: null })).toEqual([]);
+  const spaces = [
+    space("default", "Default", [shop.id, dotfiles.id]),
+    space("job", "Job", [work.id, shop.id]),
+    space("empty", "Empty", []),
+  ];
+  // The current space first; a group's repositories with it; an empty space has no group; a
+  // project in no space last.
+  expect(projectChoices({ projects, spaces, currentSpace: "job" })).toEqual([
+    { group: "Job", options: options(shop, work, backend, frontend) },
+    { group: "Default", options: options(shop, dotfiles) },
+    { group: "No space", options: options(api) },
+  ]);
+  expect(projectChoices({ projects, spaces, currentSpace: "default" })[0]).toEqual({
+    group: "Default",
+    options: options(shop, dotfiles),
+  });
+});
+
+test("Settings → Projects shows the groups; a shared project is the same pick in each", () => {
+  open();
+  const [shop, api, dotfiles] = MOCK_REPOS;
+  act(() => apply({ type: "projects", projects: [shop, api, dotfiles] }));
+  act(() =>
+    apply({
+      type: "spaces",
+      spaces: [
+        space("default", "Default", [api.id, shop.id]),
+        space("job", "Job", [dotfiles.id, shop.id]),
+      ],
+      current: "job",
+    }),
+  );
+  section("Projects");
+  const select = screen.getByRole("combobox", { name: "Project" });
+  // The current space's first project is the one shown.
+  expect(select.textContent).toBe(shop.name);
+  fireEvent.mouseDown(select);
+  const groups = screen.getAllByRole("group");
+  expect(groups.map((g) => g.firstElementChild?.textContent)).toEqual(["Job", "Default"]);
+  expect(
+    groups.map((g) =>
+      within(g)
+        .getAllByRole("option")
+        .map((o) => o.textContent),
+    ),
+  ).toEqual([
+    [shop.name, dotfiles.name],
+    [shop.name, api.name],
+  ]);
+  fireEvent.click(within(groups[1]).getByRole("option", { name: api.name }));
+  expect(select.textContent).toBe(api.name);
+  // The shared project picked in the other group is the same project, selected in both.
+  fireEvent.mouseDown(select);
+  fireEvent.click(within(screen.getAllByRole("group")[1]).getByRole("option", { name: shop.name }));
+  expect(select.textContent).toBe(shop.name);
+  fireEvent.mouseDown(select);
+  expect(
+    screen.getAllByRole("option", { name: shop.name }).map((o) => o.getAttribute("aria-selected")),
+  ).toEqual(["true", "true"]);
 });
 
 test("a new account's folder example is a home folder of the platform (18.25)", () => {

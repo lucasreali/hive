@@ -33,6 +33,12 @@ test("the tooltip adds each window's pace only when the service forecasts a limi
     "Week 41% · resets Mon 09:00",
     "At this pace: limit Sun 18:00",
   ]);
+  // Either window alone (28.1): only its lines.
+  expect(usageLines(null, week, { session: null, week: at(27, 18) })).toEqual([
+    "Week 41% · resets Mon 09:00",
+    "At this pace: limit Sun 18:00",
+  ]);
+  expect(usageLines(null, null, none)).toEqual([]);
   // No week, no week pace.
   expect(usageLines(usage, null, { session: at(28, 13, 50), week: at(27, 18) })).toEqual([
     "Session 42% · resets 14:30",

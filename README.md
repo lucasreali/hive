@@ -34,7 +34,7 @@ The most urgent state wins: a subagent waiting for permission puts its agent in 
 
 **Files, diff and editor.** The side panel (Files | Diff | Sessions | PRs | Actions) shows the worktree's files and git changes, updated live while the agent works. Files open in CodeMirror 6 with a read-only diff against `HEAD`, or against where the worktree's branch left the main branch. You can edit and save: the save is refused if the file changed on disk since you opened it, and a clean buffer reloads by itself. File search by name or content.
 
-**Code references.** Select lines in the viewer or the diff and press **Ctrl+Shift+L**: Hive types `@src/checkout/validators.ts (lines 44–46)` into the active terminal (no Enter).
+**Code references.** Select lines in the viewer or the diff and press **Ctrl+Shift+L**: Hive types `@src/checkout/validators.ts (lines 44–46)` into an agent of that worktree (no Enter; with several agents the file view's button lets you pick one).
 
 **Session history.** The Sessions tab lists the Claude sessions of the shown worktree, including sessions run outside Hive, with their state. Resume one, fork it into a new session, copy its resume command or ID, open its log, or delete it.
 
