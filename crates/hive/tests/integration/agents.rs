@@ -1551,3 +1551,96 @@ async fn terminals_echo_while_agents_are_being_placed() {
     drop(app);
     assert!(daemon.wait_exit().success());
 }
+
+/// `hive agents [--json]` in `repo`'s environment.
+fn hive_agents(repo: &Repo, args: &[&str]) -> std::process::Output {
+    repo.env.hive().arg("agents").args(args).output().unwrap()
+}
+
+#[tokio::test]
+async fn hive_agents_lists_the_live_agents_without_touching_them() {
+    let repo = Repo::new();
+    assert!(repo.hive(&["create", "fix-a"]).status.success());
+    let root = repo.root.display().to_string();
+    let fix_a = format!("{root}/.claude/worktrees/fix-a");
+    let mut daemon = repo.env.daemon();
+    let mut app = repo.env.connect(Role::App).await;
+    app.send(0, Control::AddProject { path: root.clone() })
+        .await;
+    assert!(matches!(
+        app.control().await,
+        (0, Control::ProjectAdded { .. })
+    ));
+    // None yet.
+    let out = hive_agents(&repo, &["--json"]);
+    assert!(out.status.success(), "{out:?}");
+    assert_eq!(String::from_utf8_lossy(&out.stdout), "{\"agents\":[]}\n");
+    let out = hive_agents(&repo, &[]);
+    assert!(out.status.success() && out.stdout.is_empty(), "{out:?}");
+
+    app.open_terminal(1, &repo.root).await;
+    app.open_terminal(2, &repo.root).await;
+    let home = repo.env.path("home").display().to_string();
+    // Detected in the other order: listed in terminal order.
+    let outside = json!({"session_id": "s2", "cwd": home});
+    hook(&repo, &mut app, "2", "SessionStart", outside).await;
+    let start = json!({"session_id": "s1", "cwd": fix_a});
+    hook(&repo, &mut app, "1", "SessionStart", start).await;
+    let prompt = json!({"session_id": "s1"});
+    hook(&repo, &mut app, "1", "UserPromptSubmit", prompt).await;
+
+    let out = hive_agents(&repo, &["--json"]);
+    assert!(out.status.success(), "{out:?}");
+    assert!(out.stderr.is_empty());
+    let stdout = String::from_utf8(out.stdout).unwrap();
+    assert!(
+        stdout.ends_with("}\n") && stdout.lines().count() == 1,
+        "{stdout}"
+    );
+    let mut listed: Value = serde_json::from_str(&stdout).unwrap();
+    // Wall clock times: only checked to be there.
+    for agent in listed["agents"].as_array_mut().unwrap() {
+        assert!(agent["since_ms"].as_u64().unwrap() > 0, "{agent}");
+        agent["since_ms"] = json!(0);
+    }
+    let agent = |id: &str, terminal: u32, place: Option<(&str, &str)>, cwd: &str, state: &str| {
+        json!({
+            "id": id, "terminal": terminal,
+            "project": place.map(|p| p.0), "worktree": place.map(|p| p.1), "cwd": cwd,
+            "title": null, "state": state, "pending": false, "since_ms": 0,
+            "activity": null, "subagents": [], "usage": null,
+        })
+    };
+    assert_eq!(
+        listed,
+        json!({"agents": [
+            agent("s1", 1, Some((&root, &fix_a)), &fix_a, "working"),
+            agent("s2", 2, None, &home, "idle"),
+        ]})
+    );
+    let out = hive_agents(&repo, &[]);
+    assert!(out.status.success(), "{out:?}");
+    assert_eq!(
+        String::from_utf8_lossy(&out.stdout),
+        format!("1\tworking\t{fix_a}\t-\t-\t-\n2\tidle\t{home}\t-\t-\t-\n")
+    );
+    // Read only: the app heard nothing of it.
+    assert_eq!(settled(&mut app).await, vec![]);
+    drop(app);
+    assert!(daemon.wait_exit().success());
+}
+
+#[test]
+fn hive_agents_without_a_service_exits_3() {
+    let repo = Repo::new();
+    for args in [&[][..], &["--json"]] {
+        let out = hive_agents(&repo, args);
+        assert_eq!(out.status.code(), Some(3), "{out:?}");
+        assert!(out.stdout.is_empty());
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert!(
+            stderr.starts_with("hive: no Hive service is running ("),
+            "{stderr}"
+        );
+    }
+}

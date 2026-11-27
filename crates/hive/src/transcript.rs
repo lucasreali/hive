@@ -6,7 +6,7 @@ use std::fs::File;
 use std::io::{self, BufRead, BufReader, Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 
-use hive_protocol::Control;
+use hive_protocol::{Control, ListedUsage};
 use serde_json::Value;
 
 use crate::paths::canonical;
@@ -238,6 +238,16 @@ impl Usage {
     /// answered once.
     pub fn interrupted(&mut self) -> bool {
         std::mem::take(&mut self.interrupted)
+    }
+
+    /// The last tokens sent, for `hive agents` (28.10).
+    pub fn listed(&self) -> Option<ListedUsage> {
+        let (context_tokens, context_limit, output_tokens) = self.sent?;
+        Some(ListedUsage {
+            context_tokens,
+            context_limit,
+            output_tokens,
+        })
     }
 
     /// The last `agent_usage` sent, for a newly connected app.
@@ -578,6 +588,7 @@ mod tests {
         append(&f.log, &said("hi"));
         assert_eq!(read(&mut agent), None);
         assert_eq!(agent.message("s"), None);
+        assert_eq!(agent.listed(), None);
         append(&f.log, &spent("m1", 100, 5));
         assert_eq!(read(&mut agent), usage(100, CONTEXT_LIMIT, 5));
         assert_eq!(agent.message("s"), usage(100, CONTEXT_LIMIT, 5));
@@ -588,6 +599,12 @@ mod tests {
         append(&f.log, "not json\n");
         append(&f.log, &spent("m2b", 120, 0));
         assert_eq!(read(&mut agent), usage(120, CONTEXT_LIMIT, 5));
+        let listed = ListedUsage {
+            context_tokens: 120,
+            context_limit: CONTEXT_LIMIT,
+            output_tokens: 5,
+        };
+        assert_eq!(agent.listed(), Some(listed));
         // A line still being written waits for its end.
         let next = spent("m3", 300_000, 2);
         append(&f.log, &next[..9]);

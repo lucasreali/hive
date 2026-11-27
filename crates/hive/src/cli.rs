@@ -70,6 +70,13 @@ enum Command {
         /// The bytes of JSON the rows may take.
         budget: usize,
     },
+    /// List the running service's agents: terminal, state, worktree, context, title, activity.
+    /// Read only. Exits 3 when no Hive service is running.
+    Agents {
+        /// Print `{"agents": [...]}` (documented in docs/architecture.md).
+        #[arg(long)]
+        json: bool,
+    },
     /// Manage git worktrees in `.claude/worktrees/` (Claude Code's convention).
     Worktree {
         #[command(subcommand)]
@@ -102,7 +109,11 @@ enum WorktreeCommand {
         base: Option<String>,
     },
     /// List the repository's worktrees: path and branch.
-    List,
+    List {
+        /// Print `{"worktrees": [...]}` (documented in docs/architecture.md).
+        #[arg(long)]
+        json: bool,
+    },
     /// Remove a worktree without changes; its branch is kept.
     Remove { name: String },
     /// `WorktreeCreate` hook: reads Claude Code's JSON on stdin, prints only the new path.
@@ -164,6 +175,17 @@ pub fn run() -> ExitCode {
             io::stdout().write_all(&out)
         }),
         Command::Sheets { format, budget } => crate::workbook::child(&format, budget),
+        Command::Agents { json } => block_on(async { Ok(crate::query::agents(&paths).await) })
+            .and_then(|listed| match listed {
+                Ok(agents) => {
+                    io::stdout().write_all(crate::query::render(&agents, json).as_bytes())
+                }
+                Err(failure) => {
+                    eprintln!("hive: {failure}");
+                    code = failure.code();
+                    Ok(())
+                }
+            }),
         Command::Worktree { command } => run_worktree(command, &paths),
         #[cfg(unix)]
         Command::Uninstall {
@@ -206,7 +228,11 @@ fn run_worktree(command: WorktreeCommand, paths: &Paths) -> io::Result<()> {
             created.notes.splice(0..0, fetched);
             report(created)
         }
-        WorktreeCommand::List => worktree::list(&cwd)?
+        WorktreeCommand::List { json: true } => {
+            let list = worktree::list(&cwd)?;
+            writeln!(io::stdout(), "{}", crate::query::worktrees_json(&list))
+        }
+        WorktreeCommand::List { json: false } => worktree::list(&cwd)?
             .iter()
             .try_for_each(|wt| writeln!(io::stdout(), "{wt}")),
         WorktreeCommand::Remove { name } => worktree::remove(&cwd, &name),
