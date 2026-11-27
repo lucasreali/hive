@@ -76,6 +76,7 @@ test("terminal and project actions call their commands", async () => {
   await tauriTransport.deleteSpace("w");
   await tauriTransport.selectSpace("w");
   await tauriTransport.listClaudeLogins();
+  await tauriTransport.listClaudeLogins("gpu-box");
   await tauriTransport.listGhAccounts("/g");
   await tauriTransport.switchGhAccount(null, { host: "h", login: "me" });
   await tauriTransport.getGhIdentity("/g", { host: "h", login: "me" });
@@ -153,6 +154,8 @@ test("terminal and project actions call their commands", async () => {
     ["delete_space", { id: "w" }],
     ["select_space", { id: "w" }],
     ["list_claude_logins", {}],
+    // A remote host's own accounts (27.11).
+    ["list_claude_logins", { host: "gpu-box" }],
     ["list_gh_accounts", { ghConfigDir: "/g" }],
     ["switch_gh_account", { ghConfigDir: null, account: { host: "h", login: "me" } }],
     ["get_gh_identity", { ghConfigDir: "/g", account: { host: "h", login: "me" } }],

@@ -1,6 +1,16 @@
 import { type Dispatch, type SetStateAction, useEffect, useState } from "react";
 import type { GhAccount, GhAccounts, GhIdentity, SpaceEnv, SpaceGhAccount } from "../protocol";
-import { ask, currentSpace, openModal, spaceAccount, switchedHost, useHive } from "../store";
+import {
+  ask,
+  currentSpace,
+  DEFAULT_SETTINGS,
+  type HostAccounts,
+  hostAccounts,
+  openModal,
+  spaceAccount,
+  switchedHost,
+  useHive,
+} from "../store";
 import { transport } from "../transport";
 import { Select } from "../ui/Select";
 import { HostPicker } from "./Hosts";
@@ -38,6 +48,12 @@ const NO_ENV: SpaceEnv = {
   git_email: null,
   gh_account: null,
   claude_account: null,
+};
+
+/** A remote host's accounts before it told them (27.11): only its default one. */
+const NO_ACCOUNTS: HostAccounts = {
+  default_name: DEFAULT_SETTINGS.claude.default_name,
+  accounts: [],
 };
 
 const accountKey = (a: GhAccount) => `${a.login}@${a.host}`;
@@ -150,10 +166,12 @@ function GhAccountField({ env, setEnv }: { env: SpaceEnv; setEnv: (env: SpaceEnv
  * a rename keeps it; "" is the default account.
  */
 function ClaudeAccountField({ env, setEnv }: { env: SpaceEnv; setEnv: (env: SpaceEnv) => void }) {
-  const { accounts, default_name } = useHive((s) => s.settings.claude);
+  // A remote space's are its host's own accounts (27.11), never this Mac's.
+  const host = useHive((s) => s.host);
+  const known = useHive(hostAccounts) ?? NO_ACCOUNTS;
   const options = [
-    { value: "", label: default_name },
-    ...accounts.map((a) => ({ value: a.config_dir, label: a.name })),
+    { value: "", label: known.default_name },
+    ...known.accounts.map((a) => ({ value: a.config_dir, label: a.name })),
   ];
   return (
     <div className="field">
@@ -165,8 +183,9 @@ function ClaudeAccountField({ env, setEnv }: { env: SpaceEnv; setEnv: (env: Spac
         onChange={(value) => setEnv({ ...env, claude_account: value || null })}
       />
       <p className="field-help">
-        CLAUDE_CONFIG_DIR: the account the space's terminals run Claude as. Accounts are added in
-        Settings → Accounts.
+        {host === null
+          ? "CLAUDE_CONFIG_DIR: the account the space's terminals run Claude as. Accounts are added in Settings → Accounts."
+          : `CLAUDE_CONFIG_DIR: the account the space's terminals run Claude as, one of ${host}'s own (its ~/.hive/settings.json).`}
       </p>
     </div>
   );

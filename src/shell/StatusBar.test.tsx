@@ -3,7 +3,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-libra
 import { version } from "../../package.json";
 import { asMac } from "../../test/mac";
 import { apply } from "../reduce";
-import { DEFAULT_SETTINGS, initialState, showNotice, useHive } from "../store";
+import { DEFAULT_SETTINGS, initialState, showHost, showNotice, useHive } from "../store";
 import { transport } from "../transport";
 import { MOCK_REPOS } from "../transport/mock";
 import { StatusBar } from "./StatusBar";
@@ -247,10 +247,10 @@ test("the space's account that never logged in carries one mark, whose click log
   // Until the service answers, every account counts as logged in.
   expect(mark()).toBeNull();
   const logins = (work: boolean, def = true) => [
-    { config_dir: null, logged_in: def },
-    { config_dir: "/w", logged_in: work },
+    { config_dir: null, name: "Default", logged_in: def },
+    { config_dir: "/w", name: "Work account", logged_in: work },
   ];
-  act(() => apply({ type: "claude_logins", logins: logins(false) }));
+  act(() => apply({ type: "claude_logins", logins: logins(false), claude: true }));
   // One mark right after the account's name, no text or "Log in…" button besides.
   expect(mark()?.getAttribute("aria-label")).toBe("Work account is not logged in: click to log in");
   expect(mark()?.previousElementSibling?.textContent).toBe("Work account");
@@ -275,13 +275,140 @@ test("the space's account that never logged in carries one mark, whose click log
   opened.mockRestore();
   typed.mockRestore();
   // Logged in now: no mark.
-  act(() => apply({ type: "claude_logins", logins: logins(true) }));
+  act(() => apply({ type: "claude_logins", logins: logins(true), claude: true }));
   expect(mark()).toBeNull();
   // A space of the default account, never logged in.
   act(() => {
     spaces("default");
-    apply({ type: "claude_logins", logins: logins(true, false) });
+    apply({ type: "claude_logins", logins: logins(true, false), claude: true });
   });
   expect(mark()?.getAttribute("aria-label")).toBe("Default is not logged in: click to log in");
+  ask.mockRestore();
+});
+
+// 27.11: a remote space shows its host's own Claude account, never this Mac's.
+
+const REMOTE = "visus-vps";
+/** This Mac's account, as the human's screenshot showed it in a space of `visus-vps`. */
+const MAC_ACCOUNT = {
+  accounts: [{ name: "Ai1 - Visus", config_dir: "/w" }],
+  default_name: "Default",
+  share_sessions: false,
+};
+
+/** This Mac with an account, and `visus-vps` linked and shown, its "Work" space current. */
+function remoteShown(work: string | null = "/w") {
+  apply({ type: "welcome", version: "0.1.0", distro: null });
+  apply({ type: "settings", settings: { ...DEFAULT_SETTINGS, claude: MAC_ACCOUNT } });
+  spaces("work");
+  apply({ type: "host_link", host: REMOTE, state: "connected" });
+  const space = {
+    id: "work",
+    name: "Work",
+    projects: [],
+    env: { ...NO_ENV, claude_account: work },
+  };
+  apply({ type: "spaces", spaces: [space], current: "work", host: REMOTE });
+  showHost(REMOTE);
+}
+
+/** `visus-vps`'s answer: its default account, then `named` (folder, name, logged in). */
+const hostLogins = (claude: boolean, main: boolean, ...named: [string, string, boolean][]) =>
+  apply({
+    type: "claude_logins",
+    logins: [
+      { config_dir: null, name: "Default", logged_in: main },
+      ...named.map(([config_dir, name, logged_in]) => ({ config_dir, name, logged_in })),
+    ],
+    claude,
+    host: REMOTE,
+  });
+
+const hostUsage = () =>
+  apply({ type: "session_usage", usage: { used_percentage: 7, resets_at: 1 }, host: REMOTE });
+const bar = () => screen.getByRole("contentinfo").textContent ?? "";
+const ring = () => document.querySelector(".session-usage");
+
+test("a remote space asks its host for its accounts, and never shows this Mac's (27.11)", () => {
+  const ask = spyOn(transport, "listClaudeLogins").mockResolvedValue();
+  render(<StatusBar />);
+  act(() => remoteShown());
+  // Asked of the host once it is shown and linked, again on focus.
+  const asked = () => ask.mock.calls.filter(([host]) => host === REMOTE).length;
+  expect(asked()).toBe(1);
+  act(() => {
+    window.dispatchEvent(new Event("focus"));
+  });
+  expect(asked()).toBe(2);
+  // Until it answers: neither this Mac's account nor a ring, even with the host's usage.
+  act(() => hostUsage());
+  expect(bar()).not.toContain("Ai1 - Visus");
+  expect(document.querySelector(".space-account")).toBeNull();
+  expect(ring()).toBeNull();
+  ask.mockRestore();
+});
+
+test("a remote host without claude says so, without a usage ring (27.11)", () => {
+  const ask = spyOn(transport, "listClaudeLogins").mockResolvedValue();
+  render(<StatusBar />);
+  act(() => {
+    remoteShown();
+    hostUsage();
+    hostLogins(false, false);
+  });
+  const note = screen.getByText(`No Claude on ${REMOTE}`);
+  expect(note.title).toBe(
+    `Claude Code is not installed on ${REMOTE}: install it there to run agents`,
+  );
+  expect(bar()).not.toContain("Ai1 - Visus");
+  expect(ring()).toBeNull();
+  ask.mockRestore();
+});
+
+test("a remote host with no account logged in says so, with the log-in mark and no ring (27.11)", () => {
+  const ask = spyOn(transport, "listClaudeLogins").mockResolvedValue();
+  render(<StatusBar />);
+  act(() => {
+    remoteShown(null);
+    hostUsage();
+    hostLogins(true, false);
+  });
+  const shown = document.querySelector<HTMLButtonElement>(".space-account");
+  expect(shown?.textContent).toBe(`No Claude account on ${REMOTE}`);
+  expect(shown?.title).toBe(
+    `Claude account of Work on ${REMOTE}; change it in the space's settings`,
+  );
+  const mark = screen.getByRole("button", { name: /is not logged in: click to log in$/ });
+  expect(mark).toBeDefined();
+  expect(ring()).toBeNull();
+  ask.mockRestore();
+});
+
+test("a remote space shows its host's account and usage, and this Mac's comes back (27.11)", () => {
+  const ask = spyOn(transport, "listClaudeLogins").mockResolvedValue();
+  render(<StatusBar />);
+  const mine = [{ config_dir: null, name: "Default", logged_in: true }];
+  act(() => {
+    remoteShown("/srv/.claude-work");
+    apply({ type: "claude_logins", logins: mine, claude: true });
+    hostLogins(true, true, ["/srv/.claude-work", "Server work", true]);
+    hostUsage();
+  });
+  const shown = () => document.querySelector<HTMLButtonElement>(".space-account");
+  expect(shown()?.textContent).toBe("Server work");
+  expect(bar()).not.toContain("Ai1 - Visus");
+  expect(ring()).not.toBeNull();
+  // Not logged in on the host: its mark, and no ring.
+  act(() => hostLogins(true, true, ["/srv/.claude-work", "Server work", false]));
+  expect(shown()?.textContent).toBe("Server work");
+  const name = "Server work is not logged in: click to log in";
+  expect(screen.getByRole("button", { name })).toBeDefined();
+  expect(ring()).toBeNull();
+  // The host's answer is its own: this Mac's logins stay as this Mac told them.
+  expect(useHive.getState().claudeLogins).toEqual(mine);
+  // Back on this Mac: its own account, never the host's.
+  act(() => showHost(null));
+  expect(shown()?.textContent).toBe("Ai1 - Visus");
+  expect(bar()).not.toContain("Server work");
   ask.mockRestore();
 });

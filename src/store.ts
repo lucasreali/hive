@@ -518,8 +518,14 @@ export type HiveState = {
   ghAccounts: Record<string, GhAccounts>;
   /** The last `gh_identity` or `gh_identity_failed` answer (21.5), for the space dialog. */
   ghIdentity: GhIdentity | null;
-  /** The last `claude_logins` answer (21.6); null until asked. */
+  /** The last `claude_logins` answer (21.6) of this Mac's service; null until asked. */
   claudeLogins: ClaudeLogin[] | null;
+  /**
+   * A remote host's own Claude accounts (27.11), its last `claude_logins`: the default one
+   * first, and whether it has a `claude`; null until asked, and for this Mac (whose accounts are
+   * the settings').
+   */
+  hostClaude: { logins: ClaudeLogin[]; claude: boolean } | null;
   /** The project a dialog opened for (e.g. the row's "New worktree"). */
   modalProject: string | null;
   /** The section Settings opens on (27.8: the hosts popover opens Hosts); null: its default. */
@@ -669,6 +675,7 @@ export const initialState: HiveState = {
   ghAccounts: {},
   ghIdentity: null,
   claudeLogins: null,
+  hostClaude: null,
   modalProject: null,
   settingsSection: null,
   modalWorktree: null,
@@ -775,6 +782,7 @@ export const HOST_FIELDS = [
   "projectCreated",
   "newDir",
   "spaceError",
+  "hostClaude",
   "ghAccounts",
   "ghIdentity",
   // The host's open files (26.18 review): their tabs, edit buffers, table asks and pending
@@ -1491,13 +1499,57 @@ export const spaceOf = (s: HiveState, project: string | null): Space | undefined
 export const currentSpace = (s: HiveState): Space | undefined =>
   s.spaces?.find((space) => space.id === s.currentSpace);
 
+/** The Claude accounts of a host (12.2): the default one's name, and the others. */
+export type HostAccounts = {
+  default_name: string;
+  accounts: { name: string; config_dir: string }[];
+};
+
+/** A remote's `HostAccounts`, by the `hostClaude` answer they were made of. */
+const remoteAccounts = new WeakMap<object, HostAccounts>();
+
 /**
- * The Claude account of `space` (22.5): its folder, or null for the default account (also for a
- * folder no account has, as the service takes it).
+ * The Claude accounts of the shown host (27.11): this Mac's settings', or a remote's own as its
+ * service last told them (`hostClaude`), null until it did. A remote's never are this Mac's
+ * (#45: each host keeps its own).
+ */
+export const hostAccounts = (s: HiveState): HostAccounts | null => {
+  if (s.host === null) return s.settings.claude;
+  if (s.hostClaude === null) return null;
+  // One object per answer, so a selector of it stays the same until the next one.
+  const kept = remoteAccounts.get(s.hostClaude);
+  if (kept) return kept;
+  const [first, ...rest] = s.hostClaude.logins;
+  const accounts = rest.flatMap((l) =>
+    l.config_dir === null ? [] : [{ name: l.name, config_dir: l.config_dir }],
+  );
+  const known = { default_name: first?.name ?? DEFAULT_SETTINGS.claude.default_name, accounts };
+  remoteAccounts.set(s.hostClaude, known);
+  return known;
+};
+
+/**
+ * The Claude account of `space` (22.5) on the shown host: its folder, or null for the default
+ * account (also for a folder no account has, as the service takes it); a remote's, until it
+ * told its accounts, as saved.
  */
 export const spaceAccount = (s: HiveState, space: Space | undefined): string | null => {
   const dir = space?.env.claude_account ?? null;
-  return s.settings.claude.accounts.some((a) => a.config_dir === dir) ? dir : null;
+  const known = hostAccounts(s);
+  if (known === null) return dir;
+  return known.accounts.some((a) => a.config_dir === dir) ? dir : null;
+};
+
+/**
+ * The current space's account on its remote host (27.11), as that host told it: its login, or
+ * "no-claude" when the host has no `claude`; null for this Mac, and until the host told.
+ */
+export const remoteAccount = (s: HiveState): ClaudeLogin | "no-claude" | null => {
+  if (s.host === null || s.hostClaude === null) return null;
+  if (!s.hostClaude.claude) return "no-claude";
+  const dir = spaceAccount(s, currentSpace(s));
+  const { logins } = s.hostClaude;
+  return logins.find((l) => l.config_dir === dir) ?? logins[0] ?? null;
 };
 
 /** A space's remembered place (11.5): a project, worktree or agent id, and its project. */

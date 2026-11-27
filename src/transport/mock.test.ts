@@ -1711,16 +1711,25 @@ test("the default account has logged in, and an account added in the mock has no
   await transport.listClaudeLogins();
   await tick();
   const logins = messages.filter((m) => m.type === "claude_logins");
+  const main = { config_dir: null, name: "Default", logged_in: true };
   expect(logins).toEqual([
-    { type: "claude_logins", logins: [{ config_dir: null, logged_in: true }] },
+    { type: "claude_logins", logins: [main], claude: true },
     {
       type: "claude_logins",
-      logins: [
-        { config_dir: null, logged_in: true },
-        { config_dir: "/w", logged_in: false },
-      ],
+      logins: [main, { config_dir: "/w", name: "Work", logged_in: false }],
+      claude: true,
     },
   ]);
+});
+
+test("a fake service without claude says so (27.11)", async () => {
+  const transport = createMockTransport(null, null, { claude: false });
+  const messages: ServiceMessage[] = [];
+  await transport.connect((m) => messages.push(m));
+  await tick();
+  await transport.listClaudeLogins();
+  await tick();
+  expect(messages.find((m) => m.type === "claude_logins")).toMatchObject({ claude: false });
 });
 
 test("a logged-in account's identity is its login and noreply email", async () => {
