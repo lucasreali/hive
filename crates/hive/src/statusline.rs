@@ -22,7 +22,7 @@ use crate::paths::Paths;
 
 /// Set for the user's statusline: a `hive statusline` it starts prints nothing and reports
 /// nothing, so Hive's own statusline never runs itself.
-const GUARD: &str = "HIVE_STATUSLINE";
+pub(crate) const GUARD: &str = "HIVE_STATUSLINE";
 /// How long the user's statusline may run.
 pub const TIME_LIMIT: Duration = Duration::from_secs(10);
 /// The most the user's statusline may print; past it, nothing is printed.

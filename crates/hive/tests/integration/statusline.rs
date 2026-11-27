@@ -237,6 +237,24 @@ fn a_sigterm_ends_the_users_statusline_and_prints_nothing() {
     wait_until(|| env.processes().is_empty());
 }
 
+#[tokio::test]
+async fn a_service_started_inside_a_hooked_claude_gives_its_terminals_none_of_its_guards() {
+    let env = Env::new();
+    // Started from a `claude` the wrapper ran (`HIVE_WRAPPED`) and from the user's statusline
+    // `hive statusline` ran (`HIVE_STATUSLINE`): its terminals' `claude` would skip Hive's
+    // settings, and their `hive statusline` would report nothing.
+    let mut hive = env.hive();
+    hive.env("HIVE_WRAPPED", "1").env("HIVE_STATUSLINE", "1");
+    let mut daemon = env.daemon_with(&mut hive);
+    let mut app = env.app().await;
+    app.open_terminal(1, &env.path("home")).await;
+    app.input(1, "echo \"[$HIVE_WRAPPED|$HIVE_STATUSLINE]\"\r")
+        .await;
+    app.output_until(1, "[|]").await;
+    drop(app);
+    assert!(daemon.wait_exit().success());
+}
+
 /// Claude Code's statusline input as its docs show it today (2.1.x: `rate_limits` with
 /// `five_hour`, `seven_day` and a gateway's `spend_limit`, among many other fields).
 fn current_input(now: u64) -> Value {

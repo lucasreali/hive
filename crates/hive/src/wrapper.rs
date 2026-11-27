@@ -12,6 +12,12 @@ use serde_json::{Map, Value, json};
 
 use crate::paths::{Paths, canonical};
 
+/// The variables the wrapper (`HIVE_WRAPPED`: hooks already in place) and `hive statusline`
+/// (its guard: report nothing) set for what they start. A service started from inside one of
+/// those (e.g. from an agent's shell) never hands them to its terminals (28.1): their `claude`
+/// would skip Hive's settings, and their statusline would report no usage.
+pub const GUARDS: [&str; 2] = ["HIVE_WRAPPED", crate::statusline::GUARD];
+
 /// Claude Code events Hive observes; each one runs `hive hook <event>`.
 pub const EVENTS: [&str; 16] = [
     "SessionStart",
