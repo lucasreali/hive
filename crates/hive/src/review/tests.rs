@@ -279,7 +279,8 @@ fn a_review_starts_from_the_reviewed_branchs_tip() {
     assert!(main.ends_with("review-main"), "{main}");
     // The links are kept in Hive's folder.
     let saved = std::fs::read_to_string(repo.tmp.path().join("data/reviews.json")).unwrap();
-    assert!(saved.contains(&main));
+    // As JSON writes it (a Windows path's `\` escaped).
+    assert!(saved.contains(&serde_json::to_string(&main).unwrap()));
 }
 
 #[test]
