@@ -161,15 +161,16 @@ export function StatusBar() {
   );
 }
 
-/** The ring turns the warning colour from this share of the 5-hour window (15.3). */
+/** The ring turns the warning colour from this share of the window it shows (15.3). */
 const USAGE_WARNING = 80;
 
 /** The empty ring's tooltip: no window for the current account yet (21.8). */
 const NO_USAGE = "No usage yet: it appears once an agent of this account answers";
 
 /**
- * The session (5-hour) window as a ring filled to its percentage (15.3), with "Session 42% ·
- * resets 14:30" and, when the service sent one, "Week 41% · resets Mon 09:00" as its tooltip
+ * The session (5-hour) window as a ring filled to its percentage (15.3), else the 7-day one
+ * when it came alone (28.1), with "Session 42% · resets 14:30" and "Week 41% · resets Mon
+ * 09:00", each for a window the service sent, as its tooltip
  * (on hover and keyboard focus) and accessible name, each followed by its pace when the service
  * forecasts a limit before the reset (17.23, `usageLines`, the menu bar icon's too). With none
  * (none came yet, or it reset), a dim empty ring that says so while the service is connected
@@ -183,8 +184,9 @@ function SessionUsage() {
   const remote = useHive((s) => s.host !== null);
   const account = useHive(remoteAccount);
   if (remote && (account === null || account === "no-claude" || !account.logged_in)) return null;
-  if (!usage && !connected) return null;
-  const lines = usage ? usageLines(usage, week, limits) : [NO_USAGE];
+  const shown = usage ?? week;
+  if (!shown && !connected) return null;
+  const lines = shown ? usageLines(usage, week, limits) : [NO_USAGE];
   return (
     // A button only so the keyboard reaches its tooltip (as the ARIA tooltip pattern); it does
     // nothing when pressed.
@@ -192,8 +194,8 @@ function SessionUsage() {
       type="button"
       className="session-usage"
       aria-label={lines.join(", ")}
-      data-empty={!usage || undefined}
-      data-warning={(usage && usage.used_percentage >= USAGE_WARNING) || undefined}
+      data-empty={!shown || undefined}
+      data-warning={(shown && shown.used_percentage >= USAGE_WARNING) || undefined}
     >
       <svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true">
         <circle className="usage-track" cx="7" cy="7" r="5.5" />
@@ -203,7 +205,7 @@ function SessionUsage() {
           cy="7"
           r="5.5"
           pathLength={100}
-          strokeDasharray={`${usage?.used_percentage ?? 0} 100`}
+          strokeDasharray={`${shown?.used_percentage ?? 0} 100`}
           transform="rotate(-90 7 7)"
         />
       </svg>

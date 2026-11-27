@@ -24,16 +24,20 @@ export type UsageLimits = { session: number | null; week: number | null };
 
 /**
  * The usage ring's tooltip: "Session 42% · resets 14:30", "At this pace: limit at 13:50" when
- * the service forecasts one, then the same for the week when it sent one ("Week 41% · resets
- * Mon 09:00", "At this pace: limit Sun 18:00").
+ * the service forecasts one, then the same for the week ("Week 41% · resets Mon 09:00", "At
+ * this pace: limit Sun 18:00"), each only for a window the service sent (either may come alone,
+ * 28.1).
  */
 export function usageLines(
-  usage: SessionWindow,
+  usage: SessionWindow | null,
   week: SessionWindow | null,
   limits: UsageLimits,
 ): string[] {
-  const lines = [`Session ${usage.used_percentage}% · resets ${time(usage.resets_at)}`];
-  if (limits.session !== null) lines.push(`At this pace: limit at ${time(limits.session)}`);
+  const lines: string[] = [];
+  if (usage) {
+    lines.push(`Session ${usage.used_percentage}% · resets ${time(usage.resets_at)}`);
+    if (limits.session !== null) lines.push(`At this pace: limit at ${time(limits.session)}`);
+  }
   if (week) {
     lines.push(`Week ${week.used_percentage}% · resets ${dayClock(week.resets_at)}`);
     if (limits.week !== null) lines.push(`At this pace: limit ${dayClock(limits.week)}`);

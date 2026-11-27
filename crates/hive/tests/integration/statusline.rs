@@ -176,6 +176,44 @@ async fn the_session_window_reaches_the_app_and_the_users_statusline_prints_unch
 }
 
 #[tokio::test]
+async fn either_window_alone_reaches_the_app() {
+    let env = Env::new();
+    let mut daemon = env.daemon();
+    let mut app = env.app().await;
+    let hive = hive_statusline(&env);
+    let now = hive::hook::now_ms() / 1000;
+    let window = |used_percentage, resets_at| SessionWindow {
+        used_percentage,
+        resets_at,
+    };
+    // The 7-day window without a 5-hour one (28.1): shown alone, and it alerts.
+    let week = json!({ "rate_limits": {
+        "seven_day": { "used_percentage": 81, "resets_at": now + 86400 },
+    } });
+    let out = statusline(&env, &hive, None, &week.to_string());
+    assert!(out.status.success(), "{out:?}");
+    let shown = Control::SessionUsage {
+        usage: None,
+        week: Some(window(81, now + 86400)),
+        limit_at: None,
+        week_limit_at: None,
+    };
+    assert_eq!(app.control().await, (0, shown));
+    let alert = Control::UsageAlert {
+        window: UsageWindow::Week,
+        threshold: 80,
+        resets_at: now + 86400,
+    };
+    assert_eq!(app.control().await, (0, alert));
+    // The 5-hour one alone: the week disappears.
+    let out = statusline(&env, &hive, None, &input(12.0, now + 3600));
+    assert!(out.status.success(), "{out:?}");
+    assert_eq!(app.control().await, usage(12, now + 3600));
+    drop(app);
+    assert!(daemon.wait_exit().success());
+}
+
+#[tokio::test]
 async fn a_window_that_cannot_be_kept_is_still_shown() {
     let env = Env::new();
     // Where the windows are kept is a folder.

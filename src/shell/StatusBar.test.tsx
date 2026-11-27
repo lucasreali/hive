@@ -122,6 +122,28 @@ test("the ring's tooltip adds the weekly window when the service sends one (15.3
   expect(useHive.getState().weekUsage).toBeNull();
 });
 
+test("the ring shows whichever window came alone (28.1)", () => {
+  render(<StatusBar />);
+  const resets_at = new Date(2026, 8, 28, 14, 30).getTime() / 1000;
+  const week = { used_percentage: 85, resets_at: new Date(2026, 9, 5, 9, 0).getTime() / 1000 };
+  // The week alone: the ring fills to it and warns from 80% of it; no session line.
+  act(() => apply({ type: "session_usage", usage: null, week }));
+  const ring = screen.getByRole("button", { name: "Week 85% · resets Mon 09:00" });
+  expect(ring.querySelector(".usage-arc")?.getAttribute("stroke-dasharray")).toBe("85 100");
+  expect(ring.hasAttribute("data-empty")).toBe(false);
+  expect(ring.hasAttribute("data-warning")).toBe(true);
+  act(() => apply({ type: "session_usage", usage: null, week: { ...week, used_percentage: 41 } }));
+  expect(ring.hasAttribute("data-warning")).toBe(false);
+  // The 5-hour one alone: the week disappears.
+  act(() => apply({ type: "session_usage", usage: { used_percentage: 12, resets_at }, week: null }));
+  expect(ring.getAttribute("aria-label")).toBe("Session 12% · resets 14:30");
+  expect(ring.querySelector(".usage-arc")?.getAttribute("stroke-dasharray")).toBe("12 100");
+  // With both, the ring is the 5-hour one's.
+  act(() => apply({ type: "session_usage", usage: { used_percentage: 12, resets_at }, week }));
+  expect(ring.querySelector(".usage-arc")?.getAttribute("stroke-dasharray")).toBe("12 100");
+  expect(ring.hasAttribute("data-warning")).toBe(false);
+});
+
 test("the ring's tooltip adds the pace the service forecasts (17.23)", () => {
   render(<StatusBar />);
   const time = (day: number, hour: number, minute = 0) =>

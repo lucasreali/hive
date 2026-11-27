@@ -261,17 +261,18 @@ pub enum Control {
     },
     /// `hive statusline` → service (on a hook connection, 12.1): the 5-hour window Claude
     /// Code's statusline input shows for the Claude config folder `claude_dir`
-    /// (`$CLAUDE_CONFIG_DIR`, else `$HOME/.claude`), and its 7-day window when it shows one
-    /// (15.3; absent from an older `hive statusline`).
+    /// (`$CLAUDE_CONFIG_DIR`, else `$HOME/.claude`), and its 7-day window (15.3; absent from an
+    /// older `hive statusline`), each when it shows one; at least one of them (28.1).
     StatuslineUsage {
         claude_dir: String,
-        usage: SessionWindow,
+        #[serde(default)]
+        usage: Option<SessionWindow>,
         #[serde(default)]
         week: Option<SessionWindow>,
     },
-    /// The current account's 5-hour window (12.1), `None` when none came yet or it is past its
-    /// reset, and its 7-day window (15.3), only alongside a 5-hour one and until its own reset
-    /// (absent from an older service). Sent when either changes, and after the app's `Welcome`
+    /// The current account's 5-hour window (12.1) and its 7-day window (15.3; absent from an
+    /// older service), each `None` when none came yet or it is past its own reset; either may
+    /// come alone (28.1). Sent when either changes, and after the app's `Welcome`
     /// when there is one. `limit_at` and `week_limit_at` (17.23; absent from an older service)
     /// are when each window reaches 100% at its pace so far (Unix seconds, whole minutes),
     /// `None` when it would not before its reset.
@@ -3219,10 +3220,18 @@ mod tests {
         let old = br#"{"type":"statusline_usage","claude_dir":"/c","usage":{"used_percentage":7,"resets_at":9}}"#;
         let report = Control::StatuslineUsage {
             claude_dir: "/c".into(),
-            usage,
+            usage: Some(usage),
             week: None,
         };
         assert_eq!(decode(old), report);
+        // The 7-day window alone (28.1).
+        let week_only = br#"{"type":"statusline_usage","claude_dir":"/c","week":{"used_percentage":7,"resets_at":9}}"#;
+        let report = Control::StatuslineUsage {
+            claude_dir: "/c".into(),
+            usage: None,
+            week: Some(usage),
+        };
+        assert_eq!(decode(week_only), report);
         // A new one carries both.
         let both = Control::SessionUsage {
             usage: Some(usage),
