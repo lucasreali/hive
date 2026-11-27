@@ -11,6 +11,8 @@
 - Copied `SKILL.md`, `resources/jq-queries.md`, `resources/sarif_helpers.py` (standard library only; needs Python 3.10+) and `resources/fixtures/`. Not copied: `resources/test_sarif_helpers.py`.
 - Removed the global `ajv-cli` install hint and the npm-package row; `brew install jq` became macOS's built-in `jq`; the `uv run --with <package>` examples now say to ask the human before fetching a third-party package; the helpers' line and usage string note Python 3.10+ (the host's stock `python3` is 3.9) and `-I`.
 
+- `allowed-tools` removed (nothing pre-approves Bash).
+
 ## License notice
 
 Copyright Trail of Bits (https://www.trailofbits.com/). The source repository is licensed under

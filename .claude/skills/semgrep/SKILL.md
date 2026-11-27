@@ -5,7 +5,6 @@ description: >-
   React, GitHub Actions, secrets), writes SARIF to a temp folder and triages the findings.
   Use for a whole-repo security pass (the security audit, 32.5) or when the human asks for
   a Semgrep scan. Semgrep is not installed on the host: check first, never install it.
-allowed-tools: Bash Read Glob Grep
 ---
 
 # Semgrep scan (Hive)

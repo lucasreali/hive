@@ -8,7 +8,7 @@
 
 ## What changed
 
-- Added "Hive's rules come first"; `Write`/`Edit` removed from `allowed-tools`; the clippy command is Hive's gate.
+- Added "Hive's rules come first"; `allowed-tools` removed; the clippy command is Hive's gate.
 - Removed advice that silences gates or installs tools: `#[expect]` / `#[allow]` with a justification (chapter 2 rewritten to "fix it or ask the human"), `#[ignore]` (chapter 5), `rustup update`, `cargo +nightly fmt` (chapter 1), global `cargo install flamegraph` / `cargo-insta` (chapters 3, 5: host tools the human installs; `insta` is a dependency needing approval).
 
 ## License notice

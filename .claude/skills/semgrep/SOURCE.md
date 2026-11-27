@@ -13,6 +13,8 @@
 - Dropped: third-party rule repositories (cloning), Decurity, Semgrep Pro, the approval-free `/static-analysis:semgrep-scan` workflow, `scripts/run-scans.sh`, `scripts/merge_sarif.py` (needs `uv`), `workflows/`, `references/rulesets.md`.
 - `references/scan-modes.md`: kept the important-only pre-filter, metadata criteria and the single-file jq filter; dropped the sections about the scripts and third-party repos.
 
+- `allowed-tools` removed (nothing pre-approves Bash).
+
 ## License notice
 
 Copyright Trail of Bits (https://www.trailofbits.com/). The source repository is licensed under

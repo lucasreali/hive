@@ -13,7 +13,6 @@ compatibility: Rust 1.70+, Cargo
 metadata:
   author: apollographql
   version: "1.1.2"
-allowed-tools: Bash(cargo:*) Read Glob Grep
 ---
 
 # Rust Best Practices
