@@ -37,10 +37,15 @@ impl Copier for System {
         clone_file(src, dst)
     }
 
+    /// The new file has `src`'s permission bits from its creation, so a secret is never
+    /// readable by others meanwhile; a failed copy removes it.
     fn copy_file(&self, src: &mut File, dst: &Path) -> io::Result<()> {
-        let mut out = create_new(dst)?;
-        io::copy(src, &mut out)?;
-        mirror_mode(src, &out)
+        let mut out = create_new(dst, src)?;
+        let done = io::copy(src, &mut out).and_then(|_| mirror_mode(src, &out));
+        if done.is_err() {
+            let _ = std::fs::remove_file(dst);
+        }
+        done
     }
 }
 
@@ -56,9 +61,19 @@ pub fn copy_new(copier: &dyn Copier, mut src: File, dst: &Path) -> io::Result<Co
     }
 }
 
-/// A new file at `path`; an existing one (a symlink included) is refused.
-fn create_new(path: &Path) -> io::Result<File> {
-    OpenOptions::new().write(true).create_new(true).open(path)
+/// A new file at `path` created with no more permission bits than `src` has (and the
+/// umask allows); an existing one (a symlink included) is refused.
+fn create_new(path: &Path, src: &File) -> io::Result<File> {
+    let mut options = OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+        options.mode(src.metadata()?.permissions().mode() & 0o777);
+    }
+    #[cfg(not(unix))]
+    let _ = src;
+    options.open(path)
 }
 
 /// Gives `out` the permissions of `src`, as `std::fs::copy` does.
@@ -95,7 +110,7 @@ fn clone_file(src: &File, dst: &Path) -> io::Result<()> {
 /// when the clone fails.
 #[cfg(target_os = "linux")]
 fn clone_file(src: &File, dst: &Path) -> io::Result<()> {
-    let out = create_new(dst)?;
+    let out = create_new(dst, src)?;
     let done = mirror_mode(src, &out).and_then(|()| ficlone(src, &out));
     if done.is_err() {
         let _ = std::fs::remove_file(dst);
@@ -234,6 +249,37 @@ mod tests {
         assert_eq!(mode(&dst), 0o751);
         let again = System.copy_file(&mut File::open(&src).unwrap(), &dst);
         assert_eq!(again.unwrap_err().kind(), io::ErrorKind::AlreadyExists);
+    }
+
+    /// The plain copy's file never has more permission bits than the source, even before its
+    /// bytes are in.
+    #[cfg(unix)]
+    #[test]
+    fn a_new_file_starts_with_the_sources_mode() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let src = source(dir.path());
+        src.set_permissions(fs::Permissions::from_mode(0o600))
+            .unwrap();
+        let dst = dir.path().join("dst");
+        drop(create_new(&dst, &src).unwrap());
+        assert_eq!(mode(&dst), 0o600);
+    }
+
+    /// A copy that fails partway leaves no file behind.
+    #[cfg(unix)]
+    #[test]
+    fn a_failed_copy_leaves_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        drop(source(dir.path()));
+        // Open for writing only: every read fails.
+        let mut src = OpenOptions::new()
+            .write(true)
+            .open(dir.path().join("src"))
+            .unwrap();
+        let dst = dir.path().join("dst");
+        assert!(System.copy_file(&mut src, &dst).is_err());
+        assert!(!dst.exists());
     }
 
     /// The system's clone on the temp folder's filesystem: APFS on macOS clones; elsewhere
