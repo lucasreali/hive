@@ -1,7 +1,7 @@
 # The only place the service's native Windows code runs (12.5): clippy and the tests of `hive`
 # and `hive-protocol` on Windows, and the coverage and the diff's mutants of
 # `crates/hive/src/windows*` (excluded from the Linux gates, see COVERAGE_EXCLUSIONS.md; every
-# one of their mutants runs nightly, mutants-full.yml).
+# one of their mutants runs weekly, mutants-full.yml).
 name: windows
 
 on:
@@ -74,7 +74,7 @@ jobs:
           jq -e '[.data[0].files[] | select(.filename | test("crates.hive.src.windows"))]
             | length > 0 and all(.summary.lines.percent == 100)' cov.json
       # The diff's mutants, as macos.yml: none when the branch left these files unchanged and
-      # none on `main`; every mutant runs nightly (mutants-full.yml). `--no-config`:
+      # none on `main`; every mutant runs weekly (mutants-full.yml). `--no-config`:
       # `.cargo/mutants.toml` excludes these files for Linux, so its `[profile.mutants]` build
       # and nextest (fails fast) are passed here, and the same timeout: sized from the baseline,
       # at least 120 s (`--minimum-test-timeout`), the baseline itself never limited.

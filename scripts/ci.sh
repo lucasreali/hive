@@ -18,7 +18,7 @@
 #                               gives only once it ends)
 #   scripts/ci.sh jobs <run-id> the run's minutes, then each job's id, result, start, minutes, name
 #   scripts/ci.sh log <job-id>  one job's full log (e.g. the mutants gather counts)
-#   scripts/ci.sh survivors     the open nightly mutation testing issue, if any, with its comments
+#   scripts/ci.sh survivors     the open weekly mutation testing issue, if any, with its comments
 set -eu
 branch=$(git rev-parse --abbrev-ref HEAD)
 case "${1:-}:$branch" in
@@ -126,8 +126,8 @@ case "${1:-}" in
     ;;
   log) gh api --allow-escape-sequences "repos/{owner}/{repo}/actions/jobs/${2:?job id}/logs" ;;
   survivors)
-    # The issue mutants-full.yml keeps open for surviving mutants: one comment per failed night.
-    n=$(gh issue list --state open --search 'in:title "Nightly mutation testing: surviving mutants"' \
+    # The issue mutants-full.yml keeps open for surviving mutants: one comment per failed run.
+    n=$(gh issue list --state open --search 'in:title "Weekly mutation testing: surviving mutants"' \
       --json number -q '.[0].number // empty')
     # --json: gh 2.46's plain view asks for the retired Projects (classic) and fails.
     [ -z "$n" ] || gh issue view "$n" --json url,body,comments -q '.url, .body, (.comments[] | .body)'

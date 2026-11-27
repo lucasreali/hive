@@ -1,13 +1,16 @@
-# Every mutant of the workspace, nightly on `main` (TODO 7.1). Does not block anything: it covers
-# the blind spot of the per-branch `--in-diff` run (a change can leave code outside its diff
-# untested), and of the macOS and Windows files, whose branch runs test only their diff (macos.yml,
-# windows.yml). Surviving mutants open a GitHub issue, or comment on the one still open; a night
-# with none closes it.
+# Every mutant of the workspace, weekly on `main` (TODO 7.1; weekly, not nightly: the human,
+# 2026-11-27). Does not block anything: it covers the blind spot of the per-branch `--in-diff` run
+# (a change can leave code outside its diff untested), and of the macOS and Windows files, whose
+# branch runs test only their diff (macos.yml, windows.yml). Surviving mutants open a GitHub issue,
+# or comment on the one still open; a run with none closes it.
 name: mutants-full
 
 on:
+  # Saturday 06:17 UTC (03:17 in Brasília), off the hour: GitHub delays schedules at the top of
+  # the hour, and the nightly `0 5 * * *` started 8-10 h late, in the working day, holding every
+  # runner for 2.5 h while task branches queued behind it.
   schedule:
-    - cron: "0 5 * * *"
+    - cron: "17 6 * * 6"
   workflow_dispatch:
 
 concurrency:
@@ -15,7 +18,7 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  # A night with no new commit on `main` has nothing new to test (TODO 9.5): skip when the last
+  # A week with no new commit on `main` has nothing new to test (TODO 9.5): skip when the last
   # successful run tested this SHA. A manual run always tests.
   tested:
     runs-on: ubuntu-latest
@@ -40,8 +43,11 @@ jobs:
     needs: tested
     if: needs.tested.outputs.skip != 'true'
     uses: ./.github/workflows/mutants.yml
+    # 18 shards: with the `macos` and `windows` jobs below they fill the free plan's 20 concurrent
+    # jobs; with 20 shards two of them waited for a free runner, and the run took a second round.
     with:
       in-diff: false
+      max-shards: 18
 
   # Every mutant of the macOS files, as macos.yml's `test` sets them up (one run per crate,
   # `[profile.mutants]` and nextest passed since `--no-config` drops `.cargo/mutants.toml`).
@@ -142,7 +148,7 @@ jobs:
           GH_REPO: ${{ github.repository }}
           RUN: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
-          title="Nightly mutation testing: surviving mutants"
+          title="Weekly mutation testing: surviving mutants"
           {
             echo "Run: $RUN"
             echo
@@ -156,7 +162,7 @@ jobs:
             gh issue create --title "$title" --body-file body.md
           fi
 
-  # No survivors anywhere: the issue still open is resolved (TODO 18.11). Not on a skipped night.
+  # No survivors anywhere: the issue still open is resolved (TODO 18.11). Not on a skipped week.
   resolved:
     needs: [mutants, macos, windows]
     if: needs.mutants.result == 'success' && needs.macos.result == 'success' && needs.windows.result == 'success'
@@ -169,6 +175,6 @@ jobs:
           GH_REPO: ${{ github.repository }}
           RUN: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
-          title="Nightly mutation testing: surviving mutants"
+          title="Weekly mutation testing: surviving mutants"
           open=$(gh issue list --state open --search "in:title \"$title\"" --json number -q '.[0].number')
           if [ -n "$open" ]; then gh issue close "$open" --comment "No surviving mutants on $RUN"; fi

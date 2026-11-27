@@ -1,6 +1,6 @@
 # Mutation testing split into shards sized by the number of mutants (TODO 7.1), so the wall-clock
 # time stays close to constant whatever the size of the change. Called by ci.yml (the diff's
-# mutants, blocks the merge) and mutants-full.yml (every mutant, nightly). Every mutant is
+# mutants, blocks the merge) and mutants-full.yml (every mutant, weekly). Every mutant is
 # tested: no sampling, no --iterate. `.cargo/mutants.toml` holds the shared configuration.
 name: mutants
 
@@ -15,12 +15,18 @@ on:
         description: Diff base (default the merge base with origin/main; nothing runs on main).
         type: string
         default: ""
+      max-shards:
+        description: >-
+          At most this many shards: 20 is the free plan's concurrent-job limit; a caller running
+          other jobs alongside passes less, or the last shards wait for a free runner.
+        type: number
+        default: 20
 
 env:
   CARGO_TERM_COLOR: always
-  # About one shard per 25 mutants, at most 20 (the free plan's concurrent-job limit).
+  # About one shard per 25 mutants, at most `max-shards`.
   MUTANTS_PER_SHARD: 25
-  MAX_SHARDS: 20
+  MAX_SHARDS: ${{ inputs.max-shards }}
 
 jobs:
   plan:

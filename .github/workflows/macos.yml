@@ -1,7 +1,7 @@
 # The only place the macOS-only code runs (#39, TODO 5.3): the Rust and frontend tests,
 # coverage and the diff's mutants of `crates/hive/src/macos.rs` and `src-tauri/src/macos.rs`
 # (excluded from the Linux gates, see COVERAGE_EXCLUSIONS.md; every one of their mutants runs
-# nightly, mutants-full.yml), and the release bundle built without publishing it.
+# weekly, mutants-full.yml), and the release bundle built without publishing it.
 name: macos
 
 on:
@@ -84,7 +84,7 @@ jobs:
       - run: cargo llvm-cov --workspace --no-fail-fast --show-missing-lines --fail-under-lines 100 --ignore-filename-regex 'src-tauri/src/main\.rs'
       # The diff's mutants (D2, D6), as mutants.yml on Linux: a file the branch did not change
       # runs none, and nothing runs on `main` (its commits come from tested branches); every
-      # mutant runs nightly (mutants-full.yml). `--no-config`: `.cargo/mutants.toml` excludes
+      # mutant runs weekly (mutants-full.yml). `--no-config`: `.cargo/mutants.toml` excludes
       # these files for Linux, so its `[profile.mutants]` build and nextest (fails fast: the
       # first failing test ends the mutant's run) are passed here. One run per crate: a run's
       # unmutated baseline tests every package it mutates. The baseline has no time limit; each
