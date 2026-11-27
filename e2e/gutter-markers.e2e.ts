@@ -56,14 +56,14 @@ test("the editor marks added, modified and deleted lines in its gutter, in dark 
   expect((await gutter.boundingBox())?.x).toBeLessThan(numbers?.x ?? 0);
 
   const check = async () => {
-    await expect(added).toHaveCSS("background-color", await color(page, "--git-added"));
+    await expect(added).toHaveCSS("background-color", await color(page, "--diff-added"));
     await expect(modified.first()).toHaveCSS(
       "background-color",
-      await color(page, "--git-modified"),
+      await color(page, "--diff-modified"),
     );
     await expect(deleted).toHaveCSS("background-image", /linear-gradient/);
     const wedge = await deleted.evaluate((e) => getComputedStyle(e).backgroundImage);
-    expect(wedge).toContain(await color(page, "--git-deleted"));
+    expect(wedge).toContain(await color(page, "--diff-removed"));
   };
   expect(await cssVar(page, "--bg")).toBe("#282c33");
   await check();

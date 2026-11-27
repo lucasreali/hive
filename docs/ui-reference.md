@@ -48,6 +48,19 @@ Other values seen: canvas behind the prototype `#1B1E23` (not used in the app), 
 
 Git status colors in the files panel: modified `#DEC184`, added `#A1C181`, deleted `#D07277` (strikethrough). Diff backgrounds: added `rgba(161,193,129,0.12)`, removed `rgba(208,114,119,0.12)`, hunk header `rgba(116,173,232,0.08)` with `#74ADE8` text.
 
+Diff colors (28.6, the `appearance.diff_colors` setting, "Diff colors" in Settings → Appearance), set as `data-diff-colors` on the root and used by the diff view, the editor's gutter markers (14.4) and the files and Diff panels (status letters, names, `+a −d` counts):
+
+| Token | Standard | Color-blind, One Dark | Color-blind, One Light |
+|---|---|---|---|
+| `--diff-added` | `--git-added` | `#85BEFF` | `#0B56B5` |
+| `--diff-modified` | `--git-modified` | `#E5C890` | `#6B5800` |
+| `--diff-removed` | `--git-deleted` | `#F7AD6E` | `#943F00` |
+| `--diff-renamed` | `--git-renamed` | `#B4BAC6` | `#55575C` |
+| `--diff-added-line` / `--diff-added-text` | `rgba(161,193,129,0.12)` / `0.25` | `--diff-added` at `0x1F` / `0x40` alpha | same |
+| `--diff-removed-line` / `--diff-removed-text` | `rgba(208,114,119,0.12)` / `0.25` | `--diff-removed` at `0x1F` / `0x40` alpha | same |
+
+Color-blind: added blue, removed orange, modified a yellow, renamed grey (blue is added's). Each color passes WCAG AA (4.5:1) as text on `--bg`, `--panel`, `--hover` and `--selected`, and `--text` passes on each line tint over `--bg`, in both themes: `src/contrast.test.ts`, with the reusable `passesAA` / `contrast` of `src/contrast.ts`.
+
 Code in the Markdown preview (14.6): `--syn-keyword`, `--syn-name`, `--syn-function`, `--syn-constant`, `--syn-type`, `--syn-operator`, `--syn-comment`, `--syn-string`, the editor's One Dark groups (`#C678DD`, `#E06C75`, `#61AFEF`, `#D19A66`, `#E5C07B`, `#56B6C2`, `#7F848E`, `#98C379`); One Light uses Atom One Light's.
 
 `color-scheme` follows the theme (D20.5): `dark` in One Dark, `light` in One Light, so anything still native (a `<select>`'s popup, date inputs) matches the page.

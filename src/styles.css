@@ -66,6 +66,17 @@
   --git-deleted: #d07277;
   --git-renamed: #74ade8;
 
+  /* The diff's colours (28.6), set by `appearance.diff_colors`: the diff view, the editor's
+     gutter markers and the files and Diff panels. Standard is the git status colours. */
+  --diff-added: var(--git-added);
+  --diff-modified: var(--git-modified);
+  --diff-removed: var(--git-deleted);
+  --diff-renamed: var(--git-renamed);
+  --diff-added-line: rgba(161, 193, 129, 0.12);
+  --diff-added-text: rgba(161, 193, 129, 0.25);
+  --diff-removed-line: rgba(208, 114, 119, 0.12);
+  --diff-removed-text: rgba(208, 114, 119, 0.25);
+
   /* code in the Markdown preview (14.6): the editor's One Dark groups */
   --syn-keyword: #c678dd;
   --syn-name: #e06c75;
@@ -146,6 +157,32 @@
   --syn-string: #50a14f;
 
   color-scheme: light;
+}
+
+/* `appearance.diff_colors: color-blind` (28.6): added in blue, removed in orange, so no line
+   depends on telling red from green; modified keeps a yellow, renamed turns grey (blue is
+   added's). Every colour passes WCAG AA as text on --bg, --panel, --hover and --selected, and
+   --text on the line tints (src/contrast.test.ts reads these blocks). */
+:root[data-diff-colors="color-blind"] {
+  --diff-added: #85beff;
+  --diff-modified: #e5c890;
+  --diff-removed: #f7ad6e;
+  --diff-renamed: #b4bac6;
+  --diff-added-line: #85beff1f;
+  --diff-added-text: #85beff40;
+  --diff-removed-line: #f7ad6e1f;
+  --diff-removed-text: #f7ad6e40;
+}
+
+:root[data-theme="one-light"][data-diff-colors="color-blind"] {
+  --diff-added: #0b56b5;
+  --diff-modified: #6b5800;
+  --diff-removed: #943f00;
+  --diff-renamed: #55575c;
+  --diff-added-line: #0b56b51f;
+  --diff-added-text: #0b56b540;
+  --diff-removed-line: #943f001f;
+  --diff-removed-text: #943f0040;
 }
 
 *,
@@ -1041,11 +1078,11 @@ label:has(> input[type="checkbox"]:disabled) {
 .count-removed {
   font-family: var(--font-mono);
   font-size: var(--fs-meta);
-  color: var(--git-added);
+  color: var(--diff-added);
 }
 
 .count-removed {
-  color: var(--git-deleted);
+  color: var(--diff-removed);
 }
 
 .files-summary .count-added,
@@ -1140,16 +1177,16 @@ label:has(> input[type="checkbox"]:disabled) {
   --git: var(--text);
 }
 [data-status="M"] {
-  --git: var(--git-modified);
+  --git: var(--diff-modified);
 }
 [data-status="A"] {
-  --git: var(--git-added);
+  --git: var(--diff-added);
 }
 [data-status="D"] {
-  --git: var(--git-deleted);
+  --git: var(--diff-removed);
 }
 [data-status="R"] {
-  --git: var(--git-renamed);
+  --git: var(--diff-renamed);
 }
 
 .file-row .name {

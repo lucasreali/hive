@@ -104,11 +104,13 @@ const draw = (chunks: readonly Chunk[], doc: Text) =>
 
 const look = EditorView.theme({
   ".cm-changeGutter .cm-gutterElement": { width: "3px", padding: "0", marginRight: "3px" },
-  ".cm-changeGutter .cm-change-added": { background: "var(--git-added)" },
-  ".cm-changeGutter .cm-change-modified": { background: "var(--git-modified)" },
+  // The diff's colours (28.6), as the diff view's.
+  ".cm-changeGutter .cm-change-added": { background: "var(--diff-added)" },
+  ".cm-changeGutter .cm-change-modified": { background: "var(--diff-modified)" },
   // Between the lines: a small wedge on the top edge of the line the removed ones sat before.
   ".cm-changeGutter .cm-change-deleted": {
-    background: "linear-gradient(var(--git-deleted), var(--git-deleted)) top / 100% 6px no-repeat",
+    background:
+      "linear-gradient(var(--diff-removed), var(--diff-removed)) top / 100% 6px no-repeat",
   },
 });
 
