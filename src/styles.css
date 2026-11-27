@@ -67,15 +67,18 @@
   --git-renamed: #74ade8;
 
   /* The diff's colours (28.6), set by `appearance.diff_colors`: the diff view, the editor's
-     gutter markers and the files and Diff panels. Standard is the git status colours. */
-  --diff-added: var(--git-added);
-  --diff-modified: var(--git-modified);
-  --diff-removed: var(--git-deleted);
-  --diff-renamed: var(--git-renamed);
-  --diff-added-line: rgba(161, 193, 129, 0.12);
-  --diff-added-text: rgba(161, 193, 129, 0.25);
-  --diff-removed-line: rgba(208, 114, 119, 0.12);
-  --diff-removed-text: rgba(208, 114, 119, 0.25);
+     gutter markers and the files and Diff panels. Standard is the git status colours' hues,
+     lightened in One Dark and darkened in One Light until each passes WCAG AA as text on
+     --bg, --panel, --hover and --selected (28.24, src/contrast.test.ts reads these blocks); the
+     line tints stay the git colours'. */
+  --diff-added: #a4c384;
+  --diff-modified: #dec184;
+  --diff-removed: #f5a3a7;
+  --diff-renamed: #8fbded;
+  --diff-added-line: #a1c1811f;
+  --diff-added-text: #a1c18140;
+  --diff-removed-line: #d072771f;
+  --diff-removed-text: #d0727740;
 
   /* code in the Markdown preview (14.6): the editor's One Dark groups */
   --syn-keyword: #c678dd;
@@ -86,6 +89,11 @@
   --syn-operator: #56b6c2;
   --syn-comment: #7f848e;
   --syn-string: #98c379;
+  --syn-plain: #abb2bf; /* the editor's text outside any token (28.25) */
+  /* The editor's comments and invalid code: oneDark's; the Markdown preview's comments are
+     Zed's --syn-comment. */
+  --editor-comment: #7d8799;
+  --editor-invalid: #ffffff;
 
   --font-sans: "IBM Plex Sans", system-ui, sans-serif;
   --font-mono: "IBM Plex Mono", monospace;
@@ -147,6 +155,11 @@
   --git-deleted: #d36151;
   --git-renamed: #5c78e2;
 
+  --diff-added: #406338;
+  --diff-modified: #6c5910;
+  --diff-removed: #a03728;
+  --diff-renamed: #264bd7;
+
   --syn-keyword: #a626a4;
   --syn-name: #e45649;
   --syn-function: #4078f2;
@@ -155,6 +168,9 @@
   --syn-operator: #0184bc;
   --syn-comment: #a0a1a7;
   --syn-string: #50a14f;
+  --syn-plain: #383a42; /* Atom One Light's plain text (28.25) */
+  --editor-comment: #a0a1a7;
+  --editor-invalid: #383a42;
 
   color-scheme: light;
 }

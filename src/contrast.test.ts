@@ -73,7 +73,7 @@ test("AA is 4.5 for text and 3 for large text and marks, at its ends", () => {
   expect(passesAA("#000000", "#ffffff80")).toBe(false);
 });
 
-// 28.6: the colour-blind diff colours, read from the style sheet, pass AA in both themes.
+// 28.6 and 28.24: both diff palettes, read from the style sheet, pass AA in both themes.
 const css = readFileSync(join(import.meta.dir, "styles.css"), "utf8");
 
 /** The custom properties of the rule whose selector is exactly `selector`. */
@@ -86,14 +86,18 @@ function tokens(selector: string): Record<string, string> {
   );
 }
 
+const STANDARD = {
+  "one-dark": tokens(":root"),
+  "one-light": { ...tokens(":root"), ...tokens(':root[data-theme="one-light"]') },
+};
 const THEMES = {
-  "one-dark": { ...tokens(":root"), ...tokens(':root[data-diff-colors="color-blind"]') },
+  "one-dark": { ...STANDARD["one-dark"], ...tokens(':root[data-diff-colors="color-blind"]') },
   "one-light": {
-    ...tokens(":root"),
-    ...tokens(':root[data-theme="one-light"]'),
+    ...STANDARD["one-light"],
     ...tokens(':root[data-theme="one-light"][data-diff-colors="color-blind"]'),
   },
 };
+const PALETTES = { standard: STANDARD, "colour-blind": THEMES };
 const SURFACES = ["--bg", "--panel", "--hover", "--selected"];
 const COLORS = ["--diff-added", "--diff-modified", "--diff-removed", "--diff-renamed"];
 
@@ -108,34 +112,66 @@ function layered(base: string, ...tints: string[]): string {
   return toHex(rgb);
 }
 
-for (const [theme, t] of Object.entries(THEMES)) {
-  test(`the colour-blind diff colours pass AA as text on every surface, in ${theme} (28.6)`, () => {
-    for (const color of COLORS) {
-      for (const surface of SURFACES) {
-        expect({ color, surface, passes: passesAA(t[color], t[surface]) }).toEqual({
-          color,
-          surface,
-          passes: true,
-        });
+for (const [palette, themes] of Object.entries(PALETTES)) {
+  for (const [theme, t] of Object.entries(themes)) {
+    test(`the ${palette} diff colours pass AA as text on every surface, in ${theme} (28.6, 28.24)`, () => {
+      for (const color of COLORS) {
+        for (const surface of SURFACES) {
+          expect({ color, surface, passes: passesAA(t[color], t[surface]) }).toEqual({
+            color,
+            surface,
+            passes: true,
+          });
+        }
       }
-    }
-  });
+    });
 
-  test(`the text passes AA on the colour-blind diff's line tints, in ${theme} (28.6)`, () => {
-    const lines = [
-      layered(t["--bg"], t["--diff-added-line"]),
-      layered(t["--bg"], t["--diff-added-line"], t["--diff-added-text"]),
-      layered(t["--bg"], t["--diff-removed-line"]),
-      layered(t["--bg"], t["--diff-removed-line"], t["--diff-removed-text"]),
-    ];
-    for (const line of lines) {
-      expect({ line, passes: passesAA(t["--text"], line) }).toEqual({ line, passes: true });
-    }
-    // The tints are the line colours' own, so a line reads as its marker.
+    test(`the text passes AA on the ${palette} diff's line tints, in ${theme} (28.6, 28.24)`, () => {
+      const lines = [
+        layered(t["--bg"], t["--diff-added-line"]),
+        layered(t["--bg"], t["--diff-added-line"], t["--diff-added-text"]),
+        layered(t["--bg"], t["--diff-removed-line"]),
+        layered(t["--bg"], t["--diff-removed-line"], t["--diff-removed-text"]),
+      ];
+      for (const line of lines) {
+        expect({ line, passes: passesAA(t["--text"], line) }).toEqual({ line, passes: true });
+      }
+    });
+  }
+}
+
+test("the colour-blind diff's line tints are its colours' own (28.6)", () => {
+  for (const t of Object.values(THEMES)) {
     expect(t["--diff-added-line"].slice(0, 7)).toBe(t["--diff-added"]);
     expect(t["--diff-removed-text"].slice(0, 7)).toBe(t["--diff-removed"]);
-  });
-}
+  }
+});
+
+test("the standard diff colours keep the git colours' hues: green, yellow, red, blue (28.24)", () => {
+  const hue = (hex: string) => {
+    const [r, g, b] = (parseHex(hex)?.rgb ?? [0, 0, 0]).map((c) => c / 255);
+    const max = Math.max(r, g, b);
+    const d = max - Math.min(r, g, b);
+    const h = max === r ? ((g - b) / d) % 6 : max === g ? (b - r) / d + 2 : (r - g) / d + 4;
+    return (h * 60 + 360) % 360;
+  };
+  for (const t of Object.values(STANDARD)) {
+    for (const [diff, git] of [
+      ["--diff-added", "--git-added"],
+      ["--diff-modified", "--git-modified"],
+      ["--diff-removed", "--git-deleted"],
+      ["--diff-renamed", "--git-renamed"],
+    ]) {
+      // Within a few degrees of the git colour: rounding to bytes moves the hue a little.
+      const off = Math.abs(hue(t[diff]) - hue(t[git]));
+      expect({ diff, near: Math.min(off, 360 - off) < 6 }).toEqual({ diff, near: true });
+    }
+    // Every one passes now, which the git colours alone did not (the 28.6 ledger row).
+    expect(
+      passesAA(t["--git-added"], t["--panel"]) && passesAA(t["--git-deleted"], t["--panel"]),
+    ).toBe(false);
+  }
+});
 
 test("the colour-blind diff colours use neither red nor green (28.6)", () => {
   for (const t of Object.values(THEMES)) {
