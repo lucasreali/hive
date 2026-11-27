@@ -678,6 +678,7 @@ function reduce(s: HiveState, m: HostMessage): Partial<HiveState> {
     case "pull_ended":
     case "command_finished":
     case "terminal_notification":
+    case "background_finished":
       // Answered where they were asked (see `ServiceMessage`), or presented by `notify`.
       return {};
     case "usage_alert":

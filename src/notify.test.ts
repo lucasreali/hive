@@ -2,6 +2,7 @@ import { afterAll, afterEach, beforeEach, expect, spyOn, test } from "bun:test";
 import { asMac } from "../test/mac";
 import {
   alertText,
+  backgroundText,
   duration,
   goToClicked,
   notify,
@@ -9,7 +10,7 @@ import {
   terminalAlertText,
   terminalName,
 } from "./notify";
-import type { AgentState, Alert } from "./protocol";
+import type { AgentState, Alert, HostMessage } from "./protocol";
 import type { PullState } from "./pulls";
 import { apply } from "./reduce";
 import {
@@ -410,6 +411,71 @@ test("a long command and a program's notification go to the inbox, with a tone a
     { title: "api", body: "make — done", agent: "terminal:7" },
     { title: "api", body: "deploy", agent: "terminal:7" },
   ]);
+});
+
+type Ended = Extract<HostMessage, { type: "background_finished" }>;
+
+/** A `background_finished` of terminal 7's agent (28.8). */
+const ended = (fields: Partial<Ended> = {}): Ended => ({
+  type: "background_finished",
+  channel: 7,
+  agent: "s",
+  id: "b1",
+  kind: "shell",
+  command: "make build",
+  description: "Build",
+  by: null,
+  status: "unknown",
+  exit: null,
+  secs: 12,
+  alert: "quiet",
+  notify: false,
+  ...fields,
+});
+
+test("a background command's end is an inbox item; only a failure has a tone and a notification", () => {
+  useHive.setState({ tabs: [{ id: 7, cwd: "/home/u/api" }] });
+  const messages = [
+    ended(),
+    ended({ status: "completed", exit: 0, description: null }),
+    ended({ status: "stopped", alert: "quiet" }),
+    ended({ status: "completed", exit: 3, alert: "failed", notify: true }),
+    ended({ status: "failed", alert: "failed", notify: false, host: "gpu" }),
+  ];
+  messages.forEach((m, i) => {
+    notify(m, useHive.getState(), clock + i * 2 * TONE_GAP_MS, 1000 + i);
+  });
+  expect(tones).toBe(2);
+  const inbox = [...useHive.getState().inbox].reverse();
+  const items = inbox.map((i) => ("terminal" in i ? [i.terminal, i.failed, i.text, i.host] : i));
+  expect(items).toEqual([
+    [7, false, "Background command finished: Build", undefined],
+    [7, false, "Background command finished: make build", undefined],
+    [7, false, "Background command stopped: Build", undefined],
+    [7, true, "Background command failed (exit 3): Build", undefined],
+    [7, true, "Background command failed: Build", "gpu"],
+  ]);
+  // Out of view (the service's `notify`) only.
+  expect(shown).toEqual([
+    {
+      title: "Background command failed (exit 3): Build",
+      body: "api · after 12s",
+      agent: "terminal:7",
+    },
+  ]);
+});
+
+test("a background command's text names it by its description, else its line, else its kind", () => {
+  useHive.setState({ tabs: [{ id: 7, cwd: "/home/u/api" }] });
+  const s = useHive.getState();
+  const title = (fields: Partial<Ended>) => backgroundText(s, ended(fields)).title;
+  expect(title({ description: null, command: "" })).toBe("Background command finished");
+  expect(title({ kind: "monitor", description: null, command: "tail -f log" })).toBe(
+    "Monitor finished: tail -f log",
+  );
+  expect(title({ alert: "failed", exit: 0 })).toBe("Background command failed: Build");
+  expect(title({ alert: "failed", exit: -1 })).toBe("Background command failed (exit -1): Build");
+  expect(backgroundText(s, ended({ secs: 75 })).body).toBe("api · after 1m 15s");
 });
 
 test("a program's notification never takes over the title: the terminal's name always leads", () => {

@@ -2,7 +2,13 @@ import { afterEach, expect, jest, spyOn, test } from "bun:test";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { Profiler } from "react";
 import { App } from "../App";
-import type { AgentState, Project } from "../protocol";
+import type {
+  AgentState,
+  BackgroundAlert,
+  BackgroundCommand,
+  BackgroundStatus,
+  Project,
+} from "../protocol";
 import { apply } from "../reduce";
 import { initialState, setVisible, useHive } from "../store";
 import { closeTerminal } from "../terminals";
@@ -631,6 +637,108 @@ test("a teammate's line shows its name, over its type", () => {
     ["idle", "researcher"],
     ["idle", "general-purpose"],
   ]);
+});
+
+test("an agent's background commands are quiet lines after its subagents until they leave", () => {
+  render(<App />);
+  const [main] = shop.worktrees;
+  const now = Date.now();
+  const sub = {
+    id: "a1",
+    agent_type: "Explore",
+    teammate_name: null,
+    state: "working",
+    worktree: null,
+    activity: null,
+    since_ms: 0,
+  } as const;
+  const command = (id: string, fields: Partial<BackgroundCommand> = {}): BackgroundCommand => ({
+    id,
+    kind: "shell",
+    command: `${id} --watch`,
+    description: null,
+    by: null,
+    since_ms: now - 125_000,
+    ...fields,
+  });
+  const state = (background?: BackgroundCommand[]) =>
+    act(() =>
+      apply({
+        type: "agent_state",
+        id: "s1",
+        ...agentStatus("waiting_you"),
+        subagents: [sub],
+        ...(background ? { background } : {}),
+      }),
+    );
+  act(() => {
+    apply({ type: "projects", projects: [shop] });
+    apply({
+      type: "agent_detected",
+      channel: 1,
+      id: "s1",
+      project: shop.id,
+      worktree: main.id,
+      cwd: main.path,
+    });
+  });
+  const ended = (status: BackgroundStatus, exit: number | null, alert: BackgroundAlert) => ({
+    status,
+    exit,
+    ms: now,
+    alert,
+  });
+  state([
+    command("dev", { description: "Start the dev server" }),
+    command("tests", { by: "a1" }),
+    command("gone", { by: "a9", command: "" }),
+    command("mon", { kind: "monitor", command: "", description: null }),
+    command("ok", { ended: ended("completed", 0, "quiet") }),
+    command("stop", { ended: ended("stopped", null, "quiet") }),
+    command("bad", { ended: ended("completed", 3, "failed") }),
+    command("err", { ended: ended("failed", null, "failed") }),
+  ]);
+  const lines = () =>
+    [...tree().querySelectorAll<HTMLElement>(".background-line")].map((l) => [
+      l.querySelector(".subagent-type")?.textContent ?? null,
+      l.querySelector(".subagent-activity")?.textContent,
+      l.querySelector(".subagent-time")?.textContent,
+      l.title,
+      l.hasAttribute("data-ended"),
+      l.hasAttribute("data-failed"),
+    ]);
+  expect(lines()).toEqual([
+    [null, "Start the dev server", "2m", "dev --watch", false, false],
+    ["Explore", "tests --watch", "2m", "tests --watch", false, false],
+    ["subagent", "Background command", "2m", "", false, false],
+    [null, "Monitor", "2m", "", false, false],
+    [null, "ok --watch", "done", "ok --watch", true, false],
+    [null, "stop --watch", "stopped", "stop --watch", true, false],
+    [null, "bad --watch", "exit 3", "bad --watch", true, true],
+    [null, "err --watch", "failed", "err --watch", true, true],
+  ]);
+  // After the subagent's line, in the same list; nothing in it takes the focus.
+  const all = [...tree().querySelectorAll(".subagent-line")];
+  expect(all[0]?.classList.contains("background-line")).toBe(false);
+  expect(all.slice(1).every((l) => l.classList.contains("background-line"))).toBe(true);
+  expect(tree().querySelector(".background-line button, .background-line [tabindex]")).toBeNull();
+  // Gone from the list, gone from the row; with no subagent either, no list at all.
+  state([command("dev")]);
+  expect(lines()).toHaveLength(1);
+  state();
+  expect(lines()).toEqual([]);
+  act(() => apply({ type: "agent_state", id: "s1", ...agentStatus("idle"), subagents: [] }));
+  expect(tree().querySelector(".tree-row.agent")?.parentElement?.querySelector("ul")).toBeNull();
+  act(() =>
+    apply({
+      type: "agent_state",
+      id: "s1",
+      ...agentStatus("idle"),
+      subagents: [],
+      background: [command("solo")],
+    }),
+  );
+  expect(lines().map((l) => l[1])).toEqual(["solo --watch"]);
 });
 
 test("a subagent's own worktree has no row; its path is the subagent line's tooltip", () => {
