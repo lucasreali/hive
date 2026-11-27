@@ -78,6 +78,7 @@ test("lists every command with its keys but itself, then agents and worktrees", 
       // One per view of the rail (25.3), with no shortcut.
       "Show Files",
       "Show Diff",
+      "Show Comments",
       "Show Scripts",
       "Show PRs",
       "Show Actions",
@@ -353,19 +354,35 @@ test("agents show their name, state and worktree; Enter goes to the agent", () =
   });
 });
 
-test("Send review shows once the open file has comments for the active terminal", () => {
+test("Send open comments shows once the shown worktree has some for the active terminal", () => {
   open();
-  const file = { worktree: fixLogin.path, path: "a.ts" };
+  const comment = {
+    id: 1,
+    file: "a.ts",
+    from: 1,
+    to: 1,
+    body: "why?",
+    code: ["a"],
+    before: [],
+    after: [],
+    author: "you",
+    ms: 0,
+    resolved: false,
+    outdated: false,
+  };
   act(() =>
     useHive.setState({
+      selection: fixLogin.id,
       tabs: [{ id: 3, cwd: fixLogin.path }],
       activeTab: 3,
-      openFile: file,
-      comments: { [fixLogin.path]: [{ path: "a.ts", from: 1, to: 1, text: "why?" }] },
+      comments: { [fixLogin.path]: [{ ...comment, resolved: true }] },
     }),
   );
-  type("send review");
-  fireEvent.click(screen.getByRole("button", { name: /^Send review/ }));
+  type("send open comments");
+  expect(screen.queryByRole("button", { name: /^Send open comments/ })).toBeNull();
+  act(() => useHive.setState({ comments: { [fixLogin.path]: [comment] } }));
+  type("send open comment");
+  fireEvent.click(screen.getByRole("button", { name: /^Send open comments/ }));
   expect(useHive.getState().modal).toBeNull();
 });
 

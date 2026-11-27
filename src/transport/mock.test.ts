@@ -3,6 +3,7 @@ import type {
   AgentState,
   Dirs,
   Project,
+  ReviewComment,
   ServiceMessage,
   Settings,
   Space,
@@ -925,6 +926,50 @@ test("files marked seen stay seen until written again, per base (27.1)", async (
   await transport.markSeen(refactor, "branch", ["assets/logo.png"], false);
   await tick();
   expect(seen().filter(([, mark]) => mark)).toEqual([["package.json", "changed"]]);
+});
+
+test("review comments are kept, follow their text and go outdated without it (27.3)", async () => {
+  const { transport, messages } = await connected();
+  const refactor = (MOCK_REPOS[1] as Project).worktrees[1]?.path as string;
+  const last = () => {
+    const m = messages.filter((m) => m.type === "comments" || m.type === "error").at(-1);
+    return m?.type === "comments" ? m.comments : m;
+  };
+  const comments = () => last() as ReviewComment[];
+  await transport.listComments("/nope");
+  await tick();
+  expect(last()).toEqual({
+    type: "error",
+    message: "Cannot change the comment: /nope is not a worktree of a followed project",
+  });
+  await transport.addComment("/nope", "README.md", 1, 1, "x");
+  await tick();
+  expect(last()).toMatchObject({ type: "error" });
+  await transport.addComment(refactor, "README.md", 1, 99, "x");
+  await tick();
+  expect(last()).toMatchObject({
+    message: expect.stringMatching(/^Cannot add the comment: README.md has no line 99/),
+  });
+  await transport.addComment(refactor, "README.md", 1, 1, "intro?");
+  await tick();
+  const [added] = comments();
+  expect(added).toMatchObject({ id: 1, from: 1, to: 1, body: "intro?", outdated: false });
+  // Written without its line: outdated; with it again: placed.
+  const id = await transport.openTerminal(refactor, 80, 24, () => {});
+  await transport.watchWorktree(refactor, "branch");
+  await transport.writeTerminal(id, "write README.md changed\r");
+  await tick();
+  expect(comments()[0]?.outdated).toBe(true);
+  await transport.writeTerminal(id, `write README.md ${added?.code[0]}\r`);
+  await transport.listComments(refactor);
+  await tick();
+  expect(comments()[0]).toMatchObject({ from: 1, outdated: false });
+  await transport.resolveComment(refactor, 1, true);
+  await tick();
+  expect(comments()[0]?.resolved).toBe(true);
+  await transport.deleteComment(refactor, 1);
+  await tick();
+  expect(last()).toEqual([]);
 });
 
 test("files of a followed worktree as their status says, or why not", async () => {

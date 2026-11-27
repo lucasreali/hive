@@ -18,6 +18,9 @@ mod browser_cleanup;
 mod changes;
 #[cfg(unix)]
 #[cfg(test)]
+mod comments;
+#[cfg(unix)]
+#[cfg(test)]
 mod commit;
 #[cfg(unix)]
 #[cfg(test)]

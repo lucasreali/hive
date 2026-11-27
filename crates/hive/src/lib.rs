@@ -8,6 +8,7 @@ pub mod browser_cleanup;
 pub mod changes;
 pub mod checkout;
 pub mod cli;
+pub mod comments;
 pub mod commit;
 pub mod daemon;
 pub mod dirs;

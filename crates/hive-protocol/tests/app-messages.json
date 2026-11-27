@@ -702,6 +702,33 @@
     "error": null
   },
   {
+    "type": "comments",
+    "path": "/r",
+    "comments": [
+      {
+        "id": 1,
+        "file": "src/a.rs",
+        "from": 2,
+        "to": 3,
+        "body": "Why this?",
+        "code": [
+          "let a = 1;",
+          "let b = 2;"
+        ],
+        "before": [
+          "fn f() {"
+        ],
+        "after": [
+          "}"
+        ],
+        "author": "me",
+        "ms": 1700000000000,
+        "resolved": false,
+        "outdated": false
+      }
+    ]
+  },
+  {
     "type": "scripts",
     "path": "/r",
     "scripts": [

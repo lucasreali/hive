@@ -185,6 +185,7 @@ export type ServiceMessage =
   // A refused request, e.g. watching a worktree that is not followed. Not stored.
   | { type: "error"; message: string }
   | ({ type: "changes" } & Changes)
+  | { type: "comments"; path: string; comments: ReviewComment[] }
   | ({ type: "commits" } & Commits)
   | ({ type: "scripts" } & WorktreeScripts)
   | ({ type: "file" } & FileText)
@@ -483,6 +484,25 @@ export type ChangedFile = {
   staged: Staged | null;
   /** Its seen mark (27.1): "changed" when its diff changed since it was marked; absent: none. */
   seen?: SeenMark;
+};
+
+/**
+ * Mirrors `hive_protocol::ReviewComment` (27.3): a review comment the service keeps on lines
+ * (1-based, inclusive) of a worktree's file, moved with its code; `outdated` once it is gone.
+ */
+export type ReviewComment = {
+  id: number;
+  file: string;
+  from: number;
+  to: number;
+  body: string;
+  code: string[];
+  before: string[];
+  after: string[];
+  author: string;
+  ms: number;
+  resolved: boolean;
+  outdated: boolean;
 };
 
 /** Mirrors `hive_protocol::SeenMark`. */

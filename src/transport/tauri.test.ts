@@ -96,6 +96,10 @@ test("terminal and project actions call their commands", async () => {
   await tauriTransport.setView(3, true, false);
   await tauriTransport.listChanges("/r", "head");
   await tauriTransport.markSeen("/r", "head", ["a"], true);
+  await tauriTransport.listComments("/r");
+  await tauriTransport.addComment("/r", "a", 1, 2, "b");
+  await tauriTransport.resolveComment("/r", 3, true);
+  await tauriTransport.deleteComment("/r", 3);
   await tauriTransport.listScripts("/r");
   await tauriTransport.listSessions();
   await tauriTransport.locateSession("s", "log");
@@ -169,6 +173,10 @@ test("terminal and project actions call their commands", async () => {
     ["set_view", { terminal: 3, focused: true, visible: false }],
     ["list_changes", { path: "/r", base: "head" }],
     ["mark_seen", { path: "/r", base: "head", files: ["a"], seen: true }],
+    ["list_comments", { path: "/r" }],
+    ["add_comment", { path: "/r", file: "a", from: 1, to: 2, body: "b" }],
+    ["resolve_comment", { path: "/r", id: 3, resolved: true }],
+    ["delete_comment", { path: "/r", id: 3 }],
     ["list_scripts", { path: "/r" }],
     ["list_sessions", {}],
     ["locate_session", { id: "s", target: "log" }],

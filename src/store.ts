@@ -42,6 +42,7 @@ import type {
   ProgressState,
   Project,
   ProjectScripts,
+  ReviewComment,
   SearchResults,
   Session,
   SessionFile,
@@ -184,9 +185,6 @@ export type Provenance = LineAsk & { origin: LineOrigin | null };
 export type SessionFocus = { edit: LineEdit; path: string };
 /** A session's changed files, as the service last listed them (27.5). */
 export type SessionFiles = { files: SessionFile[]; truncated: boolean };
-
-/** A review comment (6.7) on lines of a worktree's file (new-file numbers). */
-export type ReviewComment = Lines & { path: string; text: string };
 
 /** Answers for the new-worktree dialog; reset whenever a dialog opens. */
 export type WorktreeDialog = {
@@ -342,7 +340,14 @@ export type WorktreeMenu = { worktree: string; x: number; y: number };
 export type ProjectMenu = { project: string; x: number; y: number };
 export type RightPanel = "files" | null;
 /** What the right panel shows. */
-export type PanelView = "files" | "changes" | "sessions" | "pulls" | "actions" | "scripts";
+export type PanelView =
+  | "files"
+  | "changes"
+  | "comments"
+  | "sessions"
+  | "pulls"
+  | "actions"
+  | "scripts";
 /** The key of a project's Actions runs on `branch` (all branches: null) in `HiveState.runs`. */
 export const runsKey = (project: string, branch: string | null) => `${project}\n${branch ?? ""}`;
 
@@ -412,7 +417,7 @@ export type HiveState = {
   fileShown: boolean;
   /** The lines selected in the open file's viewer (new-file numbers, 1-based), or null. */
   selectedLines: Lines | null;
-  /** Review comments not sent yet, by worktree path (6.7). */
+  /** Review comments by worktree path, as the service last sent them (6.7, 27.3). */
   comments: Record<string, ReviewComment[]>;
   /** The lines the comment input is open for, in the open file of `worktree`, or null. */
   commenting: (Lines & OpenFile) | null;

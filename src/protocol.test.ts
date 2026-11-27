@@ -139,6 +139,7 @@ const FIELDS: { [T in ServiceMessage["type"]]: Fields<Extract<ServiceMessage, { 
     error: true,
     turns: true,
   },
+  comments: { path: true, comments: true },
   commits: { path: true, commits: true, truncated: true, error: true },
   scripts: { path: true, scripts: true, problems: true, port: true },
   file: {
