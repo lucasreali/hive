@@ -63,15 +63,16 @@ fn paths(names: &[&str]) -> Vec<String> {
 fn files_are_staged_and_unstaged_by_name_only() {
     let (_tmp, dir) = repo(true);
     std::fs::write(dir.join("a.txt"), "b\n").unwrap();
-    std::fs::write(dir.join("*.txt"), "star\n").unwrap();
+    // A name that is a glob for git (`[c]` matches `c`), and valid on every system.
+    std::fs::write(dir.join("[c].txt"), "glob\n").unwrap();
     std::fs::write(dir.join("c.txt"), "c\n").unwrap();
-    // `*.txt` is that file only: `c.txt` stays unstaged.
-    let done = stage(&dir, &paths(&["*.txt", "a.txt"]), true).unwrap();
+    // `[c].txt` is that file only: `c.txt` stays unstaged.
+    let done = stage(&dir, &paths(&["[c].txt", "a.txt"]), true).unwrap();
     assert_eq!(done, "Staged 2 files");
     assert_eq!(
         staged(&dir),
         [
-            ("*.txt".into(), Some(Staged::Yes)),
+            ("[c].txt".into(), Some(Staged::Yes)),
             ("a.txt".into(), Some(Staged::Yes)),
             ("c.txt".into(), Some(Staged::No)),
         ]
@@ -164,7 +165,7 @@ fn a_commit_message_is_checked() {
     let long = "m".repeat(MESSAGE_LIMIT + 1);
     assert_eq!(
         commit(&dir, &long, &env()).unwrap_err(),
-        "The commit message is over 64 KiB"
+        "The commit message is over 16 KiB"
     );
     assert_eq!(
         commit(&dir, "a\0b", &env()).unwrap_err(),

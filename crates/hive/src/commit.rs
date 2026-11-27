@@ -26,8 +26,9 @@ use crate::worktree;
 const COMMIT_TIME: Duration = Duration::from_secs(300);
 /// The longest a push (its `pre-push` hook and the network included) may take.
 const PUSH_TIME: Duration = Duration::from_secs(300);
-/// Most bytes of a commit message.
-const MESSAGE_LIMIT: usize = 64 << 10;
+/// Most bytes of a commit message: one argument, within Windows' 32,767-character command
+/// line.
+const MESSAGE_LIMIT: usize = 16 << 10;
 /// Most files staged or unstaged at once, and the longest path.
 const PATHS_LIMIT: usize = 10_000;
 const PATH_LIMIT: usize = 4096;
@@ -206,7 +207,7 @@ pub fn commit(dir: &Path, message: &str, env: &[(&str, String)]) -> Result<Strin
         return Err("A commit message is needed".to_owned());
     }
     if message.len() > MESSAGE_LIMIT {
-        return Err("The commit message is over 64 KiB".to_owned());
+        return Err("The commit message is over 16 KiB".to_owned());
     }
     if message.contains('\0') {
         return Err("The commit message holds a NUL character".to_owned());
