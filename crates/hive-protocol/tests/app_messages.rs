@@ -116,7 +116,11 @@ sort! {
         | GetShared
         | OpenShared
         | ListUninstall
-        | Uninstall;
+        | Uninstall
+        // Not the app's either way: `hive agents` asks and reads the answer (28.10).
+        | ListAgents
+        | AgentListed
+        | AgentsListed;
     received:
         Welcome
         | VersionMismatch

@@ -47,7 +47,7 @@ where
         return;
     };
     match client.role {
-        Role::Hook => hook_connection(reader, &state).await,
+        Role::Hook => hook_connection(reader, writer, &state).await,
         Role::App => {
             if let Some(gone) = app_connection(reader, writer, &state, client.link).await {
                 let _ = app_gone.send(gone).await;
@@ -119,12 +119,16 @@ where
     client
 }
 
-/// A hook connection carries exactly one event (or one `hive badge`); the connection is closed
-/// after it.
-async fn hook_connection<R: AsyncRead + Unpin>(
+/// A hook connection carries exactly one event (or one `hive badge`, or `hive agents`'s
+/// `list_agents`, the one it answers); the connection is closed after it.
+async fn hook_connection<R, W>(
     mut reader: FramedRead<R, FrameCodec>,
+    writer: FramedWrite<W, FrameCodec>,
     state: &Arc<State>,
-) {
+) where
+    R: AsyncRead + Unpin,
+    W: AsyncWrite + Unpin,
+{
     let Some(Ok(frame)) = reader.next().await else {
         return;
     };
@@ -133,6 +137,7 @@ async fn hook_connection<R: AsyncRead + Unpin>(
         return;
     }
     match frame.to_control() {
+        Ok(Control::ListAgents) => list_agents(writer, state).await,
         Ok(Control::Badge { text }) => {
             let channel = frame.channel;
             // Held while sending, so a badge cannot follow the terminal's `terminal_exited`.
@@ -185,6 +190,31 @@ async fn hook_connection<R: AsyncRead + Unpin>(
         _ => {}
     }
 }
+
+/// Answers `hive agents` (28.10): every live agent, in terminal order, then `agents_listed`.
+/// They are copied first, so a client that does not read never holds the agents lock; and it
+/// gets [`LIST_TIME`] to read them all.
+async fn list_agents<W: AsyncWrite + Unpin>(mut writer: FramedWrite<W, FrameCodec>, state: &State) {
+    let mut agents: Vec<_> = {
+        let agents = state.agents.lock().await;
+        agents.iter().map(|(id, agent)| agent.listed(id)).collect()
+    };
+    agents.sort_by(|a, b| (a.terminal, &a.id).cmp(&(b.terminal, &b.id)));
+    let messages = agents
+        .into_iter()
+        .map(|agent| Control::AgentListed { agent });
+    let sent = async {
+        for message in messages.chain([Control::AgentsListed]) {
+            writer.feed(Frame::control(0, &message)).await?;
+        }
+        writer.flush().await
+    };
+    // A client gone or too slow just gets less.
+    let _ = tokio::time::timeout(LIST_TIME, sent).await;
+}
+
+/// How long `hive agents` has to read the agents.
+const LIST_TIME: std::time::Duration = std::time::Duration::from_secs(5);
 
 /// How an app connection's frames ended.
 enum Ended {
