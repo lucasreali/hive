@@ -50,16 +50,16 @@ Git status colors in the files panel: modified `#DEC184`, added `#A1C181`, delet
 
 Diff colors (28.6, the `appearance.diff_colors` setting, "Diff colors" in Settings → Appearance), set as `data-diff-colors` on the root and used by the diff view, the editor's gutter markers (14.4) and the files and Diff panels (status letters, names, `+a −d` counts):
 
-| Token | Standard | Color-blind, One Dark | Color-blind, One Light |
-|---|---|---|---|
-| `--diff-added` | `--git-added` | `#85BEFF` | `#0B56B5` |
-| `--diff-modified` | `--git-modified` | `#E5C890` | `#6B5800` |
-| `--diff-removed` | `--git-deleted` | `#F7AD6E` | `#943F00` |
-| `--diff-renamed` | `--git-renamed` | `#B4BAC6` | `#55575C` |
-| `--diff-added-line` / `--diff-added-text` | `rgba(161,193,129,0.12)` / `0.25` | `--diff-added` at `0x1F` / `0x40` alpha | same |
-| `--diff-removed-line` / `--diff-removed-text` | `rgba(208,114,119,0.12)` / `0.25` | `--diff-removed` at `0x1F` / `0x40` alpha | same |
+| Token | Standard, One Dark | Standard, One Light | Color-blind, One Dark | Color-blind, One Light |
+|---|---|---|---|---|
+| `--diff-added` | `#A4C384` | `#406338` | `#85BEFF` | `#0B56B5` |
+| `--diff-modified` | `#DEC184` | `#6C5910` | `#E5C890` | `#6B5800` |
+| `--diff-removed` | `#F5A3A7` | `#A03728` | `#F7AD6E` | `#943F00` |
+| `--diff-renamed` | `#8FBDED` | `#264BD7` | `#B4BAC6` | `#55575C` |
+| `--diff-added-line` / `--diff-added-text` | `#A1C181` at `0x1F` / `0x40` alpha | same | `--diff-added` at `0x1F` / `0x40` alpha | same |
+| `--diff-removed-line` / `--diff-removed-text` | `#D07277` at `0x1F` / `0x40` alpha | same | `--diff-removed` at `0x1F` / `0x40` alpha | same |
 
-Color-blind: added blue, removed orange, modified a yellow, renamed grey (blue is added's). Each color passes WCAG AA (4.5:1) as text on `--bg`, `--panel`, `--hover` and `--selected`, and `--text` passes on each line tint over `--bg`, in both themes: `src/contrast.test.ts`, with the reusable `passesAA` / `contrast` of `src/contrast.ts`.
+Standard (28.24): the git status colors' hues, lightened in One Dark and darkened in One Light until they pass AA; the line tints stay the git colors'. Color-blind: added blue, removed orange, modified a yellow, renamed grey (blue is added's). In both palettes each color passes WCAG AA (4.5:1) as text on `--bg`, `--panel`, `--hover` and `--selected`, and `--text` passes on each line tint over `--bg`, in both themes: `src/contrast.test.ts`, with the reusable `passesAA` / `contrast` of `src/contrast.ts`.
 
 Code in the Markdown preview (14.6): `--syn-keyword`, `--syn-name`, `--syn-function`, `--syn-constant`, `--syn-type`, `--syn-operator`, `--syn-comment`, `--syn-string`, the editor's One Dark groups (`#C678DD`, `#E06C75`, `#61AFEF`, `#D19A66`, `#E5C07B`, `#56B6C2`, `#7F848E`, `#98C379`); One Light uses Atom One Light's.
 
