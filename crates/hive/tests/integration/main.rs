@@ -21,6 +21,9 @@ mod changes;
 mod comments;
 #[cfg(unix)]
 #[cfg(test)]
+mod commit;
+#[cfg(unix)]
+#[cfg(test)]
 mod common;
 #[cfg(unix)]
 #[cfg(test)]

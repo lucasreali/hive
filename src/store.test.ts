@@ -502,7 +502,14 @@ test("an equal file answer keeps its object, and still feeds the edit buffer (19
 
 test("an equal changes list keeps its object, and counts every arrival (19.13)", () => {
   const none = { base: "head", branch: null, base_error: null } as const;
-  const row = { path: "a.ts", status: "modified", old_path: null, added: 1, removed: 0 } as const;
+  const row = {
+    path: "a.ts",
+    status: "modified",
+    old_path: null,
+    added: 1,
+    removed: 0,
+    staged: null,
+  } as const;
   const list = { path: "/w", ...none, files: [row], added: 1, removed: 0, error: null };
   const got = () => useHive.getState().changes["/w"];
   apply({ type: "changes", ...list });

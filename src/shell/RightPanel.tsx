@@ -25,6 +25,7 @@ import {
   useState,
 } from "react";
 import { useShallow } from "zustand/react/shallow";
+import { stageFiles } from "../git";
 import type {
   ChangedFile,
   Changes,
@@ -79,6 +80,7 @@ import { referenceTarget, sendReference } from "../viewer/reference";
 import { CommentButton, CommentInput, CommentsView } from "../viewer/review";
 import { TableView } from "../viewer/TableView";
 import { commandKey, isMac, keyText } from "../window";
+import { CommitBox } from "./CommitBox";
 import { CommitPicker } from "./CommitPicker";
 import { askDiscard } from "./ConfirmDialog";
 import { askDelete } from "./FileMenu";
@@ -166,6 +168,7 @@ export function allFiles(
     old_path: null,
     added: null,
     removed: null,
+    staged: null,
   });
   return [
     ...listed.map((path) => byPath.get(path) ?? unchanged(path)),
@@ -467,6 +470,7 @@ function OpenView({ shown }: { shown: PanelViewEntry }) {
         <section className="panel-view" aria-label={shown.label}>
           <WorktreeInfo worktree={target.worktree}>
             {view === "changes" && <Summary worktree={target.worktree.path} />}
+            {view === "changes" && <CommitBox worktree={target.worktree} />}
           </WorktreeInfo>
           {view === "files" && <FilesView worktree={target.worktree.path} />}
           {view === "comments" && <CommentsView worktree={target.worktree.path} />}
@@ -713,6 +717,7 @@ function ContentResults({ worktree, query }: { worktree: string; query: string }
       old_path: null,
       added: null,
       removed: null,
+      staged: null,
     };
   return (
     <ul className="search-results hive-scroll" aria-label="Matching lines">
@@ -912,6 +917,14 @@ function FileTree({ worktree, changedOnly }: { worktree: string; changedOnly: bo
     row.kind === "folder"
       ? useHive.setState((s) => ({ collapsed: { ...s.collapsed, [row.key]: row.open } }))
       : leaveFile({ worktree, path: row.key }, !changedOnly);
+  // The Diff tree's boxes stage a file or unstage it (27.6): what is left to commit only.
+  const stageable = (row: FileRow | undefined) =>
+    changedOnly && row?.kind === "file" && row.file.staged !== null ? row.file : null;
+  const toggleStage = (row: FileRow | undefined) => {
+    const file = stageable(row);
+    if (file) stageFiles(worktree, [file.path], file.staged !== "yes");
+    return file !== null;
+  };
   const drag = useFileDrag(worktree, rows);
   // The entry just renamed or moved becomes the active row once the listing shows it.
   const moved = useHive((s) =>
@@ -933,6 +946,8 @@ function FileTree({ worktree, changedOnly }: { worktree: string; changedOnly: bo
       const next = Math.max(0, Math.min(rows.length - 1, at + move));
       setActive(next);
       virtual.scrollToIndex(next);
+    } else if (event.key === " " && toggleStage(row)) {
+      // Space stages the active file in the Diff tree; Enter opens it.
     } else if (event.key === "Enter" || event.key === " ") {
       pick(row);
     } else if (event.key === "ArrowLeft" || event.key === "ArrowRight") {
@@ -971,15 +986,19 @@ function FileTree({ worktree, changedOnly }: { worktree: string; changedOnly: bo
           const index = indexAt(e);
           if (index < 0 || onSeenBox(e)) return;
           setActive(index);
-          pick(rows[index] as FileRow);
+          if ((e.target as Element).closest("[data-stage]")) toggleStage(rows[index]);
+          else pick(rows[index] as FileRow);
         }}
         // A double click keeps the file's tab (11.1): its first click opened it as the preview.
         onDoubleClick={(e) => {
           const row = rows[indexAt(e)];
-          if (row?.kind === "file" && !onSeenBox(e)) pinFile({ worktree, path: row.key });
+          const box = onSeenBox(e) || !!(e.target as Element).closest("[data-stage]");
+          if (row?.kind === "file" && !box) pinFile({ worktree, path: row.key });
         }}
         // A row's seen box (27.1) marks its file, and opens nothing.
         onChange={(e) => {
+          // The staging box (27.6) acts on its click.
+          if (!onSeenBox(e)) return;
           const row = rows[indexAt(e)];
           const box = e.target as HTMLInputElement;
           if (changes && row?.kind === "file") markSeen(changes, [row.key], box.checked);
@@ -1011,6 +1030,7 @@ function FileTree({ worktree, changedOnly }: { worktree: string; changedOnly: bo
               selected={row.kind === "file" && row.key === open}
               dropTarget={row.kind === "folder" && row.path === drag.over}
               movable={!changedOnly}
+              stageable={changedOnly}
               seenBox={changedOnly}
             />
           );
@@ -1071,10 +1091,36 @@ const TreeRow = memo(function TreeRow(props: {
   selected: boolean;
   dropTarget: boolean;
   movable: boolean;
+  /** The Diff tree: each row starts with its staging box (27.6), or the space of one. */
+  stageable: boolean;
   /** A file row's seen box at its right end (the Diff view, 27.1). */
   seenBox: boolean;
 }) {
   const { row, index } = props;
+  const staged = row.kind === "file" ? row.file.staged : null;
+  const box = !props.stageable ? null : staged === null ? (
+    <span className="stage-space" />
+  ) : (
+    <input
+      type="checkbox"
+      className="stage-box"
+      data-stage
+      tabIndex={-1}
+      checked={staged === "yes"}
+      readOnly
+      aria-label={`${staged === "yes" ? "Unstage" : "Stage"} ${row.kind === "file" ? row.key : ""}`}
+      title={
+        staged === "partly"
+          ? "Partly staged: stage all of it"
+          : staged === "yes"
+            ? "Staged: unstage it"
+            : "Stage it for the next commit (Space)"
+      }
+      ref={(el) => {
+        if (el) el.indeterminate = staged === "partly";
+      }}
+    />
+  );
   const status = row.kind === "folder" ? row.status : row.file.status;
   return (
     <div
@@ -1096,6 +1142,7 @@ const TreeRow = memo(function TreeRow(props: {
     >
       {row.kind === "folder" ? (
         <>
+          {props.stageable && <span className="stage-space" />}
           <ChevronIcon open={row.open} />
           <TreeFolderIcon name={row.name} open={row.open} />
           <span className="name">{row.name}</span>
@@ -1108,6 +1155,7 @@ const TreeRow = memo(function TreeRow(props: {
         </>
       ) : (
         <>
+          {box}
           <span className="chevron-space" />
           <TreeFileIcon name={row.name} />
           <span className="name">{row.name}</span>

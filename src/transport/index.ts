@@ -1,4 +1,5 @@
 import { isTauri } from "@tauri-apps/api/core";
+import type { PushAt, WorkflowValue } from "../git";
 import type {
   AccountDir,
   AppMode,
@@ -135,14 +136,44 @@ export interface Transport {
    * `worktree_created`. Ask before merging or closing.
    */
   actOnPull(project: string, number: number, action: PullAction): Promise<void>;
-  /** A pull request from `worktree`'s branch; answered by `pull_done` or `pull_failed`. */
+  /**
+   * A pull request from `worktree`'s branch, pushed first to `push` (the remote and ref the
+   * user confirmed, 27.6) when not null; answered by `pull_done` or `pull_failed`.
+   */
   createPull(
     worktree: string,
     title: string,
     body: string,
     base: string,
     draft: boolean,
+    push: PushAt | null,
   ): Promise<void>;
+  /**
+   * The workflows of `project` that can be run by hand, as `worktree`'s `HEAD` has them
+   * (27.6); answered by `workflows`.
+   */
+  listWorkflows(project: string, worktree: string): Promise<void>;
+  /**
+   * `gh workflow run`; answered by `workflow_started` (then `run` and the `branch` list) or
+   * `workflow_failed`. Ask first.
+   */
+  runWorkflow(
+    project: string,
+    workflow: string,
+    branch: string,
+    inputs: WorkflowValue[],
+  ): Promise<void>;
+  /** Stages or unstages files of `worktree` (27.6); answered by `git_done` or `git_failed`. */
+  stageFiles(worktree: string, paths: string[], staged: boolean): Promise<void>;
+  /** Commits what is staged (ask first); answered by `git_done` or `git_failed`. */
+  commit(worktree: string, message: string): Promise<void>;
+  /** Where `push` would push `worktree`'s branch; answered by `push_target`. */
+  getPushTarget(worktree: string): Promise<void>;
+  /**
+   * Pushes `worktree`'s branch, never forced, while it and its remote and ref are still
+   * `branch` and `at` (as shown to the user); answered by `git_done` or `git_failed`.
+   */
+  push(worktree: string, branch: string, at: PushAt): Promise<void>;
   /**
    * The project's latest Actions runs (9.32), on `branch` only when not null; answered by
    * `runs`. Without `force` the service sends a list under 2 minutes old again.

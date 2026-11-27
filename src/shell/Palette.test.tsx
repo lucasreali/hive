@@ -475,6 +475,7 @@ test("Mark all as seen marks the shown worktree's changed files while one is uns
     old_path: null,
     added: 1,
     removed: 0,
+    staged: null,
     ...(seen ? { seen } : {}),
   });
   const listed = (files: ReturnType<typeof file>[]) =>

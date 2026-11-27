@@ -1,4 +1,5 @@
 import {
+  ArrowUpIcon,
   BinocularsIcon,
   BroomIcon,
   CopyIcon,
@@ -19,6 +20,7 @@ import {
   useRef,
   useState,
 } from "react";
+import { openPush } from "../git";
 import type { Worktree } from "../protocol";
 import { runScript, worktreeScripts } from "../scripts";
 import {
@@ -184,6 +186,17 @@ export function WorktreeMenu() {
           {isMac() ? "Reveal in Finder" : "Show in Explorer"}
         </button>
       )}
+      {/* 27.6: asked in its dialog, never forced. */}
+      <button
+        type="button"
+        role="menuitem"
+        disabled={!w.branch || !project}
+        title={w.branch ? undefined : "This worktree is on no branch"}
+        onClick={act(() => openPush(project as string, w))}
+      >
+        <ArrowUpIcon {...ICON} />
+        Push…
+      </button>
       <hr />
       <button
         type="button"

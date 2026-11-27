@@ -1028,6 +1028,21 @@ impl State {
         });
     }
 
+    /// Answers a git request of the Changes panel (27.6) off the frame loop: git, its hooks and
+    /// a push's network may take minutes. The files watch sends the changes it made.
+    fn git(self: &Arc<Self>, request: Control) {
+        let state = self.clone();
+        tokio::spawn(async move {
+            let gh = state.gh().await;
+            let replies = tokio::task::block_in_place(|| {
+                crate::commit::answer(&gh, &state.projects, request)
+            });
+            for reply in replies {
+                state.to_app(0, &reply).await;
+            }
+        });
+    }
+
     /// Answers a request of the pull requests (9.31) or Actions (9.32) view off the frame
     /// loop: `gh` asks GitHub.
     fn github(self: &Arc<Self>, request: Control) {
@@ -1050,6 +1065,10 @@ impl State {
                     | Control::OpenJobLog { .. }
                     | Control::ActOnRun { .. } => {
                         crate::actions::answer(&gh, projects, &state.runs, request)
+                    }
+                    Control::ListWorkflows { .. } | Control::RunWorkflow { .. } => {
+                        let wait = crate::workflows::LOOK_EVERY;
+                        crate::workflows::answer(&gh, projects, &state.runs, request, wait)
                     }
                     _ => crate::pulls::answer(&gh, projects, &state.pulls, request),
                 };

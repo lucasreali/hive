@@ -1,5 +1,6 @@
 import type { Text } from "@codemirror/state";
 import { create } from "zustand";
+import type { GitState, PushTarget, Workflows } from "./git";
 import {
   clampWidth,
   ORDER_LIMIT,
@@ -305,6 +306,8 @@ export type Modal =
   | "file-name"
   | "confirm"
   | "new-pull"
+  | "push"
+  | "run-workflow"
   | null;
 /**
  * A message shown as a toast (10.3): an `error` (why something failed, 9.21) stays until
@@ -606,6 +609,14 @@ export type HiveState = {
   jobLog: JobLog | null;
   runBusy: RunBusy | null;
   runError: RunError | null;
+  /** Each worktree's git action of the Changes panel sent and not answered, or why it failed (27.6). */
+  git: Record<string, GitState>;
+  /** The last `push_target` of each worktree. */
+  pushTargets: Record<string, PushTarget>;
+  /** The "Run workflow…" dialog's workflows, once they arrive. */
+  workflows: Workflows | null;
+  workflowBusy: boolean;
+  workflowError: string | null;
 };
 
 export const initialState: HiveState = {
@@ -731,6 +742,11 @@ export const initialState: HiveState = {
   jobLog: null,
   runBusy: null,
   runError: null,
+  git: {},
+  pushTargets: {},
+  workflows: null,
+  workflowBusy: false,
+  workflowError: null,
 };
 
 /**
@@ -777,6 +793,11 @@ export const HOST_FIELDS = [
   "jobLog",
   "runBusy",
   "runError",
+  "git",
+  "pushTargets",
+  "workflows",
+  "workflowBusy",
+  "workflowError",
   "worktreeDialog",
   "addProjectError",
   "projectCreated",

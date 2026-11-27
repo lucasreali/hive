@@ -15,6 +15,14 @@ async fn next<T>(rx: &mut mpsc::UnboundedReceiver<T>) -> T {
         .unwrap()
 }
 
+/// Where a push of branch `b` goes: `origin`'s `refs/heads/b` (27.6).
+fn push_at() -> PushAt {
+    PushAt {
+        remote: "origin".into(),
+        merge: "refs/heads/b".into(),
+    }
+}
+
 /// A UI control channel and what it received.
 fn ui() -> (Channel<Value>, mpsc::UnboundedReceiver<Value>) {
     let (tx, rx) = mpsc::unbounded_channel();
@@ -1567,16 +1575,68 @@ async fn project_requests_go_to_the_service_and_answers_to_the_ui() {
         action: PullAction::Close,
     };
     assert_eq!(service.control().await, (0, act));
-    hive.create_pull("/r/w".into(), "t".into(), "b".into(), "main".into(), true)
-        .unwrap();
+    hive.create_pull(
+        "/r/w".into(),
+        "t".into(),
+        "b".into(),
+        "main".into(),
+        (true, Some(push_at())),
+    )
+    .unwrap();
     let create = Control::CreatePull {
         worktree: "/r/w".into(),
         title: "t".into(),
         body: "b".into(),
         base: "main".into(),
         draft: true,
+        push: Some(push_at()),
     };
     assert_eq!(service.control().await, (0, create));
+    hive.stage_files("/r/w".into(), vec!["a".into()], false)
+        .unwrap();
+    let stage = Control::StageFiles {
+        worktree: "/r/w".into(),
+        paths: vec!["a".into()],
+        staged: false,
+    };
+    assert_eq!(service.control().await, (0, stage));
+    hive.commit("/r/w".into(), "m".into()).unwrap();
+    let commit = Control::Commit {
+        worktree: "/r/w".into(),
+        message: "m".into(),
+    };
+    assert_eq!(service.control().await, (0, commit));
+    hive.get_push_target("/r/w".into()).unwrap();
+    let target = Control::GetPushTarget {
+        worktree: "/r/w".into(),
+    };
+    assert_eq!(service.control().await, (0, target));
+    hive.push("/r/w".into(), "b".into(), push_at()).unwrap();
+    let push = Control::Push {
+        worktree: "/r/w".into(),
+        branch: "b".into(),
+        at: push_at(),
+    };
+    assert_eq!(service.control().await, (0, push));
+    hive.list_workflows("/r".into(), "/r/w".into()).unwrap();
+    let workflows = Control::ListWorkflows {
+        project: "/r".into(),
+        worktree: "/r/w".into(),
+    };
+    assert_eq!(service.control().await, (0, workflows));
+    let inputs = vec![WorkflowValue {
+        name: "n".into(),
+        value: "v".into(),
+    }];
+    hive.run_workflow("/r".into(), "ci.yml".into(), "b".into(), inputs.clone())
+        .unwrap();
+    let run = Control::RunWorkflow {
+        project: "/r".into(),
+        workflow: "ci.yml".into(),
+        branch: "b".into(),
+        inputs,
+    };
+    assert_eq!(service.control().await, (0, run));
     hive.list_runs("/r".into(), Some("b".into()), true).unwrap();
     let list = Control::ListRuns {
         project: "/r".into(),
@@ -2166,8 +2226,18 @@ async fn bridge_exit_ends_terminals_then_disconnects() {
         hive.act_on_pull("/r".into(), 1, PullAction::Ready),
         not_connected
     );
-    let create = hive.create_pull("/r".into(), "t".into(), String::new(), "m".into(), false);
+    let flags = (false, None);
+    let create = hive.create_pull("/r".into(), "t".into(), String::new(), "m".into(), flags);
     assert_eq!(create, not_connected);
+    let stage = hive.stage_files("/r".into(), vec!["a".into()], true);
+    assert_eq!(stage, not_connected);
+    assert_eq!(hive.commit("/r".into(), "m".into()), not_connected);
+    assert_eq!(hive.get_push_target("/r".into()), not_connected);
+    let push = hive.push("/r".into(), "b".into(), push_at());
+    assert_eq!(push, not_connected);
+    assert_eq!(hive.list_workflows("/r".into(), "/r".into()), not_connected);
+    let run = hive.run_workflow("/r".into(), "ci.yml".into(), "b".into(), Vec::new());
+    assert_eq!(run, not_connected);
     assert_eq!(hive.list_runs("/r".into(), None, false), not_connected);
     assert_eq!(hive.open_run("/r".into(), 1), not_connected);
     assert_eq!(hive.open_job_log("/r".into(), 1), not_connected);
@@ -2499,6 +2569,12 @@ fn commands_reach_the_managed_hive() {
             open_run,
             open_job_log,
             act_on_run,
+            list_workflows,
+            run_workflow,
+            stage_files,
+            commit,
+            get_push_target,
+            push,
             open_settings_file,
             get_diagnostics,
             get_shared,
@@ -2602,8 +2678,15 @@ fn commands_reach_the_managed_hive() {
     let open_job_log = json!({"project": "/r", "job": 4});
     let act_on_run =
         json!({"project": "/r", "run": 9, "action": {"kind": "cancel"}, "branch": null});
-    let create_pull =
-        json!({"worktree": "/r/w", "title": "t", "body": "", "base": "main", "draft": false});
+    let form = json!({"title": "t", "body": "", "base": "main", "draft": false});
+    let create_pull = json!({"worktree": "/r/w", "form": form});
+    let list_workflows = json!({"project": "/r", "worktree": "/r/w"});
+    let run_workflow = json!({"project": "/r", "workflow": "ci.yml", "branch": "b", "inputs": [{"name": "n", "value": "v"}]});
+    let stage_files = json!({"worktree": "/r/w", "paths": ["a"], "staged": true});
+    let commit = json!({"worktree": "/r/w", "message": "m"});
+    let worktree = json!({"worktree": "/r/w"});
+    let at = json!({"remote": "origin", "merge": "refs/heads/b"});
+    let push = json!({"worktree": "/r/w", "branch": "b", "at": at});
     for (cmd, args) in [
         ("list_branches", &branches),
         ("validate_worktree_name", &validate),
@@ -2677,6 +2760,12 @@ fn commands_reach_the_managed_hive() {
         ("open_run", &open_run),
         ("open_job_log", &open_job_log),
         ("act_on_run", &act_on_run),
+        ("list_workflows", &list_workflows),
+        ("run_workflow", &run_workflow),
+        ("stage_files", &stage_files),
+        ("commit", &commit),
+        ("get_push_target", &worktree),
+        ("push", &push),
         ("open_settings_file", &json!({})),
         ("get_diagnostics", &json!({})),
         ("get_shared", &json!({})),
@@ -2778,6 +2867,12 @@ fn commands_reach_the_managed_hive() {
         ("open_run", open_run),
         ("open_job_log", open_job_log),
         ("act_on_run", act_on_run),
+        ("list_workflows", list_workflows),
+        ("run_workflow", run_workflow),
+        ("stage_files", stage_files),
+        ("commit", commit),
+        ("get_push_target", worktree.clone()),
+        ("push", push),
     ] {
         assert_eq!(invoke(&webview, cmd, args), Ok(Value::Null), "{cmd}");
     }

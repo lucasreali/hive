@@ -224,7 +224,14 @@ test("the text view is the tab's choice, and unsaved edits can go back to the ta
 
 test("Edit on a changed CSV file shows its text, editable", () => {
   panel();
-  const changed = { path: CSV, old_path: null, status: "modified", added: 1, removed: 0 } as const;
+  const changed = {
+    path: CSV,
+    old_path: null,
+    status: "modified",
+    added: 1,
+    removed: 0,
+    staged: null,
+  } as const;
   act(() =>
     apply({
       type: "changes",
@@ -465,7 +472,14 @@ test("a table with no text to save is read-only and says so; a workbook says not
 
 test("Diff from a table being edited shows the diff", () => {
   const { stop } = editable();
-  const changed = { path: CSV, old_path: null, status: "modified", added: 1, removed: 0 } as const;
+  const changed = {
+    path: CSV,
+    old_path: null,
+    status: "modified",
+    added: 1,
+    removed: 0,
+    staged: null,
+  } as const;
   act(() =>
     apply({
       type: "changes",

@@ -18,8 +18,8 @@ use std::time::{Duration, Instant};
 use futures_util::{FutureExt, SinkExt, Stream, StreamExt};
 use hive_protocol::{
     AccountDir, AgentState, Control, DiffBase, Frame, FrameCodec, FrameError, FrameType, GhAccount,
-    LineSide, PullAction, Role, RunAction, SessionTarget, Settings, SpaceEnv, TableEdit,
-    MAX_PAYLOAD, PROTOCOL_VERSION, READ_LIMIT,
+    LineSide, PullAction, PullForm, PushAt, Role, RunAction, SessionTarget, Settings, SpaceEnv,
+    TableEdit, WorkflowValue, MAX_PAYLOAD, PROTOCOL_VERSION, READ_LIMIT,
 };
 use serde_json::{json, Value};
 use tauri::http::Response;
@@ -2122,6 +2122,41 @@ impl Host {
         self.link().send(0, &Control::ListChanges { path, base })
     }
 
+    /// The answer arrives as `git_done` or `git_failed` (27.6).
+    pub fn stage_files(
+        &self,
+        worktree: String,
+        paths: Vec<String>,
+        staged: bool,
+    ) -> Result<(), String> {
+        let stage = Control::StageFiles {
+            worktree,
+            paths,
+            staged,
+        };
+        self.link().send(0, &stage)
+    }
+
+    /// The answer arrives as `git_done` or `git_failed`.
+    pub fn commit(&self, worktree: String, message: String) -> Result<(), String> {
+        self.link().send(0, &Control::Commit { worktree, message })
+    }
+
+    /// The answer arrives as `push_target`.
+    pub fn get_push_target(&self, worktree: String) -> Result<(), String> {
+        self.link().send(0, &Control::GetPushTarget { worktree })
+    }
+
+    /// The answer arrives as `git_done` or `git_failed`.
+    pub fn push(&self, worktree: String, branch: String, at: PushAt) -> Result<(), String> {
+        let push = Control::Push {
+            worktree,
+            branch,
+            at,
+        };
+        self.link().send(0, &push)
+    }
+
     /// The answer arrives as `commits` (27.2).
     pub fn list_commits(&self, path: String) -> Result<(), String> {
         self.link().send(0, &Control::ListCommits { path })
@@ -2469,14 +2504,15 @@ impl Host {
         self.link().send(0, &act)
     }
 
-    /// The answer arrives as `pull_done` or `pull_failed`.
+    /// The answer arrives as `pull_done` or `pull_failed`; with `push`, the branch is pushed
+    /// first (27.6).
     pub fn create_pull(
         &self,
         worktree: String,
         title: String,
         body: String,
         base: String,
-        draft: bool,
+        (draft, push): (bool, Option<PushAt>),
     ) -> Result<(), String> {
         let create = Control::CreatePull {
             worktree,
@@ -2484,6 +2520,7 @@ impl Host {
             body,
             base,
             draft,
+            push,
         };
         self.link().send(0, &create)
     }
@@ -2528,6 +2565,29 @@ impl Host {
             branch,
         };
         self.link().send(0, &act)
+    }
+
+    /// The answer arrives as `workflows` (27.6).
+    pub fn list_workflows(&self, project: String, worktree: String) -> Result<(), String> {
+        self.link()
+            .send(0, &Control::ListWorkflows { project, worktree })
+    }
+
+    /// The answer arrives as `workflow_started` or `workflow_failed`.
+    pub fn run_workflow(
+        &self,
+        project: String,
+        workflow: String,
+        branch: String,
+        inputs: Vec<WorkflowValue>,
+    ) -> Result<(), String> {
+        let run = Control::RunWorkflow {
+            project,
+            workflow,
+            branch,
+            inputs,
+        };
+        self.link().send(0, &run)
     }
 
     /// The answer arrives as `editor_target` with an empty `worktree`.
@@ -3051,6 +3111,12 @@ const REMOTE_TO_UI: &[&str] = &[
     "job_log",
     "run_done",
     "run_failed",
+    "workflows",
+    "workflow_started",
+    "workflow_failed",
+    "push_target",
+    "git_done",
+    "git_failed",
     "gh_accounts",
     "gh_identity",
     "gh_identity_failed",
@@ -3937,13 +4003,82 @@ pub mod commands {
         hive: State<'_, Hive>,
         host: Option<String>,
         worktree: String,
-        title: String,
-        body: String,
-        base: String,
-        draft: bool,
+        form: PullForm,
+    ) -> Result<(), String> {
+        let PullForm {
+            title,
+            body,
+            base,
+            draft,
+            push,
+        } = form;
+        hive.on(host.as_deref())?
+            .create_pull(worktree, title, body, base, (draft, push))
+    }
+
+    #[tauri::command]
+    pub fn list_workflows(
+        hive: State<'_, Hive>,
+        host: Option<String>,
+        project: String,
+        worktree: String,
+    ) -> Result<(), String> {
+        hive.on(host.as_deref())?.list_workflows(project, worktree)
+    }
+
+    #[tauri::command]
+    pub fn run_workflow(
+        hive: State<'_, Hive>,
+        host: Option<String>,
+        project: String,
+        workflow: String,
+        branch: String,
+        inputs: Vec<WorkflowValue>,
     ) -> Result<(), String> {
         hive.on(host.as_deref())?
-            .create_pull(worktree, title, body, base, draft)
+            .run_workflow(project, workflow, branch, inputs)
+    }
+
+    #[tauri::command]
+    pub fn stage_files(
+        hive: State<'_, Hive>,
+        host: Option<String>,
+        worktree: String,
+        paths: Vec<String>,
+        staged: bool,
+    ) -> Result<(), String> {
+        hive.on(host.as_deref())?
+            .stage_files(worktree, paths, staged)
+    }
+
+    #[tauri::command]
+    pub fn commit(
+        hive: State<'_, Hive>,
+        host: Option<String>,
+        worktree: String,
+        message: String,
+    ) -> Result<(), String> {
+        hive.on(host.as_deref())?.commit(worktree, message)
+    }
+
+    #[tauri::command]
+    pub fn get_push_target(
+        hive: State<'_, Hive>,
+        host: Option<String>,
+        worktree: String,
+    ) -> Result<(), String> {
+        hive.on(host.as_deref())?.get_push_target(worktree)
+    }
+
+    #[tauri::command]
+    pub fn push(
+        hive: State<'_, Hive>,
+        host: Option<String>,
+        worktree: String,
+        branch: String,
+        at: PushAt,
+    ) -> Result<(), String> {
+        hive.on(host.as_deref())?.push(worktree, branch, at)
     }
 
     #[tauri::command]

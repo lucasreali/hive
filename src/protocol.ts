@@ -1,3 +1,4 @@
+import type { GitAction, PushTarget, Staged, Workflows } from "./git";
 import type { PullDetail, PullState, Pulls } from "./pulls";
 import type { JobLog, RunDetail, Runs } from "./runs";
 
@@ -150,6 +151,19 @@ export type ServiceMessage =
   | ({ type: "job_log" } & JobLog)
   | { type: "run_done"; project: string; run: number; message: string }
   | { type: "run_failed"; project: string; run: number; message: string }
+  // 27.6: workflows run by hand, and the Changes panel's git actions.
+  | ({ type: "workflows" } & Workflows)
+  | {
+      type: "workflow_started";
+      project: string;
+      branch: string;
+      run: number | null;
+      message: string;
+    }
+  | { type: "workflow_failed"; project: string; message: string }
+  | ({ type: "push_target" } & PushTarget)
+  | { type: "git_done"; worktree: string; action: GitAction; message: string }
+  | { type: "git_failed"; worktree: string; action: GitAction; message: string }
   | ({ type: "branches" } & Branches)
   | ({ type: "worktree_name_validated" } & NameCheck)
   | { type: "worktree_created"; project: Project; path: string; notes: string[] }
@@ -467,6 +481,8 @@ export type ChangedFile = {
   old_path: string | null;
   added: number | null;
   removed: number | null;
+  /** What of it is staged (27.6); null when nothing of it is left to commit. */
+  staged: Staged | null;
   /** Its seen mark (27.1): "changed" when its diff changed since it was marked; absent: none. */
   seen?: SeenMark;
 };

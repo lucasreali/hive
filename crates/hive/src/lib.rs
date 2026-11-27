@@ -9,6 +9,7 @@ pub mod changes;
 pub mod checkout;
 pub mod cli;
 pub mod comments;
+pub mod commit;
 pub mod daemon;
 pub mod dirs;
 #[cfg(unix)]
@@ -60,6 +61,7 @@ pub mod watch;
 #[cfg(windows)]
 pub mod windows;
 pub mod workbook;
+pub mod workflows;
 pub mod worktree;
 pub mod worktree_store;
 pub mod wrapper;

@@ -47,6 +47,7 @@ test("a worktree's right click opens its menu at the pointer; main and foreign o
     ["New terminal here", false],
     ["Copy path", false],
     ["Show in Explorer", false],
+    ["Push…", false],
     ["Review in a new worktree…", false],
     ["Rename…", false],
     ["Delete…", false],
@@ -109,6 +110,8 @@ test("arrows move between enabled items; Esc, Tab, a click outside, scrolling an
   fireEvent.keyDown(m, { key: "ArrowDown" });
   expect(document.activeElement).toBe(item("Copy path"));
   fireEvent.keyDown(m, { key: "ArrowDown" });
+  fireEvent.keyDown(m, { key: "ArrowDown" });
+  expect(document.activeElement).toBe(item("Push…"));
   fireEvent.keyDown(m, { key: "ArrowDown" });
   expect(document.activeElement).toBe(item("Review in a new worktree…"));
   fireEvent.keyDown(m, { key: "ArrowDown" });
@@ -639,4 +642,19 @@ test("a remote space's worktree is not revealed here (26.18)", () => {
   const items = screen.getAllByRole("menuitem").map((i) => i.textContent);
   expect(items).toContain("Copy path");
   expect(items).not.toContain("Show in Explorer");
+});
+
+test("Push… opens the push dialog; a detached worktree has none (27.6)", () => {
+  const target = spyOn(transport, "getPushTarget").mockResolvedValue();
+  show();
+  rightClick("d");
+  expect(item("Push…").disabled).toBe(true);
+  expect(item("Push…").title).toBe("This worktree is on no branch");
+  rightClick("fix-login");
+  fireEvent.click(item("Push…"));
+  expect(menu()).toBeNull();
+  expect(useHive.getState()).toMatchObject({ modal: "push", modalWorktree: login.id });
+  expect(target).toHaveBeenCalledWith(login.path);
+  expect(screen.getByRole("dialog", { name: "Push" })).toBeTruthy();
+  target.mockRestore();
 });

@@ -389,6 +389,67 @@
     "message": "m"
   },
   {
+    "type": "workflows",
+    "project": "/r",
+    "worktree": "/r",
+    "workflows": [
+      {
+        "file": "ci.yml",
+        "name": "ci",
+        "inputs": [
+          {
+            "name": "level",
+            "description": "m",
+            "required": true,
+            "default": "a",
+            "kind": "choice",
+            "options": [
+              "a"
+            ]
+          }
+        ]
+      }
+    ],
+    "error": null
+  },
+  {
+    "type": "workflow_started",
+    "project": "/r",
+    "branch": "main",
+    "run": 1,
+    "message": "m"
+  },
+  {
+    "type": "workflow_failed",
+    "project": "/r",
+    "message": "m"
+  },
+  {
+    "type": "push_target",
+    "worktree": "/r",
+    "branch": "main",
+    "target": "origin/main",
+    "at": {
+      "remote": "origin",
+      "merge": "refs/heads/main"
+    },
+    "set_upstream": false,
+    "ahead": 1,
+    "error": null
+  },
+  {
+    "type": "git_done",
+    "worktree": "/r",
+    "action": "commit",
+    "message": "m"
+  },
+  {
+    "type": "git_failed",
+    "worktree": "/r",
+    "action": "push",
+    "message": "m"
+  },
+  {
     "type": "branches",
     "project": "/r",
     "local": [
@@ -614,6 +675,7 @@
         "old_path": null,
         "added": 1,
         "removed": 0,
+        "staged": "partly",
         "seen": "seen"
       }
     ],

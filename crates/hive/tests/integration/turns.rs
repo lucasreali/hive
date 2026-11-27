@@ -7,7 +7,7 @@ use std::path::Path;
 use std::process::Stdio;
 use std::time::Duration;
 
-use hive_protocol::{ChangedFile, Control, DiffBase, FileStatus, Role};
+use hive_protocol::{ChangedFile, Control, DiffBase, FileStatus, Role, Staged};
 use serde_json::json;
 
 use crate::common::Conn;
@@ -127,12 +127,13 @@ async fn the_diff_since_an_agents_last_turn_shows_only_what_changed_since() {
     repo.write("notes.txt", "n\nmore\n");
     let edit = json!({"session_id": "s1", "cwd": root, "tool_name": "Edit"});
     fire(&repo, "PostToolUse", edit);
-    let file = |path: &str, status| ChangedFile {
+    let file = |path: &str, status, staged| ChangedFile {
         path: path.into(),
         status,
         old_path: None,
         added: Some(1),
         removed: Some(0),
+        staged: Some(staged),
         seen: None,
     };
     let Control::Changes {
@@ -149,9 +150,10 @@ async fn the_diff_since_an_agents_last_turn_shows_only_what_changed_since() {
     assert_eq!(
         listed,
         [
-            file("a.txt", FileStatus::Modified),
-            file("b.txt", FileStatus::Added),
-            file("notes.txt", FileStatus::Modified),
+            // What of each is staged (27.6): the user's staged edit, changed again since.
+            file("a.txt", FileStatus::Modified, Staged::Partly),
+            file("b.txt", FileStatus::Added, Staged::No),
+            file("notes.txt", FileStatus::Modified, Staged::No),
         ]
     );
     assert!(!listed_turns[0].late);

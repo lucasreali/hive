@@ -1,3 +1,4 @@
+import type { PushAt } from "../git";
 import type { ServiceMessage } from "../protocol";
 import type { PullAction, PullDetail, PullRepo, PullSummary } from "../pulls";
 
@@ -147,7 +148,14 @@ export function createMockPulls(
       sendPull(project, number);
       sendList(project);
     },
-    async createPull(worktree: string, title: string, _body: string, base: string, draft: boolean) {
+    async createPull(
+      worktree: string,
+      title: string,
+      _body: string,
+      base: string,
+      draft: boolean,
+      _push: PushAt | null,
+    ) {
       const project = holder(worktree) ?? "";
       const list = lists[project];
       if (!list || !title.trim()) {

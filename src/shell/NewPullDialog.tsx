@@ -1,4 +1,5 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import type { PushTarget } from "../git";
 import { setPullBusy } from "../pulls";
 import { findWorktree, openModal, owner, useHive } from "../store";
 import { transport } from "../transport";
@@ -7,11 +8,16 @@ import { showModal } from "./WorktreeMenu";
 
 const close = () => openModal(null);
 
+/** Whether the branch has work GitHub lacks: no upstream yet, commits ahead, or not known. */
+export const needsPush = (target: PushTarget | undefined) =>
+  !!target && target.error === null && (target.set_upstream || target.ahead !== 0);
+
 /**
  * "Create pull request" (9.31) from the dialog's worktree's branch: title, description, base
  * (the main worktree's branch at first) and draft. The service checks them and runs
- * `gh pr create`; the branch must be on GitHub already (Hive does not push). Closes when the
- * pull request is opened; `gh`'s refusal shows here.
+ * `gh pr create`. When the branch is not on GitHub yet, or has commits it lacks, "Push first"
+ * (27.6, ticked) has the service push it before. Closes when the pull request is opened; git's
+ * or `gh`'s refusal shows here.
  */
 export function NewPullDialog() {
   const w = useHive((s) => findWorktree(s.projects, s.modalWorktree));
@@ -23,6 +29,14 @@ export function NewPullDialog() {
   const [body, setBody] = useState("");
   const [base, setBase] = useState(main);
   const [draft, setDraft] = useState(false);
+  const path = w?.path;
+  const target = useHive((s) => (path ? s.pushTargets[path] : undefined));
+  const offer = needsPush(target);
+  const [push, setPush] = useState(true);
+  // Where its branch would go, to offer pushing it first.
+  useEffect(() => {
+    if (path) void transport.getPushTarget(path);
+  }, [path]);
   if (!w || !project) return null;
   return (
     <dialog
@@ -35,7 +49,8 @@ export function NewPullDialog() {
         onSubmit={(e) => {
           e.preventDefault();
           setPullBusy({ project: project.id, number: null, action: "create" });
-          void transport.createPull(w.path, title, body, base, draft);
+          const to = offer && push ? (target?.at ?? null) : null;
+          void transport.createPull(w.path, title, body, base, draft, to);
         }}
       >
         <header>
@@ -46,7 +61,7 @@ export function NewPullDialog() {
         </header>
         <div className="dialog-body">
           <p className="hint">
-            From <b>{w.branch}</b>, which must be pushed to GitHub first.
+            From <b>{w.branch}</b>.
           </p>
           <div className="field">
             <label htmlFor="new-pull-title-input">Title</label>
@@ -82,6 +97,14 @@ export function NewPullDialog() {
             <input type="checkbox" checked={draft} onChange={(e) => setDraft(e.target.checked)} />
             Draft
           </label>
+          {offer && target && (
+            <label className="checkbox">
+              <input type="checkbox" checked={push} onChange={(e) => setPush(e.target.checked)} />
+              {target.set_upstream
+                ? `Push ${target.branch} to ${target.target} first: it is not on GitHub yet`
+                : `Push ${target.branch} to ${target.target} first${target.ahead ? ` (${target.ahead} ${target.ahead === 1 ? "commit" : "commits"} not pushed)` : ""}`}
+            </label>
+          )}
           {error && (
             <span className="field-error" role="alert">
               {error}

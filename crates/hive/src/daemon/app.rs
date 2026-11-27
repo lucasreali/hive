@@ -548,8 +548,16 @@ async fn app_frame(
             | Control::ListRuns { .. }
             | Control::OpenRun { .. }
             | Control::OpenJobLog { .. }
-            | Control::ActOnRun { .. }),
+            | Control::ActOnRun { .. }
+            | Control::ListWorkflows { .. }
+            | Control::RunWorkflow { .. }),
         ) => state.github(request),
+        Ok(
+            request @ (Control::StageFiles { .. }
+            | Control::Commit { .. }
+            | Control::GetPushTarget { .. }
+            | Control::Push { .. }),
+        ) => state.git(request),
         Ok(Control::ListBranches { project }) => state.projects(move |projects| {
             let (branches, error) = match projects.branches(&project) {
                 Ok(branches) => (branches, None),

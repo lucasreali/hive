@@ -92,8 +92,8 @@ test("details, actions and a refused merge", async () => {
 
 test("creating one needs a title and a GitHub repository", async () => {
   const { transport, messages } = await connected();
-  await transport.createPull(login.path, " ", "", "main", false);
-  await transport.createPull(api.worktrees[1]?.path ?? "", "T", "", "main", false);
+  await transport.createPull(login.path, " ", "", "main", false, null);
+  await transport.createPull(api.worktrees[1]?.path ?? "", "T", "", "main", false, null);
   await tick();
   expect(messages).toEqual([
     {
@@ -110,7 +110,10 @@ test("creating one needs a title and a GitHub repository", async () => {
     },
   ]);
   messages.length = 0;
-  await transport.createPull(login.path, " New ", "body", "main", true);
+  await transport.createPull(login.path, " New ", "body", "main", true, {
+    remote: "origin",
+    merge: "refs/heads/x",
+  });
   await tick();
   expect(messages[0]).toEqual({
     type: "pull_done",
@@ -120,7 +123,7 @@ test("creating one needs a title and a GitHub repository", async () => {
   });
   if (messages[1]?.type !== "pulls") throw new Error("expected pulls");
   expect(messages[1].mine[0]).toMatchObject({ number: 23, title: "New", state: "draft" });
-  await transport.createPull(login.path, "Open", "", "main", false);
+  await transport.createPull(login.path, "Open", "", "main", false, null);
   await tick();
   expect(messages[3]).toMatchObject({ type: "pulls" });
   if (messages[3]?.type !== "pulls") throw new Error("expected pulls");

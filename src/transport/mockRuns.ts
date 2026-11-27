@@ -109,6 +109,20 @@ export function createMockRuns(later: (message: ServiceMessage) => void) {
     later({ type: "run", project, run: id, detail, error: found ? null : `no run ${id}` });
   };
   return {
+    /** A run of `workflow` on `branch` started by hand (27.6): its id. */
+    dispatch(project: string, workflow: string, branch: string): number | null {
+      lists[project] ??= [];
+      const list = lists[project];
+      const id = Math.max(0, ...list.map((r) => r.id)) + 1;
+      const extra = { workflow, branch, event: "workflow_dispatch", title: workflow };
+      list.unshift(run(id, { ...extra, state: "running", status: "queued" }));
+      return id;
+    },
+    /** As the service after a start: the run, when found, then its branch's list. */
+    follow(project: string, id: number | null, branch: string) {
+      if (id !== null) sendRun(project, id);
+      sendList(project, branch);
+    },
     async listRuns(project: string, branch: string | null, _force: boolean) {
       sendList(project, branch);
     },

@@ -587,6 +587,10 @@ pub enum Control {
         body: String,
         base: String,
         draft: bool,
+        /// Push the branch first, as `Push` does (27.6), to this remote and ref (`PushTarget`'s,
+        /// as the user confirmed them) when it is not on GitHub yet.
+        #[serde(default)]
+        push: Option<PushAt>,
     },
     /// An action on a pull request worked; `message` is shown as is.
     PullDone {
@@ -670,6 +674,93 @@ pub enum Control {
     RunFailed {
         project: String,
         run: u64,
+        message: String,
+    },
+    /// App → service (27.6): the files `paths` of the worktree `worktree` staged (`git add`)
+    /// or unstaged (`git restore --staged`), a rename's old path with it. Answered by
+    /// `GitDone` or `GitFailed`; the files watch sends the changes.
+    StageFiles {
+        worktree: String,
+        paths: Vec<String>,
+        staged: bool,
+    },
+    /// App → service: commits what is staged in `worktree` with `message` (`git commit`, the
+    /// space's git identity, the repository's hooks). Answered by `GitDone` or `GitFailed`.
+    Commit {
+        worktree: String,
+        message: String,
+    },
+    /// App → service: where `Push` would push the branch of `worktree`; answered by
+    /// `PushTarget`.
+    GetPushTarget {
+        worktree: String,
+    },
+    /// Where the branch of `worktree` goes on a push: its upstream (`remote/branch`), or with
+    /// none `origin/<branch>`, set as its upstream (`set_upstream`). `error`: why it cannot
+    /// be pushed (no branch, no `origin`).
+    PushTarget {
+        worktree: String,
+        branch: Option<String>,
+        /// e.g. `origin/main`, to show.
+        target: Option<String>,
+        /// The remote and its ref, exactly, for `Push` to confirm.
+        at: Option<PushAt>,
+        set_upstream: bool,
+        /// Its commits the remote-tracking branch has not (none known without it).
+        ahead: Option<u64>,
+        error: Option<String>,
+    },
+    /// App → service: pushes the branch of `worktree` to `PushTarget`'s target, never forced;
+    /// `branch` and `at` are what the user confirmed: refused when either changed since.
+    /// Answered by `GitDone` or `GitFailed` (git's message, e.g. a rejected push).
+    Push {
+        worktree: String,
+        branch: String,
+        at: PushAt,
+    },
+    /// A git action of the Changes panel worked; `message` is shown as is.
+    GitDone {
+        worktree: String,
+        action: GitAction,
+        message: String,
+    },
+    /// A git action failed: git's own message, or why it was refused.
+    GitFailed {
+        worktree: String,
+        action: GitAction,
+        message: String,
+    },
+    /// App → service: the workflows of a followed project that can be run by hand
+    /// (`workflow_dispatch`), as the worktree `worktree`'s `HEAD` has them. Answered by
+    /// `Workflows`.
+    ListWorkflows {
+        project: String,
+        worktree: String,
+    },
+    Workflows {
+        project: String,
+        worktree: String,
+        workflows: Vec<Workflow>,
+        error: Option<String>,
+    },
+    /// App → service: runs the workflow `workflow` (its file name) on `branch` with `inputs`
+    /// (`gh workflow run`). Answered by `WorkflowStarted`, then the run and the `branch` list
+    /// as `ActOnRun`; or by `WorkflowFailed`.
+    RunWorkflow {
+        project: String,
+        workflow: String,
+        branch: String,
+        inputs: Vec<WorkflowValue>,
+    },
+    /// The workflow was started; `run` is its new run once GitHub lists it.
+    WorkflowStarted {
+        project: String,
+        branch: String,
+        run: Option<u64>,
+        message: String,
+    },
+    WorkflowFailed {
+        project: String,
         message: String,
     },
     /// App → service: the local and remote branches of a followed project, answered by
@@ -2021,6 +2112,77 @@ pub struct RunStep {
     pub status: String,
 }
 
+/// What the app's "Create pull request" dialog gives its own command (9.31; `push`, 27.6),
+/// which sends it as `CreatePull`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PullForm {
+    pub title: String,
+    pub body: String,
+    pub base: String,
+    pub draft: bool,
+    /// The confirmed remote and ref to push to first (27.6); none: no push.
+    #[serde(default)]
+    pub push: Option<PushAt>,
+}
+
+/// Where a push goes (27.6): the remote (a name, or a URL as `branch.<name>.remote` may be)
+/// and its ref (`refs/heads/<name>`), compared exactly, never as the shown `remote/name`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PushAt {
+    pub remote: String,
+    pub merge: String,
+}
+
+/// Which git action of the Changes panel (27.6) a `GitDone` or `GitFailed` answers.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum GitAction {
+    Stage,
+    Unstage,
+    Commit,
+    Push,
+}
+
+/// A changed file's part in the index (27.6): what the next commit takes of it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Staged {
+    No,
+    /// Some of its changes.
+    Partly,
+    Yes,
+}
+
+/// A workflow that can be run by hand (`workflow_dispatch`, 27.6).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Workflow {
+    /// Its file name in `.github/workflows`, e.g. `ci.yml`.
+    pub file: String,
+    /// Its `name`, else its file name.
+    pub name: String,
+    pub inputs: Vec<WorkflowInput>,
+}
+
+/// An input of a workflow's `workflow_dispatch`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WorkflowInput {
+    pub name: String,
+    pub description: String,
+    pub required: bool,
+    pub default: Option<String>,
+    /// `string`, `boolean`, `choice`, `number` or `environment`.
+    pub kind: String,
+    /// A `choice`'s options.
+    pub options: Vec<String>,
+}
+
+/// An input's value for `RunWorkflow`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WorkflowValue {
+    pub name: String,
+    pub value: String,
+}
+
 /// What `ActOnRun` does.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
@@ -2487,6 +2649,10 @@ pub struct ChangedFile {
     /// Lines added and removed; `None` for a binary (or too large) file.
     pub added: Option<u64>,
     pub removed: Option<u64>,
+    /// What of it is staged (27.6); `None` when nothing of it is left to commit (a file only
+    /// committed since the branch base).
+    #[serde(default)]
+    pub staged: Option<Staged>,
     /// Its seen mark in the diff against this base (27.1); `None`: not marked. Left out when
     /// `None`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -3615,6 +3781,7 @@ mod tests {
                 old_path: Some("a".into()),
                 added: Some(1),
                 removed: None,
+                staged: Some(Staged::Partly),
                 seen: None,
             }],
             added: 1,
@@ -3629,7 +3796,7 @@ mod tests {
         };
         assert_eq!(
             &Frame::control(0, &changes).payload[..],
-            br#"{"type":"changes","path":"/r","base":"head","branch":"main","base_error":"e","files":[{"path":"b","status":"renamed","old_path":"a","added":1,"removed":null}],"added":1,"removed":0,"error":null,"turns":[{"session":"s","title":"t","started_ms":5,"late":true}]}"#
+            br#"{"type":"changes","path":"/r","base":"head","branch":"main","base_error":"e","files":[{"path":"b","status":"renamed","old_path":"a","added":1,"removed":null,"staged":"partly"}],"added":1,"removed":0,"error":null,"turns":[{"session":"s","title":"t","started_ms":5,"late":true}]}"#
         );
         // A service before 27.2 sends no turns.
         let old = br#"{"type":"changes","path":"/r","base":"branch","branch":null,"base_error":null,"files":[],"added":0,"removed":0,"error":null}"#;
@@ -3689,11 +3856,12 @@ mod tests {
             old_path: None,
             added: None,
             removed: None,
+            staged: None,
             seen: Some(SeenMark::Changed),
         }];
         let json = serde_json::to_string(&files[0]).unwrap();
         assert!(
-            json.ends_with(r#""removed":null,"seen":"changed"}"#),
+            json.ends_with(r#""removed":null,"staged":null,"seen":"changed"}"#),
             "{json}"
         );
         let back: ChangedFile = serde_json::from_str(&json).unwrap();
@@ -4696,6 +4864,10 @@ mod tests {
                 body: String::new(),
                 base: "main".into(),
                 draft: false,
+                push: Some(PushAt {
+                    remote: "origin".into(),
+                    merge: "refs/heads/b".into(),
+                }),
             },
             Control::PullDone {
                 project: "/r".into(),
@@ -4823,6 +4995,113 @@ mod tests {
             Control::RunFailed {
                 project: "/r".into(),
                 run: 36,
+                message: "m".into(),
+            },
+        ] {
+            assert_eq!(Frame::control(0, &msg).to_control().unwrap(), msg);
+        }
+    }
+
+    #[test]
+    fn commit_push_and_workflow_messages_round_trip() {
+        // An older app's `create_pull` has no `push`.
+        let old: Control = serde_json::from_str(
+            r#"{"type":"create_pull","worktree":"/r","title":"t","body":"","base":"main","draft":false}"#,
+        )
+        .unwrap();
+        assert!(matches!(old, Control::CreatePull { push: None, .. }));
+        let file: ChangedFile = serde_json::from_str(
+            r#"{"path":"a","status":"added","old_path":null,"added":null,"removed":null}"#,
+        )
+        .unwrap();
+        assert_eq!(file.staged, None);
+        let done = Control::GitDone {
+            worktree: "/r".into(),
+            action: GitAction::Commit,
+            message: "m".into(),
+        };
+        assert_eq!(
+            serde_json::to_string(&done).unwrap(),
+            r#"{"type":"git_done","worktree":"/r","action":"commit","message":"m"}"#
+        );
+        let workflow = Workflow {
+            file: "ci.yml".into(),
+            name: "ci".into(),
+            inputs: vec![WorkflowInput {
+                name: "level".into(),
+                description: "d".into(),
+                required: true,
+                default: Some("a".into()),
+                kind: "choice".into(),
+                options: vec!["a".into(), "b".into()],
+            }],
+        };
+        for msg in [
+            done,
+            Control::StageFiles {
+                worktree: "/r".into(),
+                paths: vec!["a".into()],
+                staged: true,
+            },
+            Control::Commit {
+                worktree: "/r".into(),
+                message: "m".into(),
+            },
+            Control::GetPushTarget {
+                worktree: "/r".into(),
+            },
+            Control::PushTarget {
+                worktree: "/r".into(),
+                branch: Some("b".into()),
+                target: Some("origin/b".into()),
+                at: Some(PushAt {
+                    remote: "origin".into(),
+                    merge: "refs/heads/b".into(),
+                }),
+                set_upstream: true,
+                ahead: None,
+                error: None,
+            },
+            Control::Push {
+                worktree: "/r".into(),
+                branch: "b".into(),
+                at: PushAt {
+                    remote: "origin".into(),
+                    merge: "refs/heads/b".into(),
+                },
+            },
+            Control::GitFailed {
+                worktree: "/r".into(),
+                action: GitAction::Push,
+                message: "rejected".into(),
+            },
+            Control::ListWorkflows {
+                project: "/r".into(),
+                worktree: "/r".into(),
+            },
+            Control::Workflows {
+                project: "/r".into(),
+                worktree: "/r".into(),
+                workflows: vec![workflow],
+                error: None,
+            },
+            Control::RunWorkflow {
+                project: "/r".into(),
+                workflow: "ci.yml".into(),
+                branch: "main".into(),
+                inputs: vec![WorkflowValue {
+                    name: "level".into(),
+                    value: "b".into(),
+                }],
+            },
+            Control::WorkflowStarted {
+                project: "/r".into(),
+                branch: "main".into(),
+                run: Some(1),
+                message: "m".into(),
+            },
+            Control::WorkflowFailed {
+                project: "/r".into(),
                 message: "m".into(),
             },
         ] {

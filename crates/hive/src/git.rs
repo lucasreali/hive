@@ -170,6 +170,9 @@ pub enum Stdout {
     Max(u64),
     /// Its last bytes only, however much it prints (a log's tail).
     Tail(u64),
+    /// As `Max`, and a failure's error carries it before the stderr: what a repository's
+    /// hooks print to stdout is part of why a commit or a push failed (27.6).
+    Shown(u64),
 }
 
 /// Runs `command`, already given its `args` (`program` names it in errors), as
@@ -190,10 +193,14 @@ pub fn limited(
         return Ok(ran.out);
     }
     let command: Vec<_> = args.iter().map(|arg| arg.to_string_lossy()).collect();
+    let shown = match keep {
+        Stdout::Shown(_) => [&ran.out[..], &ran.err[..]].concat(),
+        _ => ran.err,
+    };
     Err(io::Error::other(format!(
         "{program} {} failed: {}",
         command.join(" "),
-        String::from_utf8_lossy(&ran.err).trim()
+        String::from_utf8_lossy(&shown).trim()
     )))
 }
 
@@ -260,7 +267,7 @@ pub fn ran(
             })
         });
         let out = stdout.map_or(Ok(Vec::new()), |mut out| match keep {
-            Stdout::Max(limit) => read_limited(&mut out, limit),
+            Stdout::Max(limit) | Stdout::Shown(limit) => read_limited(&mut out, limit),
             Stdout::Tail(limit) => read_tail(&mut out, limit),
         });
         let err = err.join().unwrap_or_default();
@@ -278,7 +285,7 @@ pub fn ran(
         );
         return Err(io::Error::new(io::ErrorKind::TimedOut, message));
     }
-    let (Stdout::Max(limit) | Stdout::Tail(limit)) = keep;
+    let (Stdout::Max(limit) | Stdout::Tail(limit) | Stdout::Shown(limit)) = keep;
     let out = out.map_err(|_| {
         io::Error::other(format!(
             "{program} {command} printed more than {limit} bytes"
@@ -506,6 +513,35 @@ mod tests {
         assert!(current().is_ok());
         #[cfg(not(target_os = "macos"))]
         assert_eq!(resolved(), &Resolved::OnPath);
+    }
+
+    #[test]
+    fn a_shown_stdout_goes_into_the_error() {
+        let tmp = tempfile::tempdir().unwrap();
+        let args = ["-c", "alias.say=!echo out; echo err >&2; false", "say"].map(OsStr::new);
+        let run = |keep| {
+            let mut command = command(tmp.path()).unwrap();
+            command.args(args);
+            limited(command, "git", &[OsStr::new("say")], &[], &[0], keep, None)
+        };
+        let shown = run(Stdout::Shown(1024)).unwrap_err().to_string();
+        assert_eq!(shown, "git say failed: out\nerr");
+        let kept = run(Stdout::Max(1024)).unwrap_err().to_string();
+        assert_eq!(kept, "git say failed: err");
+        // Within its limit and on success, it is the output, as `Max`.
+        let ok = ["-c", "alias.say=!echo out", "say"].map(OsStr::new);
+        let mut command = command(tmp.path()).unwrap();
+        command.args(ok);
+        let out = limited(command, "git", &ok, &[], &[0], Stdout::Shown(4), None).unwrap();
+        assert_eq!(out, b"out\n");
+        let mut command = super::command(tmp.path()).unwrap();
+        command.args(ok);
+        let over = limited(command, "git", &ok, &[], &[0], Stdout::Shown(3), None);
+        assert!(
+            over.unwrap_err()
+                .to_string()
+                .ends_with("printed more than 3 bytes")
+        );
     }
 
     #[test]
