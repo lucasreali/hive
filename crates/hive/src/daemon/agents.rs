@@ -410,18 +410,21 @@ mod tests {
         let mut agent = Agent::new(1, start, 0);
         agent.apply("s", &launch, 1, start, &|_| None);
         agent.apply("s", &stop, 2, start, &|_| None);
-        let listed = |agent: &Agent| match agent.message("s") {
-            Control::AgentState { background, .. } => background.len(),
-            _ => usize::MAX,
+        let listed = |agent: &Agent| {
+            let message = agent.message("s");
+            matches!(message, Control::AgentState { ref background, .. } if background.len() == 1)
         };
-        assert_eq!(listed(&agent), 1);
+        assert!(listed(&agent));
         state.agents.lock().await.insert("s".into(), agent);
         let quiet = HashMap::new();
         state.tick_agents(&quiet, start).await;
-        assert_eq!(listed(&state.agents.lock().await["s"]), 1);
+        assert!(listed(&state.agents.lock().await["s"]));
         state
             .tick_agents(&quiet, start + crate::background::SHOWN_ENDED)
             .await;
-        assert_eq!(listed(&state.agents.lock().await["s"]), 0);
+        let left = state.agents.lock().await["s"].message("s");
+        assert!(
+            matches!(left, Control::AgentState { ref background, .. } if background.is_empty())
+        );
     }
 }

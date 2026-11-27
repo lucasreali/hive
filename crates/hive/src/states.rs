@@ -2401,14 +2401,14 @@ mod tests {
         )
     }
 
-    fn listed(sent: &Option<Control>) -> Vec<(String, Option<String>, bool)> {
-        match sent {
-            Some(Control::AgentState { background, .. }) => background
-                .iter()
-                .map(|c| (c.id.clone(), c.by.clone(), c.ended.is_some()))
-                .collect(),
-            other => panic!("not an agent_state: {other:?}"),
-        }
+    /// The agent's background commands as `agent_state` lists them, after checking `sent` is
+    /// that message.
+    fn listed(agent: &Agent, sent: &Option<Control>) -> Vec<(String, Option<String>, bool)> {
+        assert_eq!(sent.as_ref(), Some(&agent.message("s")));
+        let background = agent.background.listed().into_iter();
+        background
+            .map(|c| (c.id, c.by, c.ended.is_some()))
+            .collect()
     }
 
     #[test]
@@ -2416,11 +2416,11 @@ mod tests {
         let start = Instant::now();
         let mut agent = Agent::new(4, start, 1_000);
         let own = agent.feed("s", &background_launch(None, "b1", "sleep 20"), start);
-        assert_eq!(listed(&own), [("b1".into(), None, false)]);
+        assert_eq!(listed(&agent, &own), [("b1".into(), None, false)]);
         agent.feed("s", &hook("SubagentStart", Some("a"), json!({})), start);
         let sub = agent.feed("s", &background_launch(Some("a"), "b2", "make"), start);
         assert_eq!(
-            listed(&sub),
+            listed(&agent, &sub),
             [
                 ("b1".into(), None, false),
                 ("b2".into(), Some("a".into()), false)
@@ -2436,7 +2436,7 @@ mod tests {
             later,
         );
         assert_eq!(
-            listed(&stop),
+            listed(&agent, &stop),
             [
                 ("b1".into(), None, true),
                 ("b2".into(), Some("a".into()), false)
@@ -2462,7 +2462,10 @@ mod tests {
         // Ten seconds later it leaves the row.
         assert_eq!(agent.expire("s", later + Duration::from_secs(9)), None);
         let gone = agent.expire("s", later + Duration::from_secs(10));
-        assert_eq!(listed(&gone), [("b2".into(), Some("a".into()), false)]);
+        assert_eq!(
+            listed(&agent, &gone),
+            [("b2".into(), Some("a".into()), false)]
+        );
         assert_eq!(agent.expire("s", later + Duration::from_secs(60)), None);
     }
 
@@ -2476,17 +2479,14 @@ mod tests {
         agent.background.end("b1", failed, Some(2), 0, now);
         agent.watched = true;
         agent.background.end("b2", failed, None, 0, now);
-        let notified: Vec<_> = agent
-            .finished("s")
-            .into_iter()
-            .map(|m| match m {
-                Control::BackgroundFinished { alert, notify, .. } => (alert, notify),
-                other => panic!("{other:?}"),
-            })
-            .collect();
         // Watched when the message is made: in view, no OS notification.
-        let failed = BackgroundAlert::Failed;
-        assert_eq!(notified, [(failed, false), (failed, false)]);
+        let quiet = |m: &Control| {
+            let alert = BackgroundAlert::Failed;
+            matches!(m, Control::BackgroundFinished { alert: a, notify: false, .. } if *a == alert)
+        };
+        let notified = agent.finished("s");
+        assert_eq!(notified.len(), 2);
+        assert!(notified.iter().all(quiet));
         agent.feed("s", &background_launch(None, "b3", "z"), now);
         agent.watched = false;
         agent
@@ -2512,16 +2512,17 @@ mod tests {
     fn a_late_launch_still_counts_and_the_session_end_drops_them_all_silently() {
         let now = Instant::now();
         let mut agent = Agent::new(1, now, 0);
+        let none = |_: &str| None;
         agent.apply(
             "s",
             &hook("UserPromptSubmit", None, json!({})),
             50,
             now,
-            &|_| None,
+            &none,
         );
         // Older than the last event applied: its state is not applied, its launch is.
-        let late = agent.apply("s", &background_launch(None, "b1", "x"), 40, now, &|_| None);
-        assert_eq!(listed(&late), [("b1".into(), None, false)]);
+        let late = agent.apply("s", &background_launch(None, "b1", "x"), 40, now, &none);
+        assert_eq!(listed(&agent, &late), [("b1".into(), None, false)]);
         // A subagent's `SessionEnd` keeps the commands; the agent's own drops them, unsent.
         agent.feed("s", &background_launch(Some("a"), "b2", "y"), now);
         agent.apply(
@@ -2529,13 +2530,11 @@ mod tests {
             &hook("SessionEnd", Some("a"), json!({})),
             60,
             now,
-            &|_| None,
+            &none,
         );
         assert_eq!(agent.background.listed().len(), 2);
-        agent.apply("s", &stop_with("Stop", None, &[]), 70, now, &|_| None);
-        let end = agent.apply("s", &hook("SessionEnd", None, json!({})), 80, now, &|_| {
-            None
-        });
+        agent.apply("s", &stop_with("Stop", None, &[]), 70, now, &none);
+        let end = agent.apply("s", &hook("SessionEnd", None, json!({})), 80, now, &none);
         assert!(
             matches!(end, Some(Control::AgentState { ref background, .. }) if background.is_empty())
         );
