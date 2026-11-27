@@ -437,6 +437,16 @@ export type HiveState = {
    * shown last. Kept between runs, beside the tab order.
    */
   tabHistory: Record<string, string[]>;
+  /**
+   * `tabHistory` as the last run left it (28.27): the tabs it reopens come back one by one, and
+   * the one each worktree showed last takes over from those shown meanwhile.
+   */
+  lastRunHistory: Record<string, string[]>;
+  /**
+   * The tabs reopened for this run (28.27): terminals reattached after a reload and chats
+   * resumed at launch. They do not take the focus as they come; the history picks.
+   */
+  quietTabs: number[];
   /** By worktree (`placeKey`): the right panel's view it showed last (28.19), kept between runs. */
   panelViews: Record<string, PanelView>;
   /** Every open file's tab, in the order they opened; reopened after a restart (28.27). */
@@ -685,6 +695,8 @@ export const initialState: HiveState = {
   agentOrder: [],
   tabOrder: [],
   tabHistory: {},
+  lastRunHistory: {},
+  quietTabs: [],
   panelViews: {},
   openFiles: [],
   openFile: null,
@@ -1070,6 +1082,7 @@ export const useHive = create<HiveState>()(() => ({
   agentOrder: savedAgentOrder(),
   tabOrder: savedTabOrder(),
   ...savedPlaces(),
+  lastRunHistory: savedPlaces().tabHistory,
   spacePlaces: savedSpacePlaces(),
   ...startHosts(),
 }));
@@ -1083,6 +1096,7 @@ useHive.subscribe(saveUnseenOnly);
 useHive.subscribe(followSpacePlaces);
 useHive.subscribe(saveHosts);
 useHive.subscribe(followPairs);
+useHive.subscribe(followQuietTabs);
 
 /** What `followPlaces` reads: any other change leaves the places as they are. */
 const PLACE_FIELDS = [
@@ -1227,6 +1241,29 @@ export function followPairs(s: HiveState, prev: HiveState): void {
     return false;
   });
   if (pendingSplits.length < s.pendingSplits.length) useHive.setState({ pendingSplits, splits });
+}
+
+/**
+ * The tabs reopened for this run (28.27, row 3 of `docs/review/last-place.md`) come one by one,
+ * a chat named by its session only once Hive knows it: as each comes, the tab the shown
+ * worktree showed last in the last run takes over, if it is one of them and what shows is only
+ * a stand-in (nothing, a reopened tab, or the last run's pick before this one came). A tab the
+ * user went to stays.
+ */
+export function followQuietTabs(s: HiveState, prev: HiveState): void {
+  if (s.quietTabs.length === 0 || (s.tabs === prev.tabs && s.agents === prev.agents)) return;
+  const place = tabsPlace(s);
+  if (place === null || place !== tabsPlace(prev)) return;
+  const pick = (x: HiveState) => lastShown(x, place, barItems(x), x.lastRunHistory);
+  const now = pick(s);
+  const shown = shownPane(s);
+  if (!now || !("id" in now) || !s.quietTabs.includes(now.id) || now.id === shown) return;
+  const before = pick(prev);
+  const blank = !barItems(s).some((t) => paneIdOf(t) === shown);
+  const standIn = before
+    ? paneIdOf(before) === shown
+    : typeof shown === "number" && s.quietTabs.includes(shown);
+  if (blank || standIn) useHive.setState({ activeTab: now.id, fileShown: false });
 }
 
 /**
@@ -1531,14 +1568,25 @@ export const setVisible = (visible: boolean) => useHive.setState({ visible });
 export const toggleCollapsed = (id: string) =>
   useHive.setState((s) => ({ collapsed: { ...s.collapsed, [id]: !s.collapsed[id] } }));
 
-/** A terminal just opened in `cwd`: its tab is shown and its worktree selected. */
-export const addTab = (id: number, cwd: string, host?: string) =>
+/**
+ * A terminal just opened in `cwd`: its tab is shown and its worktree selected. One reopened for
+ * this run (`focus` false, 28.27: reattached, or a chat resumed) takes no focus: it shows only
+ * when its place shows nothing, and the worktree's history picks (`followQuietTabs`).
+ */
+export const addTab = (id: number, cwd: string, host?: string, focus = true) =>
   useHive.setState((s) => {
     const tab: Tab = host === undefined ? { id, cwd } : { id, cwd, host };
     const added = { tabs: [...s.tabs, tab], tabOrder: withKey(s.tabOrder, `tab:${id}`) };
+    const quiet = focus ? {} : { quietTabs: [...s.quietTabs, id] };
     // Another host's (a remote's kept terminal, 26.18) waits under its worktree there.
-    if ((host ?? null) !== s.host) return added;
-    return { ...added, activeTab: id, fileShown: false, selection: tabWorktree(s, tab) };
+    if ((host ?? null) !== s.host) return { ...added, ...quiet };
+    if (focus) return { ...added, activeTab: id, fileShown: false, selection: tabWorktree(s, tab) };
+    const next = { ...s, ...added };
+    const items = barItems(next);
+    const pane = shownPane(next);
+    const blank = !items.some((t) => paneIdOf(t) === pane);
+    const shown = blank && items.some((t) => "id" in t && t.id === id);
+    return { ...added, ...quiet, ...(shown ? { activeTab: id, fileShown: false } : {}) };
   });
 /** Shows `tab`, and its host's spaces when it runs on another host (26.18). */
 export const activateTab = (tab: Tab) =>
