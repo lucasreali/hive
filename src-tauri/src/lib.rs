@@ -3054,6 +3054,9 @@ const REMOTE_TO_UI: &[&str] = &[
     "gh_accounts",
     "gh_identity",
     "gh_identity_failed",
+    // The host's own Claude accounts and whether it has a `claude` (27.11): the status bar of
+    // its spaces shows them, never this Mac's.
+    "claude_logins",
 ];
 
 /// Whether `frame` is the service's `terminals_kept` (26.16), on channel 0.

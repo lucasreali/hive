@@ -432,7 +432,6 @@ fn a_remote_never_gives_the_ui_a_file_url_or_the_app_a_path_to_open() {
         "uninstall_list",
         "diagnostics",
         "shared",
-        "claude_logins",
         "session_moved",
         "move_session_failed",
         "notice",
@@ -1266,6 +1265,18 @@ async fn the_local_settings_link_the_hosts_and_requests_go_to_each_host_s_link()
         .await
         .unwrap();
     assert_eq!(next_of(&mut rx, "projects").await["host"], "gpu");
+    // Its own Claude accounts and whether it has a `claude` (27.11), asked of it: the status bar
+    // of its spaces shows those, never this Mac's.
+    hive.on(Some("gpu")).unwrap().list_claude_logins().unwrap();
+    assert_eq!(remote.control().await, (0, Control::ListClaudeLogins));
+    let logins = json!({"type": "claude_logins", "logins": [{"config_dir": null, "name": "Default", "logged_in": false}], "claude": false});
+    remote.writer.send(raw(&logins)).await.unwrap();
+    let got = next_of(&mut rx, "claude_logins").await;
+    assert_eq!(
+        (got["host"].as_str(), &got["logins"]),
+        (Some("gpu"), &logins["logins"])
+    );
+    assert_eq!(got["claude"], false);
     let state = |state: &str| json!({"type": "agent_state", "id": "a", "state": state, "urgency": 2, "pending": false, "interrupted": false, "alert": null, "notify": false, "subagents": [], "activity": null, "since_ms": 1});
     remote.writer.send(raw(&state("working"))).await.unwrap();
     assert_eq!(next_of(&mut rx, "agent_state").await["host"], "gpu");

@@ -969,15 +969,19 @@ impl State {
         crate::gh::Gh::on(self.users_path().await)
     }
 
-    /// Answers `claude_logins` (21.6) off the frame loop: each account's config file is read.
+    /// Answers `claude_logins` (21.6) off the frame loop: each account's config file is read,
+    /// with each account's name and whether a `claude` is found (27.11).
     fn claude_logins(self: &Arc<Self>) {
         let state = self.clone();
         tokio::spawn(async move {
+            let claude = state.user_claude().await.is_some();
             let dirs = state.settings.account_dirs();
             let logins = tokio::task::block_in_place(|| {
-                crate::logins::answer(&dirs, |key| std::env::var_os(key))
+                let name = |dir: Option<&str>| state.settings.account_name(dir);
+                crate::logins::answer(&dirs, name, |key| std::env::var_os(key))
             });
-            state.to_app(0, &Control::ClaudeLogins { logins }).await;
+            let answer = Control::ClaudeLogins { logins, claude };
+            state.to_app(0, &answer).await;
         });
     }
 

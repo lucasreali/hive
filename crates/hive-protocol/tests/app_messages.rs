@@ -380,8 +380,10 @@ fn samples() -> Vec<Control> {
         ClaudeLogins {
             logins: vec![ClaudeLogin {
                 config_dir: None,
+                name: s("Default"),
                 logged_in: true,
             }],
+            claude: true,
         },
         GhAccounts {
             gh_config_dir: None,
