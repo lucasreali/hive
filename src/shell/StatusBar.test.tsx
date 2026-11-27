@@ -135,7 +135,9 @@ test("the ring shows whichever window came alone (28.1)", () => {
   act(() => apply({ type: "session_usage", usage: null, week: { ...week, used_percentage: 41 } }));
   expect(ring.hasAttribute("data-warning")).toBe(false);
   // The 5-hour one alone: the week disappears.
-  act(() => apply({ type: "session_usage", usage: { used_percentage: 12, resets_at }, week: null }));
+  act(() =>
+    apply({ type: "session_usage", usage: { used_percentage: 12, resets_at }, week: null }),
+  );
   expect(ring.getAttribute("aria-label")).toBe("Session 12% · resets 14:30");
   expect(ring.querySelector(".usage-arc")?.getAttribute("stroke-dasharray")).toBe("12 100");
   // With both, the ring is the 5-hour one's.
