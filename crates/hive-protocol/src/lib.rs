@@ -144,7 +144,8 @@ impl Encoder<Frame> for FrameCodec {
 pub enum Role {
     /// The desktop app, through `hive bridge`. Its connection owns the service lifetime.
     App,
-    /// `hive hook`: sends one event and disconnects.
+    /// `hive hook` (and `hive badge`, `hive statusline`): sends one event and disconnects; or
+    /// `hive agents` (28.10): sends `list_agents` and reads the answer.
     Hook,
 }
 
@@ -382,6 +383,15 @@ pub enum Control {
     AgentRemoved {
         id: String,
     },
+    /// `hive agents` → service (28.10), on a hook-role connection: every live agent, answered
+    /// by one `agent_listed` per agent, in terminal order, then `agents_listed`. Read only.
+    ListAgents,
+    /// Service → `hive agents`: one live agent (see [`ListedAgent`]).
+    AgentListed {
+        agent: ListedAgent,
+    },
+    /// Service → `hive agents`: the list is complete; the service closes the connection.
+    AgentsListed,
     /// App → service: every project with its worktrees, answered by `Projects`. Sent after
     /// the handshake and on an explicit refresh.
     ListProjects,
@@ -2948,6 +2958,42 @@ impl Alert {
     }
 }
 
+/// One live agent as `hive agents` shows it (28.10): what the app gets of it in
+/// `agent_detected`, `agent_state`, `agent_title` and `agent_usage`. `hive agents --json` prints
+/// these fields as they are, so a change here changes a documented output (`docs/architecture.md`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ListedAgent {
+    /// The agent's session id.
+    pub id: String,
+    /// The terminal it runs in (its `HIVE_TERMINAL_ID`).
+    pub terminal: u32,
+    /// The ids of the followed project and worktree containing its `cwd` (a worktree's id is its
+    /// path), `None` outside every followed project.
+    pub project: Option<String>,
+    pub worktree: Option<String>,
+    pub cwd: Option<String>,
+    /// Its session name, once known.
+    pub title: Option<String>,
+    /// Its displayed state, whether it is pending (needs the user) and since when (ms since the
+    /// Unix epoch), as in `agent_state`.
+    pub state: AgentState,
+    pub pending: bool,
+    pub since_ms: u64,
+    /// What it is doing (its current tool call), `None` between turns.
+    pub activity: Option<String>,
+    pub subagents: Vec<SubagentState>,
+    /// Its tokens, once read from its transcript, as in `agent_usage`.
+    pub usage: Option<ListedUsage>,
+}
+
+/// An agent's tokens in [`ListedAgent`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ListedUsage {
+    pub context_tokens: u64,
+    pub context_limit: u64,
+    pub output_tokens: u64,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SubagentState {
     pub id: String,
@@ -3287,6 +3333,44 @@ mod tests {
         );
         let removed = Control::AgentRemoved { id: "s".into() };
         assert_eq!(Frame::control(1, &removed).to_control().unwrap(), removed);
+    }
+
+    #[test]
+    fn listed_agents_are_tagged_json() {
+        let list = Control::ListAgents;
+        assert_eq!(
+            &Frame::control(0, &list).payload[..],
+            br#"{"type":"list_agents"}"#
+        );
+        let agent = ListedAgent {
+            id: "s".into(),
+            terminal: 2,
+            project: Some("/r".into()),
+            worktree: Some("/r".into()),
+            cwd: Some("/r/x".into()),
+            title: None,
+            state: AgentState::WaitingYou,
+            pending: true,
+            since_ms: 7,
+            activity: Some("Reading a.rs".into()),
+            subagents: vec![],
+            usage: Some(ListedUsage {
+                context_tokens: 10,
+                context_limit: 200_000,
+                output_tokens: 3,
+            }),
+        };
+        let listed = Control::AgentListed { agent };
+        assert_eq!(
+            std::str::from_utf8(&Frame::control(0, &listed).payload).unwrap(),
+            r#"{"type":"agent_listed","agent":{"id":"s","terminal":2,"project":"/r","worktree":"/r","cwd":"/r/x","title":null,"state":"waiting_you","pending":true,"since_ms":7,"activity":"Reading a.rs","subagents":[],"usage":{"context_tokens":10,"context_limit":200000,"output_tokens":3}}}"#
+        );
+        assert_eq!(Frame::control(0, &listed).to_control().unwrap(), listed);
+        let done = Control::AgentsListed;
+        assert_eq!(
+            &Frame::control(0, &done).payload[..],
+            br#"{"type":"agents_listed"}"#
+        );
     }
 
     #[test]

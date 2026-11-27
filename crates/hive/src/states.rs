@@ -5,7 +5,7 @@ use std::collections::{HashMap, HashSet};
 use std::time::{Duration, Instant};
 
 use hive_protocol::{
-    AgentEvent, AgentState, Alert, Control, EventKind, Notification, SubagentState,
+    AgentEvent, AgentState, Alert, Control, EventKind, ListedAgent, Notification, SubagentState,
 };
 use serde_json::Value;
 
@@ -464,6 +464,26 @@ impl Agent {
             project: self.project.clone(),
             worktree: self.worktree.clone(),
             cwd: self.cwd.clone(),
+        }
+    }
+
+    /// The agent for `hive agents` (28.10): what [`Self::detected`], [`Self::message`], its
+    /// title and its usage tell the app.
+    pub fn listed(&self, id: &str) -> ListedAgent {
+        let state = self.displayed();
+        ListedAgent {
+            id: id.to_owned(),
+            terminal: self.channel,
+            project: self.project.clone(),
+            worktree: self.worktree.clone(),
+            cwd: self.cwd.clone(),
+            title: self.title.clone(),
+            state,
+            pending: state.pending() && !self.seen,
+            since_ms: self.since_ms,
+            activity: self.activity.clone(),
+            subagents: self.subagents.clone(),
+            usage: self.usage.listed(),
         }
     }
 
@@ -1510,6 +1530,60 @@ mod tests {
             agent.message("s"),
             Control::AgentState { pending: true, .. }
         )
+    }
+
+    /// `hive agents` lists what the app is told of the agent.
+    #[test]
+    fn a_listed_agent_is_what_its_messages_say() {
+        let now = Instant::now();
+        let mut agent = Agent::new(4, now, 0);
+        agent.project = Some("/r".into());
+        agent.worktree = Some("/r/w".into());
+        agent.cwd = Some("/r/w/x".into());
+        agent.title = Some("fix".into());
+        agent.feed("s", &tool("PreToolUse", None, "Run tests"), now);
+        agent.feed("s", &hook("SubagentStart", Some("a"), json!({})), now);
+        let listed = agent.listed("s");
+        let expected = ListedAgent {
+            id: "s".into(),
+            terminal: 4,
+            project: Some("/r".into()),
+            worktree: Some("/r/w".into()),
+            cwd: Some("/r/w/x".into()),
+            title: Some("fix".into()),
+            state: listed.state,
+            pending: listed.pending,
+            since_ms: listed.since_ms,
+            activity: listed.activity.clone(),
+            subagents: listed.subagents.clone(),
+            usage: None,
+        };
+        // The state, pending, since, activity and subagents are the `agent_state`'s.
+        assert_eq!(
+            agent.message("s"),
+            Control::AgentState {
+                id: "s".into(),
+                state: listed.state,
+                urgency: listed.state.urgency(),
+                pending: listed.pending,
+                interrupted: false,
+                alert: None,
+                notify: false,
+                subagents: listed.subagents.clone(),
+                activity: listed.activity.clone(),
+                since_ms: listed.since_ms,
+            }
+        );
+        assert_eq!(listed, expected);
+        assert_eq!(listed.state, WithSubagents);
+        assert_eq!(listed.subagents.len(), 1);
+        // Pending like its `agent_state`: not once seen.
+        agent.feed("s", &hook("SubagentStop", Some("a"), json!({})), now);
+        agent.feed("s", &hook("Stop", None, json!({})), now);
+        assert_eq!(agent.listed("s").state, WaitingYou);
+        assert!(agent.listed("s").pending);
+        assert!(agent.watch("s", true).is_some());
+        assert!(!agent.listed("s").pending);
     }
 
     #[test]

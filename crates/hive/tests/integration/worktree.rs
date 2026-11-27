@@ -166,6 +166,22 @@ fn create_list_and_remove() {
             repo.path("second").display()
         )
     );
+    let list = repo.hive_in(&feat, &["list", "--json"]);
+    assert!(list.status.success(), "{}", stderr(&list));
+    let json: serde_json::Value = serde_json::from_str(&stdout(&list)).unwrap();
+    let entry = |path: &std::path::Path, branch: &str| {
+        serde_json::json!({
+            "path": path.display().to_string(), "branch": branch, "bare": false, "prunable": false,
+        })
+    };
+    assert_eq!(
+        json,
+        serde_json::json!({"worktrees": [
+            entry(&repo.root, "main"),
+            entry(&feat, "worktree-feat-1"),
+            entry(&repo.path("second"), "worktree-second"),
+        ]})
+    );
 
     let out = repo.hive(&["remove", "feat-1"]);
     assert!(out.status.success(), "{}", stderr(&out));
