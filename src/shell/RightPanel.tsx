@@ -77,8 +77,9 @@ import { BufferNotes, EditView, saveOpenFile } from "../viewer/EditView";
 import { openInEditor } from "../viewer/external";
 import { isPage, MediaView, PagePreview } from "../viewer/MediaView";
 import { useRenderedPlace } from "../viewer/place";
-import { referenceTarget, sendReference } from "../viewer/reference";
+import { noSelection, sendReference } from "../viewer/reference";
 import { CommentButton, CommentInput, CommentsView } from "../viewer/review";
+import { SendButton } from "../viewer/SendButton";
 import { TableView } from "../viewer/TableView";
 import { commandKey, isMac, keyText } from "../window";
 import { CommitBox } from "./CommitBox";
@@ -1375,10 +1376,7 @@ export function FileView(props: {
   const text = usePane(own, (s) =>
     s.file?.worktree === worktree && s.file.path === openFile?.path ? s.file : null,
   );
-  const unsendable = usePane(own, (s) => {
-    const target = referenceTarget(s);
-    return "why" in target ? target.why : null;
-  });
+  const unsendable = usePane(own, noSelection);
   const editing = usePane(own, (s) => s.editing);
   const edit = usePane(own, (s) => s.edit);
   const editorNotice = usePane(own, (s) => s.editorNotice);
@@ -1512,19 +1510,16 @@ export function FileView(props: {
             <ExternalIcon />
           </button>
         )}
-        <button
-          type="button"
+        <SendButton
+          worktree={worktree}
+          why={unsendable}
           className="ghost"
-          aria-label="Send to terminal"
-          title={
-            unsendable ??
-            keyText("Send the selected lines' reference to the terminal (Ctrl+Shift+L)")
-          }
-          disabled={unsendable !== null}
-          onClick={sendReference}
+          label="Send to agent"
+          title={keyText("Send the selected lines' reference to the agent (Ctrl+Shift+L)")}
+          onSend={sendReference}
         >
           <TerminalIcon />
-        </button>
+        </SendButton>
         {file && <HeaderSeenBox worktree={worktree} file={file} />}
       </div>
       <CommentInput worktree={worktree} path={openFile.path} />

@@ -1,10 +1,11 @@
-import { type HiveState, type Lines, useHive } from "../store";
-import { tabWorktree } from "../tabs";
-import { terminal } from "../terminals";
+import { activateTab, type HiveState, type Lines, useHive } from "../store";
+import { showTerminal } from "../terminals";
 import { transport } from "../transport";
+import { terminalIn } from "./target";
 
-// Selection → terminal (3.4): the viewer's selected lines become a Claude Code `@` reference
-// written into the active terminal, as input with no Enter, so the user keeps typing the prompt.
+// Selection → agent (3.4, 28.21): the viewer's selected lines become a Claude Code `@` reference
+// written into an agent's terminal of that worktree, as input with no Enter, so the user keeps
+// typing the prompt.
 
 /**
  * `@src/a.ts (lines 44–46) ` or `@src/a.ts (line 44) `, with a trailing space. A path with
@@ -17,40 +18,41 @@ export function reference(path: string, { from, to }: Lines): string {
   return `@${at} (${lines}) `;
 }
 
-/**
- * The terminal that may take references to `worktree`'s files, or why there is none: the live
- * active terminal, in that worktree (the one its agent is placed in by the service, else the
- * one the service placed the terminal in), since the paths are relative to that worktree.
- */
-export function terminalIn(s: HiveState, worktree: string): { terminal: number } | { why: string } {
-  const tab = s.tabs.find((t) => t.id === s.activeTab);
-  if (!tab) return { why: "No terminal open" };
-  if (s.terminals[tab.id]?.exited) return { why: "The terminal has exited" };
-  const agent = Object.values(s.agents).find((a) => a.terminal === tab.id);
-  if ((agent ? agent.worktree : tabWorktree(s, tab)) !== worktree) {
-    return { why: "The active terminal is in another worktree" };
-  }
-  return { terminal: tab.id };
-}
+const NO_SELECTION = "Select lines to send their reference";
 
-/** Where and what "Send to terminal" writes, or why it cannot: it needs selected lines. */
+/** Why the shown file has no reference to send (no lines selected), or null. */
+export const noSelection = (s: Pick<HiveState, "openFile" | "selectedLines">) =>
+  s.openFile && s.selectedLines ? null : NO_SELECTION;
+
+/**
+ * Where and what "Send to agent" writes, or why it cannot: it needs selected lines and an agent
+ * of the file's worktree (`chosen`, a terminal picked in the menu, else the target, 28.21).
+ */
 export function referenceTarget(
   s: HiveState,
+  chosen?: number,
 ): { terminal: number; text: string } | { why: string } {
-  if (!s.openFile || !s.selectedLines) return { why: "Select lines to send their reference" };
-  const target = terminalIn(s, s.openFile.worktree);
+  const { openFile, selectedLines } = s;
+  if (!openFile || !selectedLines) return { why: NO_SELECTION };
+  const target = terminalIn(s, openFile.worktree, chosen);
   if ("why" in target) return target;
-  return { ...target, text: reference(s.openFile.path, s.selectedLines) };
+  return { ...target, text: reference(openFile.path, selectedLines) };
+}
+
+/** Shows the tab of terminal `id`, in front of a file's tab, and gives it the keyboard. */
+export function showAgentTerminal(id: number): void {
+  const tab = useHive.getState().tabs.find((t) => t.id === id);
+  if (tab) activateTab(tab);
+  showTerminal(id);
 }
 
 /**
- * Ctrl+Shift+L and the file view's button: writes the reference and shows and focuses the
- * terminal, in front of the file's tab.
+ * Ctrl+Shift+L and the file view's button: writes the reference into the agent's terminal and
+ * shows and focuses it, in front of the file's tab.
  */
-export function sendReference(): void {
-  const target = referenceTarget(useHive.getState());
+export function sendReference(chosen?: number): void {
+  const target = referenceTarget(useHive.getState(), chosen);
   if ("why" in target) return;
   void transport.writeTerminal(target.terminal, target.text);
-  useHive.setState({ fileShown: false });
-  terminal(target.terminal)?.focus();
+  showAgentTerminal(target.terminal);
 }
