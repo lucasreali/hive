@@ -647,3 +647,37 @@ fn names_stay_the_same_across_runs() {
     let store = Store { dir: "/h".into() };
     assert_eq!(store.index("a"), Path::new("/h/af63dc4c8601ec8c.index"));
 }
+
+/// Every `objects/info/alternates` file under `dir`.
+fn alternates(dir: &Path) -> Vec<PathBuf> {
+    let mut found = Vec::new();
+    let mut todo = vec![dir.to_path_buf()];
+    while let Some(dir) = todo.pop() {
+        for entry in std::fs::read_dir(&dir).into_iter().flatten().flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                todo.push(path);
+            } else if path.file_name() == Some(std::ffi::OsStr::new("alternates")) {
+                found.push(path);
+            }
+        }
+    }
+    found
+}
+
+#[test]
+fn the_store_names_the_repositorys_objects_and_puts_the_name_back() {
+    let (tmp, root, snapshots) = repo();
+    take(&snapshots, &root, "s1", 1);
+    let [file] = &alternates(&tmp.path().join("hive/snapshots"))[..] else {
+        panic!("one store")
+    };
+    let named = std::fs::read_to_string(file).unwrap();
+    let objects = Path::new(named.trim_end());
+    assert!(objects.ends_with(Path::new("repo/.git/objects")), "{named}");
+    assert!(named.ends_with('\n'));
+    // A wrong name is written again on the next snapshot.
+    std::fs::write(file, "/elsewhere\n").unwrap();
+    take(&snapshots, &root, "s1", 2);
+    assert_eq!(std::fs::read_to_string(file).unwrap(), named);
+}
