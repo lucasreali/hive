@@ -15,7 +15,7 @@ use hive_protocol::{
 use crate::git::{self, read_limited};
 use crate::projects;
 use crate::seen::Seen;
-use crate::snapshot::{Since, Snapshots};
+use crate::snapshot::{self, Since, Snapshots, Turn};
 
 /// Untracked files larger than this are not counted (their lines show as unknown).
 const UNTRACKED_LIMIT: u64 = 8_388_608; // 8 MiB
@@ -85,16 +85,31 @@ pub fn against(
     asked: &DiffBase,
 ) -> io::Result<Against> {
     let (dir, branch) = projects::followed(projects, path)?;
+    let kept = match asked {
+        DiffBase::Turn { .. } => snapshots.turns(&dir, path),
+        _ => Vec::new(),
+    };
+    Ok(based((dir, branch), snapshots, &kept, asked))
+}
+
+/// [`against`] for the worktree at `dir` on `branch`, a turn base found in `kept`, the
+/// worktree's turns read once.
+fn based(
+    (dir, branch): (PathBuf, Option<String>),
+    snapshots: &Snapshots,
+    kept: &[Turn],
+    asked: &DiffBase,
+) -> Against {
     let mut against = Against {
         dir,
         branch,
         ..Against::default()
     };
     let found = match asked {
-        DiffBase::Head => return Ok(against),
+        DiffBase::Head => return against,
         DiffBase::Branch => merge_base(&against.dir, against.branch.as_deref()).map(Some),
         DiffBase::Commit { id } => verify(&against.dir, id).map(Some),
-        DiffBase::Turn { session } => match snapshots.since(&against.dir, path, session) {
+        DiffBase::Turn { session } => match snapshots.since_in(&against.dir, kept, session) {
             Ok(since) => {
                 against.since = Some(since);
                 Ok(None)
@@ -106,7 +121,7 @@ pub fn against(
         Ok(commit) => (against.commit, against.base) = (commit, asked.clone()),
         Err(error) => against.error = Some(error),
     }
-    Ok(against)
+    against
 }
 
 /// The commit `asked` compares the worktree `path` of `projects` with: the merge-base or the
@@ -190,21 +205,14 @@ fn marked(
     seen: &Seen,
     files: Option<(&[String], bool)>,
 ) -> (Control, Option<Totals>) {
-    match against(projects, snapshots, &path, asked) {
-        Ok(mut against) => {
-            let since = against.since.as_ref();
-            let mut listed = match since.map(|since| since_turn(&against.dir, since)) {
-                Some(Ok(changes)) => Ok(changes),
-                // A blob the user's `git gc` removed: the snapshot is no longer whole.
-                Some(Err(err)) => {
-                    against.since = None;
-                    against.base = DiffBase::Head;
-                    let why = format!("The snapshot of this turn is no longer complete: {err}");
-                    against.error = Some(why);
-                    list(&against.dir, None)
-                }
-                None => list(&against.dir, against.commit.as_deref()),
-            };
+    let followed = projects::followed(projects, &path).map(|(dir, branch)| {
+        // Read once: the base and the turns listed agree, though a snapshot is taken meanwhile.
+        let kept = snapshots.turns(&dir, &path);
+        (based((dir, branch), snapshots, &kept, asked), kept)
+    });
+    match followed {
+        Ok((mut against, mut kept)) => {
+            let mut listed = listing(&mut against, &mut kept);
             if let Ok(changes) = &mut listed {
                 let marking = files
                     .map(|(paths, marks)| seen.mark(&path, &against, &changes.files, paths, marks));
@@ -220,23 +228,39 @@ fn marked(
                 removed: c.removed,
             });
             let totals = totals.filter(|_| against.base == DiffBase::Head);
-            let turns = turns(snapshots, &against.dir, &path, titles);
+            let turns = turns(kept, titles);
             (message(path, Some(against), listed, turns), totals)
         }
         Err(err) => (message(path, None, Err(err), Vec::new()), None),
     }
 }
 
-/// The agents whose last turn's snapshot is of the worktree at `dir` (id `path`), each named by
-/// its title in `titles`, else by the start of its session id.
-fn turns(
-    snapshots: &Snapshots,
-    dir: &Path,
-    path: &str,
-    titles: &HashMap<String, String>,
-) -> Vec<TurnBase> {
-    let turns = snapshots.turns(dir, path).into_iter();
-    turns
+/// The changes against `against`, whose turn base was found in `kept`. A snapshot that cannot
+/// be listed falls back to `HEAD` and says why: no longer whole, or no longer kept (dropped
+/// since it was read, then also left out of `kept`).
+fn listing(against: &mut Against, kept: &mut Vec<Turn>) -> io::Result<Changes> {
+    let since = against.since.as_ref();
+    let why = match since.map(|since| (since_turn(&against.dir, since), since)) {
+        None => return list(&against.dir, against.commit.as_deref()),
+        Some((Ok(changes), _)) => return Ok(changes),
+        // Dropped (its `SessionEnd`) while this waited for its store.
+        Some((Err(err), since)) if snapshot::dropped(&err) => {
+            kept.retain(|t| t.session != since.turn.session);
+            err.to_string()
+        }
+        // A blob the user's `git gc` removed: the snapshot is no longer whole.
+        Some((Err(err), _)) => format!("The snapshot of this turn is no longer complete: {err}"),
+    };
+    against.since = None;
+    against.base = DiffBase::Head;
+    against.error = Some(why);
+    list(&against.dir, None)
+}
+
+/// The agents of `kept`, the worktree's [`Snapshots::turns`], each named by its title in
+/// `titles`, else by the start of its session id.
+fn turns(kept: Vec<Turn>, titles: &HashMap<String, String>) -> Vec<TurnBase> {
+    kept.into_iter()
         .map(|turn| TurnBase {
             title: titles
                 .get(&turn.session)
@@ -1467,6 +1491,48 @@ garbage\0\
             "{error}"
         );
         assert!(totals.is_some());
+    }
+
+    #[test]
+    fn an_answer_names_the_turns_it_read_though_snapshots_change_meanwhile() {
+        let tmp = tempfile::tempdir().unwrap();
+        let top = crate::paths::canonical(tmp.path()).unwrap();
+        let root = top.join("r");
+        let snapshots = no_snapshots(&top);
+        std::fs::create_dir(&root).unwrap();
+        run(&root, &["init", "-q", "-b", "main"]);
+        commit(&root, "a");
+        let path = root.display().to_string();
+        let followed = || (root.clone(), None);
+        let turn = |session: &str| DiffBase::Turn {
+            session: session.into(),
+        };
+        let sessions = |kept: &[Turn]| kept.iter().map(|t| t.session.clone()).collect::<Vec<_>>();
+        // Read before a snapshot is taken: its turn is neither the base nor listed.
+        let before = snapshots.turns(&root, &path);
+        snapshots.take(&root, &path, "s1", 7).unwrap();
+        let used = based(followed(), &snapshots, &before, &turn("s1"));
+        assert_eq!(
+            (used.base, used.error.as_deref(), sessions(&before)),
+            (DiffBase::Head, Some(snapshot::NO_SNAPSHOT), vec![])
+        );
+        // Read before its `SessionEnd`: HEAD, why, and no longer listed; the other kept.
+        snapshots.take(&root, &path, "s2", 9).unwrap();
+        let mut kept = snapshots.turns(&root, &path);
+        let mut used = based(followed(), &snapshots, &kept, &turn("s1"));
+        assert_eq!(used.base, turn("s1"));
+        snapshots.end("s1");
+        let listed = listing(&mut used, &mut kept).unwrap();
+        assert_eq!(
+            (used.base, used.error.as_deref(), sessions(&kept)),
+            (
+                DiffBase::Head,
+                Some(snapshot::NO_SNAPSHOT),
+                vec!["s2".to_owned()]
+            )
+        );
+        assert!(used.since.is_none());
+        assert_eq!(listed.files, list(&root, None).unwrap().files);
     }
 
     #[test]
