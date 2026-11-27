@@ -4,12 +4,15 @@ import type { GitState, PushTarget, Workflows } from "./git";
 import {
   clampWidth,
   ORDER_LIMIT,
+  remembered,
   type Side,
   saveAgentOrder,
   savedAgentOrder,
+  savedPlaces,
   savedTabOrder,
   savedTheme,
   savedWidths,
+  savePlaces,
   saveTabOrder,
   saveTheme,
   saveWidths,
@@ -62,6 +65,7 @@ import type { OpenPull, PullBusy, PullError, PullState, Pulls } from "./pulls";
 import { moveNextTo } from "./reorder";
 import type { JobLog, OpenRun, RunBusy, RunError, Runs } from "./runs";
 import {
+  type BarItem,
   barItems,
   barKey,
   dropFile,
@@ -70,18 +74,22 @@ import {
   fileKey,
   fileVisible,
   kept,
+  lastShown,
   opened,
   paneFile,
   paneIdOf,
   paneKey,
   patchEdits,
+  placeKey,
   shownInstead,
   shownPane,
   shownSplit,
   splitOf,
+  tabsPlace,
   tabWorktree,
   visibleTabs,
   withKey,
+  withShown,
 } from "./tabs";
 import { type EditBuffer, isDirty, isFor } from "./viewer/buffer";
 
@@ -409,6 +417,14 @@ export type HiveState = {
    * them; each bar shows its own tabs in this order. Kept between runs, like the widths.
    */
   tabOrder: string[];
+  /**
+   * By worktree (`placeKey`): the bar keys of the tabs it showed (28.19), the most recent last,
+   * at most `HISTORY_LIMIT`: closing the shown tab and coming back to the worktree show the one
+   * shown last. Kept between runs, beside the tab order.
+   */
+  tabHistory: Record<string, string[]>;
+  /** By worktree (`placeKey`): the right panel's view it showed last (28.19), kept between runs. */
+  panelViews: Record<string, PanelView>;
   /** Every open file's tab, in the order they opened. */
   openFiles: FileTab[];
   /** The file of the file tabs whose view shows (when `fileShown`) and whose state is live. */
@@ -642,6 +658,8 @@ export const initialState: HiveState = {
   splitPercent: 50,
   agentOrder: [],
   tabOrder: [],
+  tabHistory: {},
+  panelViews: {},
   openFiles: [],
   openFile: null,
   fileShown: false,
@@ -949,10 +967,56 @@ export const useHive = create<HiveState>()(() => ({
   settings: { ...DEFAULT_SETTINGS, appearance: { theme: savedTheme() } },
   agentOrder: savedAgentOrder(),
   tabOrder: savedTabOrder(),
+  ...savedPlaces(),
 }));
 useHive.subscribe(saveTabOrder);
+useHive.subscribe(savePlaces);
+useHive.subscribe(followPlaces);
 useHive.subscribe(saveAgentOrder);
 useHive.subscribe(saveTheme);
+
+/** What `followPlaces` reads: any other change leaves the places as they are. */
+const PLACE_FIELDS = [
+  "selection",
+  "activeTab",
+  "fileShown",
+  "openFile",
+  "tabs",
+  "agents",
+  "terminals",
+  "projects",
+  "host",
+  "panelView",
+  "panelViews",
+  "tabHistory",
+] as const satisfies readonly (keyof HiveState)[];
+
+/** The `placeKey` of the worktree the right panel shows, null when none. */
+const panelPlace = (s: HiveState): string | null => {
+  const shown = panelWorktree(s);
+  return shown ? placeKey(s, shown.worktree.id) : null;
+};
+
+/**
+ * Keeps where each worktree was left (28.19), on every change of the store: the tab shown goes
+ * last in its worktree's history; the right panel's view is remembered for the worktree it
+ * shows, and coming to another worktree shows the view that one showed last (the view picked
+ * with the move wins).
+ */
+export function followPlaces(s: HiveState, prev: HiveState): void {
+  if (PLACE_FIELDS.every((field) => s[field] === prev[field])) return;
+  const tabHistory = withShown(s);
+  const change: Partial<HiveState> = tabHistory === s.tabHistory ? {} : { tabHistory };
+  const place = panelPlace(s);
+  const kept = place === null ? s.panelView : s.panelViews[place];
+  const came = place !== panelPlace(prev) && s.panelView === prev.panelView;
+  if (came && kept) {
+    if (kept !== s.panelView) change.panelView = kept;
+  } else if (place !== null && kept !== s.panelView) {
+    change.panelViews = remembered(s.panelViews, place, s.panelView);
+  }
+  if (Object.keys(change).length > 0) useHive.setState(change);
+}
 
 /**
  * Sets a side's width (kept within its limits) and, unless `persist` is false (a drag in
@@ -1220,8 +1284,9 @@ export const selectIn = (f: OpenFile) => (lines: Lines | null) => {
 };
 /**
  * Selects a project, worktree or agent. The tab bar then shows that place's tabs: the shown
- * terminal stays when it is one of them, else the last of them is shown (none when it has
- * none), and the open file stays shown only when it belongs there.
+ * tab stays when it is one of them, else the one that place showed last (28.19), else the last
+ * terminal of them is shown (none when it has none), and the open file stays shown only when
+ * it belongs there.
  */
 export const select = (selection: string | null) => useHive.setState((s) => selected(s, selection));
 
@@ -1229,6 +1294,13 @@ export const select = (selection: string | null) => useHive.setState((s) => sele
 export function selected(s: HiveState, selection: string | null): Partial<HiveState> {
   const next = { ...s, selection };
   const tabs = visibleTabs(next);
+  // Coming to a place whose bar lacks the tab shown: the tab it showed last (28.19), in its pair.
+  const items = barItems(next);
+  const place = tabsPlace(next);
+  const pane = shownPane(s);
+  const back =
+    place && !items.some((t) => paneIdOf(t) === pane) ? lastShown(next, place, items) : undefined;
+  if (back) return { selection, fileShown: false, ...shownInstead(next, back) };
   const keep = tabs.some((t) => t.id === s.activeTab);
   const shown = {
     selection,
@@ -1299,22 +1371,26 @@ export const linkDown = (s: Pick<HiveState, "links">, host: string | null | unde
   !!host && s.links[host]?.state !== "connected";
 
 /**
- * Removes the tab; when it was shown, the other pane of its split is, else its right neighbour
- * in the bar (the left one when it was last), which may be a file. Closing either pane ends its
- * pair only.
+ * Removes the tab; when it was shown, the other pane of its split is, else the tab of its
+ * worktree shown most recently (28.19), else its right neighbour in the bar (the left one when
+ * it was last), which may be a file. Closing either pane ends its pair only.
  */
 export const removeTab = (id: number) =>
   useHive.setState((s) => {
     const shown = visibleTabs(s);
     const i = shown.findIndex((t) => t.id === id);
     const rest = shown.filter((t) => t.id !== id);
+    const tab = s.tabs.find((t) => t.id === id);
+    const recent = <T extends BarItem>(list: T[]) =>
+      tab ? lastShown(s, tabWorktree(s, tab), list) : undefined;
     const split = splitOf(s, id);
     const other = split && (split.left === id ? split.right : split.left);
     const terminal = typeof other === "number" ? other : null;
-    const next = terminal ?? rest[Math.min(i, rest.length - 1)]?.id ?? null;
+    const next = terminal ?? (recent(rest) ?? rest[Math.min(i, rest.length - 1)])?.id ?? null;
     const items = barItems(s);
     const at = items.findIndex((t) => "id" in t && t.id === id);
-    const beside = items.filter((_, j) => j !== at)[Math.min(at, items.length - 2)];
+    const others = items.filter((_, j) => j !== at);
+    const beside = recent(others) ?? others[Math.min(at, items.length - 2)];
     const gone = [barKey(s, { id, cwd: "" }), `tab:${id}`];
     const { [id]: _, ...scriptRuns } = s.scriptRuns;
     const removed = {
@@ -1324,9 +1400,10 @@ export const removeTab = (id: number) =>
       activeTab: s.activeTab === id ? next : s.activeTab,
       splits: s.splits.filter((p) => p !== split),
     };
-    // What takes over from the terminal shown: the other pane of its pair, else the tab beside it.
+    // What takes over from the terminal shown: the other pane of its pair, else the tab shown
+    // before it, else the tab beside it.
     const instead = other === null ? beside : items.find((t) => paneIdOf(t) === other);
-    return s.activeTab === id && terminalShown(s) && instead && !("id" in instead)
+    return s.activeTab === id && terminalShown(s) && instead
       ? { ...removed, ...shownInstead({ ...s, ...removed }, instead) }
       : removed;
   });
@@ -1619,8 +1696,12 @@ export function spacePlace(s: HiveState): string | null {
 export function spaceProjects(s: HiveState): Project[] {
   const all = Object.values(s.projects ?? {});
   const space = currentSpace(s);
-  return space ? all.filter((p) => space.projects.includes(p.parent ?? p.id)) : all;
+  return space ? all.filter((p) => inSpace(space, p)) : all;
 }
+
+/** Whether `space` lists project `p`, itself or through its group (14.1). */
+export const inSpace = (space: Space, p: Project): boolean =>
+  space.projects.includes(p.parent ?? p.id);
 
 /**
  * Agents in the sidebar's order (project, worktree, then the user's order within it, 8.2);

@@ -1,6 +1,8 @@
+import { useRef } from "react";
 import type { ReviewComment } from "../protocol";
 import { ago } from "../sessions";
 import { CloseIcon } from "../shell/icons";
+import { useKeptScroll, viewKey } from "../shell/panelPlace";
 import { type HiveState, panelWorktree, setOpenFile, useHive } from "../store";
 import { pasteToTerminal, terminal } from "../terminals";
 import { transport } from "../transport";
@@ -180,6 +182,14 @@ const NONE: ReviewComment[] = [];
 export function CommentsView({ worktree }: { worktree: string }) {
   const comments = useHive((s) => s.comments[worktree]) ?? NONE;
   const open = comments.filter(sendable);
+  // Its scroll, as this worktree's comments were left (28.19).
+  const host = useHive((s) => s.host);
+  const scroller = useRef<HTMLDivElement>(null);
+  const onScroll = useKeptScroll(
+    viewKey("comments", host, worktree),
+    scroller,
+    comments.length > 0,
+  );
   if (comments.length === 0) {
     return (
       <div className="comments">
@@ -190,7 +200,7 @@ export function CommentsView({ worktree }: { worktree: string }) {
     );
   }
   return (
-    <div className="comments">
+    <div className="comments" ref={scroller} onScroll={onScroll}>
       <div className="comments-bar">
         <SendButton
           worktree={worktree}

@@ -150,6 +150,11 @@ export const ExternalIcon = icon(ArrowSquareOutIcon);
 
 export const EyeIcon = icon(PhosphorEyeIcon);
 
+/** A Diff row's seen mark (28.20): the eye, filled once the file is seen. */
+export const SeenIcon = ({ seen }: { seen: boolean }) => (
+  <PhosphorEyeIcon {...ICON} weight={seen ? "fill" : "regular"} />
+);
+
 export const TableIcon = icon(PhosphorTableIcon);
 
 export const SearchIcon = icon(MagnifyingGlassIcon);

@@ -1,4 +1,4 @@
-import { ORDER_LIMIT } from "./persist";
+import { HISTORY_LIMIT, ORDER_LIMIT, remembered } from "./persist";
 import type { FileText } from "./protocol";
 import type { FileTab, HiveState, OpenFile, PaneId, Split, Tab } from "./store";
 import { type EditBuffer, fromDisk, isDirty, isFor, startEdit } from "./viewer/buffer";
@@ -124,8 +124,9 @@ export const kept = (files: FileTab[], f: OpenFile): FileTab[] =>
     : files;
 
 /**
- * Closes file `f`'s tab. When it was shown, the tab beside it in the bar (the right one, else
- * the left one) shows instead.
+ * Closes file `f`'s tab. When it was shown, the other pane of its pair shows instead, else the
+ * tab of its worktree shown most recently (28.19), else the tab beside it in the bar (the right
+ * one, else the left one).
  */
 export function dropFile(s: HiveState, f: OpenFile): Partial<HiveState> {
   const items = barItems(s);
@@ -147,13 +148,14 @@ export function dropFile(s: HiveState, f: OpenFile): Partial<HiveState> {
     editorNotice: null,
     gotoLine: null,
   };
-  // The other pane of its pair (25.1), else the tab beside it.
+  // The other pane of its pair (25.1), else the tab its worktree showed last (28.19), else the
+  // tab beside it.
   const other = split && (split.left === fileKey(f) ? split.right : split.left);
   const next = !s.fileShown
     ? undefined
     : other !== null
       ? rest.find((t) => paneIdOf(t) === other)
-      : rest[Math.min(Math.max(i, 0), rest.length - 1)];
+      : (lastShown(s, f.worktree, rest) ?? rest[Math.min(Math.max(i, 0), rest.length - 1)]);
   return { ...closed, ...shownInstead({ ...s, ...closed }, next) };
 }
 
@@ -293,6 +295,50 @@ export function barItems(s: HiveState): BarItem[] {
   const place = tabsPlace(s);
   const files = s.openFiles.filter((f) => place === null || f.worktree === place);
   return inBarOrder(s, [...visibleTabs(s), ...files]);
+}
+
+/**
+ * The key of worktree `place` of the shown host in `tabHistory` and `panelViews` (28.19): two
+ * hosts may each have the same path (26.18).
+ */
+export const placeKey = (s: Pick<HiveState, "host">, place: string) => `${s.host ?? ""}\n${place}`;
+
+/** The keys a tab is remembered by: its bar key, and a terminal's channel too (`inBarOrder`). */
+const keysOf = (s: HiveState, item: BarItem): string[] =>
+  "path" in item ? [fileKey(item)] : [barKey(s, item), `tab:${item.id}`];
+
+/**
+ * `tabHistory` with the tab shown now (the focused pane) last in its worktree's (28.19), the
+ * oldest past `HISTORY_LIMIT` forgotten; unchanged when it is already last, or none shows.
+ */
+export function withShown(s: HiveState): HiveState["tabHistory"] {
+  const pane = shownPane(s);
+  const all = [...s.tabs.filter((t) => onShownHost(s, t)), ...s.openFiles];
+  const item = pane === null ? undefined : all.find((t) => paneIdOf(t) === pane);
+  if (!item) return s.tabHistory;
+  const place = placeKey(s, itemWorktree(s, item));
+  const [key, channel] = keysOf(s, item) as [string, string?];
+  const list = s.tabHistory[place] ?? [];
+  if (list.at(-1) === key) return s.tabHistory;
+  const rest = list.filter((k) => k !== key && k !== channel);
+  return remembered(s.tabHistory, place, [...rest, key].slice(-HISTORY_LIMIT));
+}
+
+/**
+ * Of `items`, the one worktree `place` showed last (28.19), by its history of shown tabs; none
+ * when it showed none of them.
+ */
+export function lastShown<T extends BarItem>(
+  s: HiveState,
+  place: string,
+  items: T[],
+): T | undefined {
+  const list = s.tabHistory[placeKey(s, place)] ?? [];
+  for (let i = list.length - 1; i >= 0; i--) {
+    const item = items.find((t) => keysOf(s, t).includes(list[i] as string));
+    if (item) return item;
+  }
+  return undefined;
 }
 
 /** Whether the open file's tab belongs to the place the tab bar shows. */
