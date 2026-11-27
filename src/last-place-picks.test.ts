@@ -47,7 +47,7 @@ test("the right panel closed and the sidebar hidden are kept with the widths (ro
   toggleSidebar();
   expect(savedLayout()).toEqual({ rightPanel: "files", sidebarShown: true });
   // Unreadable, absent or throwing: both open.
-  const open = { rightPanel: "files", sidebarShown: true };
+  const open = { rightPanel: "files", sidebarShown: true } as const;
   localStorage.setItem("hive.widths", "not json");
   expect(savedLayout()).toEqual(open);
   localStorage.setItem("hive.widths", "null");
