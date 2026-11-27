@@ -1,32 +1,73 @@
 import { CaretDownIcon } from "@phosphor-icons/react";
-import { type KeyboardEvent, useEffect, useId, useLayoutEffect, useRef, useState } from "react";
+import {
+  Fragment,
+  type KeyboardEvent,
+  useEffect,
+  useId,
+  useLayoutEffect,
+  useRef,
+  useState,
+} from "react";
 import { CheckIcon } from "../shell/icons";
 
 /** An option; a `disabled` one shows but cannot be picked; `title` is its tooltip. */
 export type SelectOption = { value: string; label: string; disabled?: boolean; title?: string };
+/**
+ * A labelled group of options (28.18); the label is never an option, so the keys and type-ahead
+ * skip it. The same value may appear in several groups: each is the same choice.
+ */
+export type SelectGroup = { group: string; options: SelectOption[] };
 
 /** How long a pause in typing starts a new type-ahead search. */
 export const TYPE_AHEAD_MS = 500;
 /** The tallest the list gets before it scrolls. */
 const LIST_MAX = 240;
+/** The room kept between the list and the window's edges. */
+const EDGE = 8;
+
+/** Where the list goes: `top` or `bottom` (from the window's bottom) is set, the other not. */
+export type ListPlace = { left: number; top?: number; bottom?: number; maxHeight: number };
+
+/**
+ * Where a select's list fits, from its trigger's rect, the list's width and the window's size:
+ * under the trigger and left-aligned to it, right-aligned when it would pass the window's right
+ * edge, above when there is more room there (e.g. near the window's bottom), and never outside
+ * the window.
+ */
+export function placeList(
+  box: Pick<DOMRect, "left" | "right" | "top" | "bottom">,
+  width: number,
+  view: { width: number; height: number },
+): ListPlace {
+  let left = box.left;
+  if (left + width > view.width - EDGE) left = box.right - width;
+  left = Math.max(EDGE, Math.min(left, view.width - EDGE - width));
+  const below = view.height - box.bottom - EDGE;
+  const above = box.top - EDGE;
+  if (below < LIST_MAX && above > below) {
+    return { left, bottom: view.height - box.top + 2, maxHeight: Math.min(LIST_MAX, above) };
+  }
+  return { left, top: box.bottom + 2, maxHeight: Math.max(80, Math.min(LIST_MAX, below)) };
+}
 
 /**
  * A select in the app's look, in place of the native one (whose popup is the WebView's own).
  * The trigger is a `combobox` button that keeps the focus; the `listbox` under it opens on a
  * click, ↑/↓, Enter, Space or typing, and closes on a pick, Esc (which never reaches an
  * enclosing `<dialog>`), Tab, blur, scrolling or resizing. It is `position: fixed`, so the
- * dialog's own overflow does not clip it.
+ * dialog's own overflow does not clip it, and placed where it fits in the window (`placeList`).
  */
 export function Select(props: {
   value: string;
-  options: SelectOption[];
+  options: (SelectOption | SelectGroup)[];
   onChange: (value: string) => void;
   "aria-label"?: string;
   "aria-labelledby"?: string;
   disabled?: boolean;
   className?: string;
 }) {
-  const { value, options, onChange } = props;
+  const { value, onChange } = props;
+  const options = props.options.flatMap((o) => ("group" in o ? o.options : [o]));
   const current = Math.max(
     0,
     options.findIndex((o) => o.value === value),
@@ -53,18 +94,16 @@ export function Select(props: {
     if (!open) return;
     const box = (trigger.current as HTMLButtonElement).getBoundingClientRect();
     const el = list.current as HTMLDivElement;
-    el.style.left = `${box.left}px`;
+    const view = { width: window.innerWidth, height: window.innerHeight };
+    // Measured at the window's left, with the trigger's width as a minimum, then placed.
+    el.style.left = "0px";
     el.style.minWidth = `${box.width}px`;
-    // It opens upwards when there is more room above (e.g. near the window's bottom).
-    const below = window.innerHeight - box.bottom - 8;
-    const above = box.top - 8;
-    if (below < LIST_MAX && above > below) {
-      el.style.bottom = `${window.innerHeight - box.top + 2}px`;
-      el.style.maxHeight = `${Math.min(LIST_MAX, above)}px`;
-    } else {
-      el.style.top = `${box.bottom + 2}px`;
-      el.style.maxHeight = `${Math.max(80, Math.min(LIST_MAX, below))}px`;
-    }
+    el.style.maxWidth = `${view.width - 2 * EDGE}px`;
+    const place = placeList(box, el.offsetWidth, view);
+    el.style.left = `${place.left}px`;
+    if (place.top === undefined) el.style.bottom = `${place.bottom}px`;
+    else el.style.top = `${place.top}px`;
+    el.style.maxHeight = `${place.maxHeight}px`;
   }, [open]);
 
   useEffect(() => {
@@ -119,6 +158,29 @@ export function Select(props: {
     e.preventDefault();
   };
 
+  const option = ({ o, at }: { o: SelectOption; at: number }) => (
+    // biome-ignore lint/a11y/useKeyWithClickEvents: the trigger handles the keys.
+    <div
+      key={at}
+      id={`${id}-${at}`}
+      role="option"
+      tabIndex={-1}
+      aria-selected={o.value === options[current]?.value}
+      aria-disabled={o.disabled || undefined}
+      title={o.title}
+      data-active={at === active}
+      onMouseMove={() => setActive(at)}
+      onClick={() => choose(at)}
+    >
+      <span className="select-value">{o.label}</span>
+      {o.value === options[current]?.value && (
+        <span className="select-check">
+          <CheckIcon />
+        </span>
+      )}
+    </div>
+  );
+
   const listId = `${id}-list`;
   return (
     <div className={props.className ? `select ${props.className}` : "select"}>
@@ -160,30 +222,43 @@ export function Select(props: {
           // The focus stays on the trigger.
           onMouseDown={(e) => e.preventDefault()}
         >
-          {options.map((o, at) => (
-            // biome-ignore lint/a11y/useKeyWithClickEvents: the trigger handles the keys.
-            <div
-              key={o.value}
-              id={`${id}-${at}`}
-              role="option"
-              tabIndex={-1}
-              aria-selected={at === current}
-              aria-disabled={o.disabled || undefined}
-              title={o.title}
-              data-active={at === active}
-              onMouseMove={() => setActive(at)}
-              onClick={() => choose(at)}
-            >
-              <span className="select-value">{o.label}</span>
-              {at === current && (
-                <span className="select-check">
-                  <CheckIcon />
-                </span>
-              )}
-            </div>
-          ))}
+          {groups(props.options).map((g, k) =>
+            g.label === null ? (
+              // biome-ignore lint/suspicious/noArrayIndexKey: runs are only told apart by place.
+              <Fragment key={k}>{g.items.map(option)}</Fragment>
+            ) : (
+              // biome-ignore lint/suspicious/noArrayIndexKey: groups are only told apart by place.
+              // biome-ignore lint/a11y/useSemanticElements: a listbox's groups are role="group" (ARIA).
+              <div key={k} role="group" aria-labelledby={`${id}-g${k}`}>
+                <div id={`${id}-g${k}`} className="select-group" role="presentation">
+                  {g.label}
+                </div>
+                {g.items.map(option)}
+              </div>
+            ),
+          )}
         </div>
       )}
     </div>
   );
+}
+
+/**
+ * The options in runs to render: each group under its label, the options outside a group in
+ * runs with none; each option with its place in the flat list the keys move through.
+ */
+function groups(items: (SelectOption | SelectGroup)[]) {
+  const runs: { label: string | null; items: { o: SelectOption; at: number }[] }[] = [];
+  let at = 0;
+  for (const item of items) {
+    if ("group" in item) {
+      runs.push({ label: item.group, items: item.options.map((o) => ({ o, at: at++ })) });
+    } else {
+      const last = runs[runs.length - 1];
+      const run = last?.label === null ? last : { label: null, items: [] };
+      if (run !== last) runs.push(run);
+      run.items.push({ o: item, at: at++ });
+    }
+  }
+  return runs;
 }

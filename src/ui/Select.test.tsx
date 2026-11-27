@@ -1,7 +1,7 @@
 import { afterEach, expect, mock, spyOn, test } from "bun:test";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { useState } from "react";
-import { Select, TYPE_AHEAD_MS } from "./Select";
+import { placeList, Select, TYPE_AHEAD_MS } from "./Select";
 
 afterEach(cleanup);
 
@@ -130,6 +130,64 @@ test("near the bottom of the window the list opens above the trigger", () => {
   mock.restore();
 });
 
+// 28.17: the list is placed where it fits, never outside the window.
+const VIEW = { width: 1000, height: 700 };
+const rect = (left: number, top: number, width = 120, height = 30) => ({
+  left,
+  top,
+  right: left + width,
+  bottom: top + height,
+});
+
+test("a list that fits opens under the trigger, left-aligned to it", () => {
+  expect(placeList(rect(100, 50), 200, VIEW)).toEqual({ left: 100, top: 82, maxHeight: 240 });
+  // Exactly up to the window's margin still fits.
+  expect(placeList(rect(792, 50), 200, VIEW).left).toBe(792);
+});
+
+test("a list that would pass the right edge is right-aligned to the trigger", () => {
+  // The trigger ends at 990; a 300 px list from 870 would end at 1170.
+  expect(placeList(rect(870, 50), 300, VIEW)).toEqual({ left: 690, top: 82, maxHeight: 240 });
+  // A trigger at the very edge: the list keeps the window's margin.
+  expect(placeList(rect(960, 50, 40), 300, VIEW).left).toBe(692);
+  // Wider than the trigger's right allows on the left: it keeps the left margin.
+  expect(placeList(rect(10, 50, 40), 990, VIEW).left).toBe(8);
+});
+
+test("a list that would pass the bottom edge opens above the trigger", () => {
+  expect(placeList(rect(100, 640), 200, VIEW)).toEqual({ left: 100, bottom: 62, maxHeight: 240 });
+  // With little room either way it takes the larger side, scrolling.
+  expect(placeList(rect(100, 100, 120, 30), 200, { width: 1000, height: 300 })).toEqual({
+    left: 100,
+    top: 132,
+    maxHeight: 162,
+  });
+  expect(placeList(rect(100, 170, 120, 30), 200, { width: 1000, height: 300 })).toEqual({
+    left: 100,
+    bottom: 132,
+    maxHeight: 162,
+  });
+  // Under the minimum room below it still opens there when above is smaller.
+  expect(placeList(rect(100, 20, 120, 30), 200, { width: 1000, height: 90 }).maxHeight).toBe(80);
+});
+
+test("the list in the DOM gets the placed position", () => {
+  const { trigger } = setup();
+  spyOn(trigger, "getBoundingClientRect").mockReturnValue(
+    DOMRect.fromRect({ x: window.innerWidth - 50, y: 40, width: 40, height: 30 }),
+  );
+  fireEvent.mouseDown(trigger);
+  const style = (list() as HTMLElement).style;
+  // happy-dom lays nothing out, so the list measures 0 px wide.
+  expect([style.left, style.top, style.minWidth, style.maxWidth]).toEqual([
+    `${window.innerWidth - 50}px`,
+    "72px",
+    "40px",
+    `${window.innerWidth - 16}px`,
+  ]);
+  mock.restore();
+});
+
 test("the keyboard opens, moves and picks; Esc closes without reaching the dialog", () => {
   const escapes: string[] = [];
   const { trigger, changed } = setup("b", (e) => {
@@ -234,4 +292,86 @@ test("an unknown value shows the first option; disabled and a class pass through
   expect((trigger as HTMLButtonElement).disabled).toBe(true);
   expect(trigger.getAttribute("aria-labelledby")).toBe("l");
   expect(trigger.parentElement?.className).toBe("select compact");
+});
+
+// 28.18: labelled groups; the labels are not options, and the same value may be in two groups.
+test("groups show under their labels; keys and type-ahead skip the labels", () => {
+  const changed = mock((_: string) => {});
+  const options = [
+    { value: "none", label: "None" },
+    { value: "all", label: "All" },
+    {
+      group: "Work",
+      options: [
+        { value: "hive", label: "hive" },
+        { value: "one", label: "one" },
+      ],
+    },
+    {
+      group: "Home",
+      options: [
+        { value: "hive", label: "hive" },
+        { value: "garden", label: "garden" },
+      ],
+    },
+    { value: "other", label: "Other" },
+  ];
+  render(<Select aria-label="Project" value="hive" options={options} onChange={changed} />);
+  const trigger = screen.getByRole("combobox", { name: "Project" });
+  expect(trigger.textContent).toBe("hive");
+  key(trigger, "ArrowDown");
+  const groups = screen.getAllByRole("group");
+  expect(groups.map((g) => g.getAttribute("aria-labelledby"))).toEqual(
+    groups.map((g) => g.firstElementChild?.id ?? null),
+  );
+  expect(groups.map((g) => g.firstElementChild?.textContent)).toEqual(["Work", "Home"]);
+  expect(groups.map((g) => screen.getByRole("listbox").contains(g))).toEqual([true, true]);
+  const shown = screen.getAllByRole("option");
+  expect(shown.map((o) => o.textContent)).toEqual([
+    "None",
+    "All",
+    "hive",
+    "one",
+    "hive",
+    "garden",
+    "Other",
+  ]);
+  // The value is selected in both groups; the active option starts on its first.
+  expect(shown.map((o) => o.getAttribute("aria-selected"))).toEqual([
+    "false",
+    "false",
+    "true",
+    "false",
+    "true",
+    "false",
+    "false",
+  ]);
+  expect(shown.filter((o) => o.querySelector(".select-check")).length).toBe(2);
+  expect(active(trigger)).toBe("hive");
+  // ↓ from Work's last option goes to Home's first, past its label; ↑ comes back.
+  key(trigger, "ArrowDown");
+  key(trigger, "ArrowDown");
+  expect(document.getElementById(trigger.getAttribute("aria-activedescendant") ?? "")).toBe(
+    shown[4],
+  );
+  key(trigger, "ArrowUp");
+  expect(active(trigger)).toBe("one");
+  // Type-ahead finds options only, never a label ("Work", "Home").
+  const now = spyOn(Date, "now").mockReturnValue(10_000);
+  key(trigger, "h");
+  expect(document.getElementById(trigger.getAttribute("aria-activedescendant") ?? "")).toBe(
+    shown[4],
+  );
+  now.mockReturnValue(20_000);
+  key(trigger, "w");
+  expect(document.getElementById(trigger.getAttribute("aria-activedescendant") ?? "")).toBe(
+    shown[4],
+  );
+  // Picking the same project in the other group changes nothing; another option does.
+  key(trigger, "Enter");
+  expect(changed).not.toHaveBeenCalled();
+  fireEvent.mouseDown(trigger);
+  fireEvent.click(screen.getByRole("option", { name: "garden" }));
+  expect(changed).toHaveBeenCalledWith("garden");
+  now.mockRestore();
 });

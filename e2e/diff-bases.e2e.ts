@@ -61,3 +61,36 @@ test("diff bases: since an agent's last turn, and since a commit picked", async 
   await expect(picker).toBeHidden();
   await expect(base).toHaveText("c3d4e5f");
 });
+
+// 28.17: at the right panel's narrowest the base menu, at the panel's right edge, opens inside
+// the window, every option whole.
+test("diff bases: the menu stays inside the window with the panel at its narrowest", async ({
+  page,
+}) => {
+  await page.addInitScript(() =>
+    localStorage.setItem("hive.widths", JSON.stringify({ panelWidth: 1 })),
+  );
+  await page.goto("/");
+  await page
+    .getByRole("navigation", { name: "Projects" })
+    .getByRole("button", { name: "refactor-auth" })
+    .click();
+  const panel = page.getByRole("complementary", { name: "Side panel" });
+  await panel.getByRole("tablist", { name: "Panel" }).getByRole("tab", { name: "Diff" }).click();
+  await panel.getByRole("combobox", { name: "Compare with" }).click();
+  await expect(page.getByRole("option")).toHaveCount(5);
+  const outside = await page.getByRole("listbox").evaluate((list) => {
+    const out: string[] = [];
+    for (const e of [list, ...list.querySelectorAll('[role="option"], .select-value')]) {
+      const r = e.getBoundingClientRect();
+      if (r.left < 0 || r.top < 0 || r.right > innerWidth || r.bottom > innerHeight) {
+        out.push(e.textContent ?? "");
+      }
+      // A label cut by its own box is not whole either.
+      if (e.scrollWidth > e.clientWidth + 1) out.push(`cut: ${e.textContent}`);
+    }
+    return out;
+  });
+  expect(outside).toEqual([]);
+  await page.screenshot({ path: "target/e2e/diff-bases-narrow.png" });
+});

@@ -15,6 +15,7 @@ import {
   render,
   screen,
   waitFor,
+  within,
 } from "@testing-library/react";
 import type { ReactElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
@@ -1631,7 +1632,7 @@ test("the Diff tree's boxes stage and unstage a file; Space too (27.6)", () => {
   expect(screen.queryAllByRole("checkbox", { name: /^(Un)?[Ss]tage / })).toEqual([]);
 });
 
-test("each changed file has a seen box at its row's end, counted and filtered (27.1)", () => {
+test("each changed file has an eye button at its row's end, counted and filtered (27.1, 28.20)", () => {
   panel();
   const marked = spyOn(transport, "markSeen").mockImplementation(async () => {});
   act(() => select(fixLogin.id));
@@ -1641,28 +1642,50 @@ test("each changed file has a seen box at its row's end, counted and filtered (2
     file("c.ts"),
   ];
   act(() => apply({ type: "changes", ...changes(fixLogin.path, files) }));
-  const seenLine = () => document.querySelector(".files-seen")?.firstChild?.textContent;
+  const seenLine = () => document.querySelector(".files-seen-count")?.textContent;
   expect(seenLine()).toBe("1 of 3 seen");
-  const box = (name: string) =>
-    screen.getByRole("checkbox", { name: `Seen: ${name}` }) as HTMLInputElement;
-  expect(["a.ts", "b.ts", "c.ts"].map((n) => box(n).checked)).toEqual([true, false, false]);
-  // The box is the row's last element, out of the tab order (the tree has the keys).
-  expect(treeRow("c.ts").lastElementChild).toBe(box("c.ts"));
-  expect(box("c.ts").tabIndex).toBe(-1);
-  // Changed since seen: a dot says so.
+  // The count ends the line, with an eye over the rows' eyes; "Unseen only" starts it.
+  const line = document.querySelector(".files-seen") as HTMLElement;
+  expect(line.firstElementChild?.textContent).toBe("Unseen only");
+  expect(line.lastElementChild?.querySelector("svg")?.getAttribute("aria-hidden")).toBe("true");
+  const mark = (name: string) => screen.getByRole("button", { name: `Seen: ${name}` });
+  // A toggle button, not a box: pressed (a filled eye) while seen.
+  expect(screen.queryAllByRole("checkbox", { name: /^Seen/ })).toEqual([]);
+  expect(["a.ts", "b.ts", "c.ts"].map((n) => mark(n).getAttribute("aria-pressed"))).toEqual([
+    "true",
+    "false",
+    "false",
+  ]);
+  expect(["a.ts", "b.ts", "c.ts"].map((n) => mark(n).title)).toEqual([
+    "Seen",
+    "Changed since seen: mark as seen again",
+    "Mark as seen",
+  ]);
+  const weight = (n: string) => mark(n).querySelector("svg")?.innerHTML;
+  expect(weight("a.ts")).not.toBe(weight("c.ts"));
+  expect(weight("b.ts")).toBe(weight("c.ts"));
+  // The button is the row's last element, out of the tab order (the tree has the keys).
+  expect(treeRow("c.ts").lastElementChild).toBe(mark("c.ts"));
+  expect(mark("c.ts").tabIndex).toBe(-1);
+  // Changed since seen: a dot says so, just before the eye.
   const dot = (name: string) => treeRow(name).querySelector(".seen-changed");
   expect(dot("b.ts")?.getAttribute("title")).toBe("Changed since seen");
+  expect(dot("b.ts")?.nextElementSibling).toBe(mark("b.ts"));
   expect(dot("a.ts")).toBeNull();
 
-  // A box marks its file, or unmarks it, and opens nothing.
-  fireEvent.click(box("c.ts"));
-  fireEvent.doubleClick(box("c.ts"));
-  fireEvent.click(box("a.ts"));
+  // The button marks its file, or unmarks it (changed since seen: marks it again), and opens
+  // nothing; its row becomes the active one.
+  fireEvent.click(mark("c.ts"));
+  fireEvent.doubleClick(mark("c.ts"));
+  fireEvent.click(mark("a.ts"));
+  fireEvent.click(mark("b.ts").querySelector("svg") as Element);
   expect(marked.mock.calls).toEqual([
     [fixLogin.path, "head", ["c.ts"], true],
     [fixLogin.path, "head", ["a.ts"], false],
+    [fixLogin.path, "head", ["b.ts"], true],
   ]);
   expect(useHive.getState().openFile).toBeNull();
+  expect(tree().getAttribute("aria-activedescendant")).toBe(treeRow("b.ts").id);
   // A click elsewhere on the row still opens it.
   fireEvent.click(treeRow("c.ts"));
   expect(useHive.getState().openFile?.path).toBe("c.ts");
@@ -1679,6 +1702,48 @@ test("each changed file has a seen box at its row's end, counted and filtered (2
   // No changes: no count, no filter.
   act(() => apply({ type: "changes", ...changes(fixLogin.path, []) }));
   expect(document.querySelector(".files-seen")).toBeNull();
+});
+
+test("a Diff row's staging box and eye are two controls, the boxes in one column (28.20)", () => {
+  panel();
+  const stage = spyOn(transport, "stageFiles").mockResolvedValue();
+  const marked = spyOn(transport, "markSeen").mockImplementation(async () => {});
+  act(() => select(fixLogin.id));
+  const listed = [
+    { ...file("src/auth/deep.ts"), staged: "no" as const },
+    { ...file("top.ts"), staged: "yes" as const },
+  ];
+  act(() => apply({ type: "changes", ...changes(fixLogin.path, listed) }));
+  expand();
+  // One checkbox per row, the staging one; the eye is a button.
+  const row = treeRow("deep.ts");
+  expect(
+    within(row)
+      .getAllByRole("checkbox")
+      .map((b) => b.getAttribute("aria-label")),
+  ).toEqual(["Stage src/auth/deep.ts"]);
+  expect(
+    within(row)
+      .getAllByRole("button")
+      .map((b) => b.getAttribute("aria-label")),
+  ).toEqual(["Seen: src/auth/deep.ts"]);
+  // Every row starts at the same place with its box (or a folder's space of one); the indent
+  // comes after it.
+  const pad = (name: string) => treeRow(name).style.paddingLeft;
+  expect(["src", "auth", "deep.ts", "top.ts"].map(pad)).toEqual(["13px", "13px", "13px", "13px"]);
+  const box = within(row).getByRole("checkbox") as HTMLElement;
+  expect(box.style.marginRight).toBe(`${6 + 2 * 14}px`);
+  const space = (name: string) => (treeRow(name).firstElementChild as HTMLElement).style.width;
+  expect([space("src"), space("auth")]).toEqual(["18px", `${18 + 14}px`]);
+  // Each does its own thing on the same row.
+  fireEvent.click(box);
+  fireEvent.click(within(row).getByRole("button"));
+  expect(stage).toHaveBeenLastCalledWith(fixLogin.path, ["src/auth/deep.ts"], true);
+  expect(marked).toHaveBeenLastCalledWith(fixLogin.path, "head", ["src/auth/deep.ts"], true);
+  expect([stage.mock.calls.length, marked.mock.calls.length]).toEqual([1, 1]);
+  // The Files tree keeps its indent in the padding, with no box and no eye.
+  act(() => setPanelView("files"));
+  expect(screen.queryAllByRole("button", { name: /^Seen: / })).toEqual([]);
 });
 
 test("the diff's header has the open file's seen box at its right end (27.1)", () => {

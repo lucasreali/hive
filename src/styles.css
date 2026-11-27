@@ -1171,8 +1171,10 @@ label:has(> input[type="checkbox"]:disabled) {
   background: var(--git);
 }
 
-/* The Diff view's seen marks (27.1): a box at the right end of each file row and of the diff's
-   header (the left end of a row stays free), a dot before it when the file changed since. */
+/* The Diff view's seen marks (27.1): an eye button at the right end of each file row (28.20;
+   the left end holds the staging box, 27.6) and a box at the right end of the diff's header, a
+   dot before it when the file changed since. "k of N seen" ends with an eye in the rows' eye
+   column, as "k of N staged" starts with a box in their box column. */
 .files-seen {
   display: flex;
   align-items: center;
@@ -1184,9 +1186,49 @@ label:has(> input[type="checkbox"]:disabled) {
 .files-seen .ghost.text {
   width: auto;
   height: 22px;
-  margin-left: auto;
+  margin-left: -6px;
   padding: 0 6px;
   white-space: nowrap;
+}
+
+.files-seen-count {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+  white-space: nowrap;
+}
+
+.files-seen-count svg {
+  flex: none;
+  width: 14px;
+  height: 14px;
+}
+
+.seen-mark {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border-radius: var(--radius);
+  color: var(--text-3);
+}
+
+.seen-mark svg {
+  width: 14px;
+  height: 14px;
+}
+
+.seen-mark:hover {
+  color: var(--text);
+  background: var(--hover);
+}
+
+.seen-mark[aria-pressed="true"] {
+  color: var(--accent);
 }
 
 .files-seen button[aria-pressed="true"] {
@@ -3050,6 +3092,14 @@ button.chevron:hover {
   display: flex;
   flex: none;
   color: var(--accent);
+}
+
+/* A group's label in a select's list (28.18): not an option, like the commit picker's headings. */
+.select-group {
+  padding: 6px 10px 2px;
+  font-size: var(--fs-meta);
+  color: var(--text-2);
+  white-space: nowrap;
 }
 
 /* The space switcher's list (27.8): a section per host, its header with the link's dot. */
