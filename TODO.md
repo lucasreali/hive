@@ -720,7 +720,7 @@ Today: a read-only diff against HEAD or the branch's fork point (9.11), live cha
   - Tests: Rust, the wrapper's message; bun, the status bar for a remote space with an account, without one and without `claude`, and that a local account never shows there; e2e on the mock (`?mock=remote`).
 - [ ] **27.9 Stage 27 hand check.** `main` — The human reviews a real agent's work with 27.1–27.6 on a test repository and pushes it, checks 27.7 on a real session with subagents, and 27.8 with the real hosts. ⏸ Checkpoint.
 
-## Stages 28–32 — Toward Hive 1.0.0
+## Stages 28–33 — Toward Hive 1.0.0
 
 **Rebalanced 2026-11-27 at the human's request** ("o stage 27 está sendo feito agora, quero que organize os demais stages, utilize um planning poker para definir uma estimativa simples para cada tarefa, daí divida tudo em 5 stages com cargas semelhantes, obviamente analisando o que depende do quê"): every open task of the old Stages 28–36 was sized by a planning poker of three voters (a service/Rust engineer, a frontend engineer and a QA/delivery lead), Fibonacci points, the median taken (the votes differed by at most one card). A task whose content waits for a design carries a reserved budget the voters agreed on. About 484 points in all, spread over five stages of about the same load, dependencies kept in order (a task never needs one of a later stage). Each moved task says its old number; decision ids (`D27.N`, `D31.N`, `D34.N`) kept theirs. Stage 27 is in progress and was not touched.
 
@@ -730,7 +730,8 @@ Today: a read-only diff against HEAD or the branch's fork point (9.11), live cha
 | 29 | Pinned tabs, and working together over SSH | 98 (89 reserved) |
 | 30 | IDE features in the editor, themes from a file, the plugin design | 90 (34 reserved) |
 | 31 | Plugins, and the tooling audit | 95 (89 reserved) |
-| 32 | The full review of Hive, then Hive 1.0.0 | 108 (55 reserved) |
+| 32 | The full review of Hive's code (audits and approved refactors) | 100 (55 reserved) |
+| 33 | The design pass: every detail of UI and UX, on weekends with Fable, then Hive 1.0.0 | 149 (133 reserved) |
 
 Why this order: the usage ring is broken for the user today (first); the skills (28.3–28.4) help every later task, and the performance baselines (28.5) must exist before language servers and plugins add their cost; the keymap (28.7) gives go to definition (30.3) and plugin commands their bindings; the colour-blind diff colours (28.6) feed the theme format (28.16); the multiplayer design (28.14) settles where pins are kept (29.1) and the protocol before new messages pile up; the code-intelligence and theme designs (28.15, 28.16) come before the plugin design (30.7), since plugins contribute grammars and themes; the audits run last (Stage 32) so they review the code 1.0 ships, and the release closes it.
 
@@ -863,9 +864,9 @@ Today: two built-in themes, One Dark and One Light (#23), chosen in Settings (6.
 - [ ] **31.2 The plugin tasks approved at 30.7.** · 89 pts reserved *(Was 35.4.)* — Tasks written here after 30.7's checkpoint.
 - [ ] **31.3 Plugins hand check.** · 1 pt *(Was 35.5.)* `main` — The human writes a theme of their own, installs the example plugins, revokes a permission and removes a plugin. ⏸ Checkpoint.
 
-## Stage 32 — A full review of Hive, then Hive 1.0.0
+## Stage 32 — A full review of Hive's code
 
-≈ 108 points, 55 of them reserved for the refactors 32.7 approves.
+≈ 100 points, 55 of them reserved for the refactors 32.7 approves. Hive 1.0.0 moved to the end of Stage 33.
 
 Created 2026-11-25 at the human's request: a complete review of Hive, mainly of its code — what can be improved or refactored while every rule keeps working the same way, possible optimizations, UX/UI adjustments — and a search for skills that improve development (frontend, security, etc.). Placed last at the human's request; its skills (28.3–28.4), performance baselines (28.5) and tooling audit (31.1) run earlier (rebalanced 2026-11-27).
 
@@ -881,15 +882,39 @@ Created 2026-11-25 at the human's request: a complete review of Hive, mainly of 
 - [ ] **32.3 Audit: the Tauri app.** · 3 pts *(Was 31.5.)* `task/32.3-audit-app` — Needs 28.4. `src-tauri/`: commands and capabilities, the custom scheme, downloads, the tray and menus, `macos.rs`, logging; the same questions as 32.1, plus startup time and what the app does on the main thread. Deliver `docs/review/app.md`.
 - [ ] **32.4 Audit: the frontend's code.** · 8 pts *(Was 31.6.)* `task/32.4-audit-frontend` — Needs 28.4. `src/`: the store and `reduce.ts`, the transport, the components under `ui/`, `viewer/`, `shell/`: logic that belongs in the service (#37), duplicated components and helpers, components too large to follow, state kept twice, re-renders (React profiler on the mock transport with many worktrees, agents and terminals), effects without cleanup, listeners and timers that leak, the bundle (size per chunk, what could load lazily), TypeScript `any`s and casts. Deliver `docs/review/frontend.md`.
 - [ ] **32.5 Audit: security.** · 8 pts *(Was 31.8.)* `task/32.5-audit-security` — Needs 28.4. A whole-repo pass (not only a diff) with the `security-reviewer` agent and the approved security skill: every trust boundary (hook payloads, socket messages, file names, environment, spawned processes, the SSH remote, the custom scheme, the agent's browser), size limits, file modes (`0600`), what reaches the logs, Tauri's capabilities and CSP, `cargo deny` advisories and the frontend's dependencies (`bun audit` or equivalent). Deliver `docs/review/security.md`; anything P1 is also told to the human at once, not only at the checkpoint.
-- [ ] **32.6 Audit: UX and UI.** · 8 pts *(Was 31.9.)* `task/32.6-audit-ux` — Needs 28.4. The app on the mock transport through Playwright, in One Dark and One Light, against `docs/prototype/` and `docs/hive.md` (D31.4): every screen and state (empty, loading, error, many items, long names), consistency (spacing, type, icons, wording, menus), keyboard use and focus (#35), accessibility (WCAG AA contrast, labels for screen readers, reduced motion), the friction in the main flows (open a project, create a worktree, follow an agent, review its changes, answer a notification), and what users of similar apps would expect. Screenshots of each finding in `docs/review/ux/`. Deliver `docs/review/ux.md`, each proposal marked "within the prototype" or "changes #N".
-- [ ] **32.7 Consolidate the findings.** · 3 pts *(Was 31.11.)* `main` — Needs 28.5, 31.1 and 32.1–32.6. `docs/review/README.md`: every finding in one table, sorted by priority, duplicates merged, and the refactor tasks proposed from them (each with the findings it closes, the expected gain, its risk and its dependencies), grouped in waves that can run in parallel, with "changes #N" proposals listed apart for the human's decision. ⏸ Checkpoint: the human approves which findings become tasks; the approved ones are written here as 32.8 (D31.1).
+- **32.6 Audit: UX and UI** *(was 31.9)* moved to Stage 33, which does it in full and fixes what it finds (the human, 2026-11-27).
+- [ ] **32.7 Consolidate the findings.** · 3 pts *(Was 31.11.)* `main` — Needs 28.5, 31.1 and 32.1–32.5. `docs/review/README.md`: every finding in one table, sorted by priority, duplicates merged, and the refactor tasks proposed from them (each with the findings it closes, the expected gain, its risk and its dependencies), grouped in waves that can run in parallel, with "changes #N" proposals listed apart for the human's decision. ⏸ Checkpoint: the human approves which findings become tasks; the approved ones are written here as 32.8 (D31.1).
 - [ ] **32.8 The refactor tasks approved at 32.7.** · 55 pts reserved *(Was "31.12…".)* — Written here after 32.7's checkpoint, in waves that can run in parallel (D31.1, D31.2).
 - [ ] **32.9 Review hand check.** · 2 pts *(Was 31.12.)* `main` — After the approved refactor tasks: the human uses Hive for a day on real work; 28.5's measurements are taken again and compared in `docs/review/performance.md`. ⏸ Checkpoint.
 
-Hive 1.0.0 (old Stage 36), D34.4. Needs Stages 28–31 finished and 32.9.
 
-- [ ] **32.10 Ready for 1.0.0.** · 3 pts *(Was 36.1.)* `main` — No product code. A list for the human: every stage's open tasks (finished, or moved by the human to after 1.0 or "Not now"); the Defaults ledger's `pending` rows; the open items below (17.10's update check); what 1.0.0 promises to keep stable (the settings and theme files, the plugin API, the CLI) and what a breaking change to it means from then on (a major version); the README and user docs. ⏸ Checkpoint.
-- [ ] **32.11 Release v1.0.0.** · 2 pts *(Was 36.2.)* `main` — Needs 32.10's approval. `/release 1.0.0` from the main checkout, CI green on every platform, the published app installed and opened by the human. ⏸ Checkpoint.
+## Stage 33 — The design pass, then Hive 1.0.0
+
+The last stage, and the largest. Created 2026-11-27 at the human's request: "no último stage, quero que seja feito uma revisão completa do design do sistema, UI e UX, provavelmente esse vai ser o maior stage que vamos ter, quero que ele faça uma busca completa, ele pode perder o tempo que quiser, esse stage só pode rodar durante o final de semana usando o modelo Fable no alto, ele deve fazer ajustes nos mínimos detalhes do sistema, não deve ser apenas uma revisão e otimização de código, obviamente quero isso também". Needs Stages 28–32 finished (it polishes what 1.0 ships, after the code review's refactors).
+
+- **D33.1 Weekends only.** The stage runs only on Saturdays and Sundays (the human's time zone, -03). The orchestrator starts or resumes its tasks only then; on Monday 00:00 every running task commits what is done, pushes its branch and stops; the next weekend resumes it. Merges into `main` follow the usual rules (CI green, reviews), any day.
+- **D33.2 Fable at high effort.** Every agent of the stage, orchestrator, task agents and reviewers alike, runs on Fable (`claude-fable-5-2`; the Agent tool's `model: "fable"`) with effort `high`.
+- **D33.3 No time limit.** Thoroughness over speed: the stage may take as many weekends as it needs. Every screen, state and flow is looked at, not a sample.
+- **D33.4 Fixes, down to the smallest detail.** Not only a report: each pass fixes what it finds in the same task (spacing, alignment, sizes, colours, contrast, icons, wording, focus, motion, empty and error states, long names, keyboard), with the screenshots before and after. Only a change that moves a decision of `docs/hive.md` or a pattern of `docs/prototype/` is proposed first, marked "changes #N", and waits for the human (D31.4); the human updates `docs/hive.md`.
+- **D33.5 Code too.** Each pass also reviews and optimizes the code it touches (D31.2: same behaviour, every test kept, coverage 100%, no surviving mutant), on top of Stage 32's audits.
+
+**How each pass works:** the app on the mock transport through Playwright, in One Dark and One Light, at the smallest supported window, a usual one and a large one, with the states that matter (empty, loading, error, one item, many items, very long names, a remote host, a narrow panel); keyboard only and with a screen reader's labels; `prefers-reduced-motion`. Findings and fixes are listed in `docs/review/design/<area>.md` with before/after screenshots in `docs/review/design/<area>/`.
+
+- [ ] **33.1 Inventory and the design system.** · 13 pts `task/33.1-design-inventory` — Every screen, dialog, menu, panel, state and flow of the app listed in `docs/review/design/inventory.md` with a screenshot of each; the design tokens (spacing scale, type sizes and weights, colours and their contrast, corner radius, borders, shadows, icon sizes, motion durations) measured against what the code actually uses: every off-scale value found and fixed, every duplicated component or style unified. ⏸ Checkpoint: the human sees the inventory and the token fixes before the area passes.
+- [ ] **33.2 Pass: the sidebar, title bar and status bar.** · 13 pts reserved `task/33.2-design-chrome` — Project and worktree tree, agents and subagents, badges and states, the space switcher, hosts, the status bar and its popovers, the menu bar icon.
+- [ ] **33.3 Pass: tabs, terminals and splits.** · 13 pts reserved `task/33.3-design-terminals` — The tab bar, chats and terminals, splits and their focus, drag and drop, exited and kept terminals, the terminal's font, cursor and selection.
+- [ ] **33.4 Pass: the editor, the diff and reviews.** · 21 pts reserved `task/33.4-design-editor` — The editor and its gutter, Markdown and previews, tables, the diff and its bases, seen marks, comments, "Who wrote this line?", commit and push.
+- [ ] **33.5 Pass: the right panel's views.** · 21 pts reserved `task/33.5-design-panel` — Files, Diff, Comments, Scripts, Pull requests, Actions, Sessions and every other view: density, rows, headers, empty states, filters, long paths.
+- [ ] **33.6 Pass: dialogs, Settings and the palette.** · 13 pts reserved `task/33.6-design-dialogs` — Every dialog and confirmation, every Settings section, the command palette, context menus, toasts and notifications.
+- [ ] **33.7 Pass: the flows.** · 21 pts reserved `task/33.7-design-flows` — End to end, measuring clicks, keys and waits: first run and onboarding, add a project, create a worktree, follow an agent and answer it, review its work and push it, work on a remote host, recover from an error. Each friction fixed or proposed.
+- [ ] **33.8 Pass: words, accessibility and feel.** · 13 pts reserved `task/33.8-design-words` — Every UI text read in one place for tone, consistency and length; WCAG AA contrast, labels and focus order everywhere; reduced motion; the felt speed (interaction latency and jank measured with traces, compared with 28.5's baselines) with the slow spots fixed.
+- [ ] **33.9 Design hand check.** · 3 pts `main` — The human uses Hive for a weekend day on real work and lists what still bothers them; those items are fixed in 33.10. ⏸ Checkpoint.
+- [ ] **33.10 The hand check's fixes.** · 13 pts reserved — Written after 33.9.
+
+Hive 1.0.0 (old Stage 36), D34.4. Needs Stages 28–32 finished and 33.10.
+
+- [ ] **33.11 Ready for 1.0.0.** · 3 pts *(Was 32.10, earlier 36.1.)* `main` — No product code. A list for the human: every stage's open tasks (finished, or moved by the human to after 1.0 or "Not now"); the Defaults ledger's `pending` rows; the open items below (17.10's update check); what 1.0.0 promises to keep stable (the settings and theme files, the plugin API, the CLI) and what a breaking change to it means from then on (a major version); the README and user docs. ⏸ Checkpoint.
+- [ ] **33.12 Release v1.0.0.** · 2 pts *(Was 32.11, earlier 36.2.)* `main` — Needs 33.11's approval. `/release 1.0.0` from the main checkout, CI green on every platform, the published app installed and opened by the human. ⏸ Checkpoint.
 
 ---
 
