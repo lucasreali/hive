@@ -732,6 +732,7 @@ Today: a read-only diff against HEAD or the branch's fork point (9.11), live cha
 | 31 | Plugins, and the tooling audit | 95 (89 reserved) |
 | 32 | The full review of Hive's code (audits and approved refactors) | 100 (55 reserved) |
 | 33 | The design pass and a visual identity: every detail of UI and UX, on weekends with Fable, then Hive 1.0.0 | 162 (133 reserved) |
+| 34 | After 1.0.0: Windows and Linux at the Mac's level | 97 (84 reserved) |
 
 Why this order: the usage ring is broken for the user today (first); the skills (28.3–28.4) help every later task, and the performance baselines (28.5) must exist before language servers and plugins add their cost; the keymap (28.7) gives go to definition (30.3) and plugin commands their bindings; the colour-blind diff colours (28.6) feed the theme format (28.16); the multiplayer design (28.14) settles where pins are kept (29.1) and the protocol before new messages pile up; the code-intelligence and theme designs (28.15, 28.16) come before the plugin design (30.7), since plugins contribute grammars and themes; the audits run last (Stage 32) so they review the code 1.0 ships, and the release closes it.
 
@@ -918,6 +919,29 @@ Hive 1.0.0 (old Stage 36), D34.4. Needs Stages 28–32 finished and 33.11.
 
 - [ ] **33.12 Ready for 1.0.0.** · 3 pts *(Was 32.10, earlier 36.1.)* `main` — No product code. A list for the human: every stage's open tasks (finished, or moved by the human to after 1.0 or "Not now"); the Defaults ledger's `pending` rows; the open items below (17.10's update check); what 1.0.0 promises to keep stable (the settings and theme files, the plugin API, the CLI) and what a breaking change to it means from then on (a major version); the README and user docs. ⏸ Checkpoint.
 - [ ] **33.13 Release v1.0.0.** · 2 pts *(Was 32.11, earlier 36.2.)* `main` — Needs 33.12's approval. `/release 1.0.0` from the main checkout, CI green on every platform, the published app installed and opened by the human. ⏸ Checkpoint.
+
+## Stage 34 — Windows and Linux at the Mac's level (after 1.0.0)
+
+Created 2026-11-27 at the human's request: "depois da 1.0.0, da release de lançamento, quero que crie um stage; atualmente tenho focado muito no Mac, mas quero trabalhar no Windows e Linux, com funcionalidades para os sistemas também, assim como tem no Mac". Needs 33.13 (Hive 1.0.0 released). Builds on 28.12 (the Linux desktop app spike) and 28.13 (the Nix flake). Decision ids continue as D35.N (D34.N are taken).
+
+- **D35.1 Windows and Linux become first-class.** **Changes D17.0** ("no Windows-only work is added") and **D18.1** (Windows optional for a release): after this stage a release needs `ci`, `macos` and `windows` green, plus the Linux desktop build. The human updates `docs/hive.md`.
+- **D35.2 Parity is the same features, native to each system.** Every macOS-only feature gets its Windows and Linux equivalent, in each system's own conventions (taskbar, tray, notifications, file manager, installers), not a copy of the Mac's look; shortcuts keep #35 (Ctrl+Shift on Windows and Linux).
+- **D35.3 Designs first** (as D27.4): the parity design (34.1) is approved before code; each platform task follows it.
+
+- [ ] **34.1 Design: the parity matrix.** · 8 pts `task/34.1-parity-design` — No product code. Every feature that exists only on macOS today, from `src-tauri/src/macos.rs`, `crates/hive/src/macos.rs`, the Defaults ledger and the stages' notes, with what Windows and Linux give for it and the recommended way, e.g.:
+  - **App:** quit and logout ask while agents are at risk (17.7); files dropped from the file manager on a terminal and pasted from it (18.1, 18.3); native notifications with their clicks and the permission (17.19, 19.10); the title bar and its buttons (18.4); the Dock badge and bounce (17.16) → taskbar overlay and flash, launcher badges; the menu bar icon with the usage lines (17.22) → tray / AppIndicator / StatusNotifier; wake from sleep reconnecting the remote links; Screen Recording and Accessibility checks → what each system asks.
+  - **Service:** the process table, cwd and open files (`libproc`) → `/proc`, the Windows APIs; keeping the Mac awake while agents work (`power`) → `SetThreadExecutionState`, `systemd-inhibit`/portal; the Trash → Recycle Bin, `gio trash`/the freedesktop trash; locale and git resolution; file watching limits (inotify watches, `ReadDirectoryChangesW`); copy-on-write copies (28.9) → `FICLONE`, ReFS block cloning; volumes and network folders warnings.
+  - **Shipping:** signing (Authenticode; Linux package signatures), installers (MSI/MSIX; AppImage, .deb, .rpm, Flatpak — which ones), auto-update on each, the service in WSL or native on Windows (which one by default), Wayland and X11.
+  - **Testing:** how each is tested in CI (runners, a Linux desktop session under Xvfb/Weston for e2e), and the machines the human uses for the hand check (34.8).
+  Deliver `docs/spike/parity.md` with the matrix, the costs and the tasks 34.2–34.7 refined (points by planning poker). ⏸ Checkpoint.
+- [ ] **34.2 CI and releases on three systems.** · 8 pts reserved `task/34.2-ci-three` — D35.1: Windows and the Linux desktop app join the release gate; release artifacts, signing and checksums for each; `scripts/ci.sh green` and the release skill check all three.
+- [ ] **34.3 Windows: the app.** · 21 pts reserved `task/34.3-windows-app` — The approved rows of 34.1 for the Tauri app on Windows (quit/logoff confirmation, drag and paste from Explorer, toast notifications with clicks, taskbar overlay and flash, tray with the usage lines, title bar, wake reconnect).
+- [ ] **34.4 Windows: the service.** · 13 pts reserved `task/34.4-windows-service` — The approved rows of 34.1 for the service on Windows (processes, cwd and open files, keep awake, Recycle Bin, paths, block cloning, ConPTY polish, WSL or native).
+- [ ] **34.5 Linux: the desktop app.** · 21 pts reserved `task/34.5-linux-app` — The approved rows of 34.1 for the Tauri app on Linux (logout inhibit, drag and paste from the file manager, notifications through the portal/libnotify with actions, tray/AppIndicator with the usage lines, title bar on GNOME and KDE, Wayland and X11, wake reconnect).
+- [ ] **34.6 Linux: the service.** · 8 pts reserved `task/34.6-linux-service` — The approved rows of 34.1 for the service on Linux (`/proc`, inhibit sleep, the freedesktop trash, inotify limits and their warning, `FICLONE`).
+- [ ] **34.7 Packaging and updates.** · 13 pts reserved `task/34.7-packaging` — The approved installers and packages for Windows and Linux, auto-update on each, the Nix flake (28.13) kept in step, install and update docs in `README.md`.
+- [ ] **34.8 Hand check on Windows and Linux.** · 3 pts `main` — The human installs the released app on a real Windows machine and a Linux desktop, runs agents, gets notifications, uses the tray, drags files, quits with agents working, and updates to a newer build. ⏸ Checkpoint.
+- [ ] **34.9 Release.** · 2 pts `main` — Needs 34.8. `/release` (a minor version: 1.1.0) with every system green and installed by the human. ⏸ Checkpoint.
 
 ---
 
