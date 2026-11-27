@@ -18,7 +18,7 @@ export type Tray = {
   /** The most urgent state among every agent, and whether it is pending (a seen 🟠 is not). */
   urgent: [AgentState, boolean] | null;
   agents: TrayAgent[];
-  /** The usage ring's lines (`usageLines`, with their pace), none without a session window. */
+  /** The usage ring's lines (`usageLines`, with their pace), none without a window. */
   usage: string[];
 };
 
@@ -37,7 +37,7 @@ export function trayOf(s: HiveState): Tray {
       all.agentStates[a.id]?.state ?? "idle",
       spaceName(s, a.id) ?? null,
     ]),
-    usage: own.sessionUsage ? usageLines(own.sessionUsage, own.weekUsage, own.usageLimits) : [],
+    usage: usageLines(own.sessionUsage, own.weekUsage, own.usageLimits),
   };
 }
 

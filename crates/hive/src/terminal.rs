@@ -281,7 +281,12 @@ fn spawn_on(
     let (pty, pts) = open().map_err(|err| failed(open_failed(&err)))?;
     let start = || -> pty_process::Result<_> {
         pty.resize(Size::new(rows, cols))?;
-        let child = shell(bin_dir)
+        let mut command = shell(bin_dir);
+        // Never the service's own guards (28.1).
+        for guard in crate::wrapper::GUARDS {
+            command = command.env_remove(guard);
+        }
+        let child = command
             .env("HIVE_TERMINAL_ID", id.to_string())
             .env("TERM", "xterm-256color")
             .envs(locale_env().iter().cloned())

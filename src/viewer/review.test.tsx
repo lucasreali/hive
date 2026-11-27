@@ -87,22 +87,33 @@ test("the review is one line per comment: its reference, then the comment", () =
   expect([a, b, resolved, outdated].map(sendable)).toEqual([true, true, false, false]);
 });
 
+const agent = (id: string, terminal: number) => ({
+  id,
+  terminal,
+  project: wt,
+  worktree: wt,
+  cwd: wt,
+});
+// Tab 2, active, is a plain terminal of the worktree (a dev server); tab 1 runs its agent.
 const ready: Partial<HiveState> = {
   comments: { [wt]: [a, b, resolved, outdated] },
   tabs: [
-    { id: 1, cwd: "/home/u/other" },
+    { id: 1, cwd: wt },
     { id: 2, cwd: wt },
   ],
   activeTab: 2,
+  agents: { a: agent("a", 1) },
 };
-const target = (patch: Partial<HiveState>, comments = [a, b]) =>
-  commentsTarget({ ...initialState, ...ready, ...patch }, wt, comments);
+const target = (patch: Partial<HiveState>, comments = [a, b], chosen?: number) =>
+  commentsTarget({ ...initialState, ...ready, ...patch }, wt, comments, chosen);
 
-test("comments go where a reference would, or it says why not", () => {
-  expect(target({})).toEqual({ terminal: 2, text: reviewText([a, b]) });
+test("comments go to an agent of the worktree, never a plain terminal, or it says why not", () => {
+  expect(target({})).toEqual({ terminal: 1, text: reviewText([a, b]) });
   expect(target({}, [])).toEqual({ why: "No open comments to send" });
-  expect(target({ activeTab: 1 })).toEqual({ why: "The active terminal is in another worktree" });
-  expect(target({ activeTab: null })).toEqual({ why: "No terminal open" });
+  expect(target({ agents: {} })).toEqual({ why: "No agent in this worktree" });
+  expect(target({}, [a], 2)).toEqual({ why: "That agent has ended" });
+  const two = { a: agent("a", 1), b: agent("b", 2) };
+  expect(target({ agents: two }, [a], 2)).toEqual({ terminal: 2, text: reviewText([a]) });
 });
 
 test("the open comments are the shown worktree's, open and still there", () => {
@@ -130,9 +141,12 @@ test("sending pastes the comments without Enter, shows the terminal and keeps th
   const host = document.body.appendChild(document.createElement("div"));
   const unmount = mountTerminals(host);
   const id = await act(() => openTerminal(wt));
+  // A plain terminal opened after the agent's is the active one: it takes nothing.
+  const plain = await act(() => openTerminal(wt));
   await act(() => new Promise((resolve) => setTimeout(resolve, 10)));
-  useHive.setState({ fileShown: true });
+  useHive.setState({ fileShown: true, agents: { a: agent("a", id) }, activeTab: plain });
   sendComments(wt, [a, b]);
+  expect(useHive.getState().activeTab).toBe(id);
   // Not in bracketed paste mode, xterm turns newlines into carriage returns, as for Ctrl+Shift+V.
   expect(write).toHaveBeenCalledWith(id, reviewText([a, b]).replace("\n", "\r"));
   expect(write).not.toHaveBeenCalledWith(id, expect.stringContaining("typo\r"));
@@ -178,7 +192,7 @@ test("the input saves on Enter and cancels on Escape, only for its own file", ()
   add.mockRestore();
 });
 
-test("the list groups the comments and sends, resolves, reopens and deletes them", () => {
+test("the list groups the comments and sends, resolves, reopens and deletes them", async () => {
   const resolve = spyOn(transport, "resolveComment").mockImplementation(async () => {});
   const remove = spyOn(transport, "deleteComment").mockImplementation(async () => {});
   render(<CommentsView worktree={wt} />);
@@ -206,20 +220,56 @@ test("the list groups the comments and sends, resolves, reopens and deletes them
   expect(within(group("Outdated")).queryByRole("button", { name: "Send" })).toBeNull();
   expect(within(group("Resolved")).queryByRole("button", { name: "Send" })).toBeNull();
 
-  // No terminal of the worktree: Send says why.
+  // Only a plain terminal in the worktree: Send says why.
+  act(() => useHive.setState({ tabs: ready.tabs, activeTab: 2 }));
   const all = screen.getByRole("button", { name: "Send all open (2)" }) as HTMLButtonElement;
   const one = within(first).getByRole("button", { name: "Send" }) as HTMLButtonElement;
-  expect([all.disabled, all.title]).toEqual([true, "No terminal open"]);
-  expect([one.disabled, one.title]).toEqual([true, "No terminal open"]);
-  act(() => useHive.setState({ tabs: ready.tabs, activeTab: 2 }));
+  expect([all.disabled, all.title]).toEqual([true, "No agent in this worktree"]);
+  expect([one.disabled, one.title]).toEqual([true, "No agent in this worktree"]);
+  act(() => useHive.setState({ agents: ready.agents }));
   expect([all.disabled, all.title]).toEqual([
     false,
-    "Paste the open comments into the terminal, without Enter",
+    "Paste the open comments into the agent's terminal, without Enter",
   ]);
-  expect(one.title).toBe("Paste the comment into the terminal, without Enter");
-  // No xterm in this test: nothing is pasted, nothing breaks.
+  expect(one.title).toBe("Paste the comment into the agent's terminal, without Enter");
+  // No xterm yet: nothing is pasted, nothing breaks.
+  const write = spyOn(transport, "writeTerminal");
   fireEvent.click(all);
   fireEvent.click(one);
+  expect(write).not.toHaveBeenCalled();
+
+  // Two agents with their xterms: each button opens the menu, and the picked agent gets the text.
+  window.localStorage.clear();
+  const host = document.body.appendChild(document.createElement("div"));
+  const unmount = mountTerminals(host);
+  act(() => useHive.setState({ tabs: [], activeTab: null }));
+  const alpha = await act(() => openTerminal(wt));
+  const beta = await act(() => openTerminal(wt));
+  await act(() => new Promise((resolve) => setTimeout(resolve, 10)));
+  act(() =>
+    useHive.setState({
+      agents: { a: agent("a", alpha), b: agent("b", beta) },
+      agentTitles: { a: "alpha", b: "beta" },
+    }),
+  );
+  const labels = () =>
+    screen.getAllByRole("menuitem").map((m) => m.querySelector(".label")?.textContent);
+  fireEvent.click(all);
+  expect(write).not.toHaveBeenCalled();
+  expect(labels()).toEqual(["alpha", "beta"]);
+  fireEvent.click(screen.getByRole("menuitem", { name: /beta/ }));
+  expect(write).toHaveBeenCalledTimes(1);
+  expect(write).toHaveBeenLastCalledWith(beta, reviewText([a, b]).replace("\n", "\r"));
+  // The last pick is listed first; picking the other sends the one comment there.
+  fireEvent.click(within(first).getByRole("button", { name: "Send" }));
+  expect(labels()).toEqual(["beta", "alpha"]);
+  fireEvent.click(screen.getByRole("menuitem", { name: /alpha/ }));
+  expect(write).toHaveBeenCalledTimes(2);
+  expect(write).toHaveBeenLastCalledWith(alpha, reviewText([a]));
+  expect(useHive.getState().activeTab).toBe(alpha);
+  write.mockRestore();
+  unmount();
+  host.remove();
 
   fireEvent.click(within(first).getByRole("button", { name: "Resolve" }));
   expect(resolve).toHaveBeenCalledWith(wt, 1, true);

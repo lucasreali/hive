@@ -483,7 +483,7 @@ mod tests {
             .usage
             .lock()
             .await
-            .report(account, window, None)
+            .report(account, Some(window), None)
             .unwrap();
         assert!(!state.ticking().await);
         state.send_usage().await;

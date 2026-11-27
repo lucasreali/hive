@@ -21,6 +21,7 @@ import {
   useEffect,
   useId,
   useMemo,
+  useReducer,
   useRef,
   useState,
 } from "react";
@@ -76,8 +77,9 @@ import { BufferNotes, EditView, saveOpenFile } from "../viewer/EditView";
 import { openInEditor } from "../viewer/external";
 import { isPage, MediaView, PagePreview } from "../viewer/MediaView";
 import { useRenderedPlace } from "../viewer/place";
-import { referenceTarget, sendReference } from "../viewer/reference";
+import { noSelection, sendReference } from "../viewer/reference";
 import { CommentButton, CommentInput, CommentsView } from "../viewer/review";
+import { SendButton } from "../viewer/SendButton";
 import { TableView } from "../viewer/TableView";
 import { commandKey, isMac, keyText } from "../window";
 import { CommitBox } from "./CommitBox";
@@ -90,11 +92,13 @@ import {
   CloseIcon,
   ExternalIcon,
   EyeIcon,
+  SeenIcon,
   TableIcon,
   TerminalIcon,
 } from "./icons";
 import { Markdown } from "./Markdown";
 import { PullsView } from "./PullsView";
+import { keepViewPlace, useKeptScroll, viewKey, viewPlace } from "./panelPlace";
 import { RunsView } from "./RunsView";
 import { ResizeHandle } from "./resize";
 import { ScriptsView } from "./ScriptsView";
@@ -833,7 +837,8 @@ export const unseenFiles = (changes: Changes) => changes.files.filter((f) => f.s
 
 /**
  * "N files changed +a −d" and the base toggle, or why the service could not list them; under
- * it, "k of N seen" and the "Unseen only" filter (27.1).
+ * it the "Unseen only" filter and "k of N seen" (27.1), the count at the right end over the
+ * rows' eye buttons it counts (28.20).
  */
 function Summary({ worktree }: { worktree: string }) {
   const changes = useHive((s) => s.changes[worktree]);
@@ -851,7 +856,6 @@ function Summary({ worktree }: { worktree: string }) {
       {changes.base_error && <div className="files-base-error">{changes.base_error}</div>}
       {n > 0 && (
         <div className="files-seen">
-          <span>{`${seen} of ${n} seen`}</span>
           <button
             type="button"
             className="ghost text"
@@ -861,6 +865,10 @@ function Summary({ worktree }: { worktree: string }) {
           >
             Unseen only
           </button>
+          <span className="files-seen-count">
+            {`${seen} of ${n} seen`}
+            <SeenIcon seen />
+          </span>
         </div>
       )}
       {changes.error && <div className="files-error">{changes.error}</div>}
@@ -902,7 +910,17 @@ function FileTree({ worktree, changedOnly }: { worktree: string; changedOnly: bo
     () => fileRows(worktree, root, collapsed, changedOnly ? "changes" : "files"),
     [worktree, root, collapsed, changedOnly],
   );
-  const [active, setActive] = useState(0);
+  // Its active row and scroll, as this view of this worktree was left (28.19).
+  const host = useHive((s) => s.host);
+  const place = viewKey(changedOnly ? "changes" : "files", host, worktree);
+  const [, rendered] = useReducer((n: number) => n + 1, 0);
+  const kept = viewPlace(place);
+  const keptAt = kept?.row === undefined ? -1 : rows.findIndex((r) => r.key === kept.row);
+  const active = keptAt >= 0 ? keptAt : (kept?.index ?? 0);
+  const setActive = (index: number) => {
+    keepViewPlace(place, { row: rows[index]?.key, index });
+    rendered();
+  };
   const scroller = useRef<HTMLDivElement>(null);
   const id = useId();
   const virtual = useVirtualizer({
@@ -911,6 +929,8 @@ function FileTree({ worktree, changedOnly }: { worktree: string; changedOnly: bo
     estimateSize: () => 22,
     overscan: 8,
   });
+  // After the virtualizer's, whose own effect starts it at the top.
+  const onScroll = useKeptScroll(place, scroller, changedOnly ? !!changes : !!listing);
   const at = Math.min(active, rows.length - 1);
   // The Diff tab opens a file as its diff; the Files tab as editable text (#31).
   const pick = (row: FileRow) =>
@@ -934,10 +954,11 @@ function FileTree({ worktree, changedOnly }: { worktree: string; changedOnly: bo
     moved === null ? -1 : rows.findIndex((r) => (r.kind === "folder" ? r.path : r.key) === moved);
   useEffect(() => {
     if (movedAt < 0) return;
-    setActive(movedAt);
+    keepViewPlace(place, { row: rows[movedAt]?.key, index: movedAt });
+    rendered();
     virtual.scrollToIndex(movedAt);
     useHive.setState({ movedRow: null });
-  }, [movedAt, virtual]);
+  }, [movedAt, virtual, place, rows]);
   const onKeyDown = (event: KeyboardEvent) => {
     const row = rows[at];
     if (!row) return;
@@ -963,6 +984,7 @@ function FileTree({ worktree, changedOnly }: { worktree: string; changedOnly: bo
     <div
       className="files-tree hive-scroll"
       ref={scroller}
+      onScroll={onScroll}
       data-file-drop={drag.over === ""}
       {...(changedOnly ? {} : drag.handlers)}
     >
@@ -984,24 +1006,21 @@ function FileTree({ worktree, changedOnly }: { worktree: string; changedOnly: bo
         // what it shows changes, not on every ↑/↓ (9.23).
         onClick={(e) => {
           const index = indexAt(e);
-          if (index < 0 || onSeenBox(e)) return;
+          if (index < 0) return;
           setActive(index);
-          if ((e.target as Element).closest("[data-stage]")) toggleStage(rows[index]);
-          else pick(rows[index] as FileRow);
+          const row = rows[index] as FileRow;
+          // A row's eye button (27.1, 28.20) marks its file, or unmarks it, and opens nothing.
+          if (onSeenMark(e)) {
+            if (changes && row.kind === "file")
+              markSeen(changes, [row.key], row.file.seen !== "seen");
+          } else if ((e.target as Element).closest("[data-stage]")) toggleStage(row);
+          else pick(row);
         }}
         // A double click keeps the file's tab (11.1): its first click opened it as the preview.
         onDoubleClick={(e) => {
           const row = rows[indexAt(e)];
-          const box = onSeenBox(e) || !!(e.target as Element).closest("[data-stage]");
+          const box = onSeenMark(e) || !!(e.target as Element).closest("[data-stage]");
           if (row?.kind === "file" && !box) pinFile({ worktree, path: row.key });
-        }}
-        // A row's seen box (27.1) marks its file, and opens nothing.
-        onChange={(e) => {
-          // The staging box (27.6) acts on its click.
-          if (!onSeenBox(e)) return;
-          const row = rows[indexAt(e)];
-          const box = e.target as HTMLInputElement;
-          if (changes && row?.kind === "file") markSeen(changes, [row.key], box.checked);
         }}
         // On a row, its menu; on the tree itself: a click below the rows (the root), or the Menu
         // key (the active row).
@@ -1031,7 +1050,7 @@ function FileTree({ worktree, changedOnly }: { worktree: string; changedOnly: bo
               dropTarget={row.kind === "folder" && row.path === drag.over}
               movable={!changedOnly}
               stageable={changedOnly}
-              seenBox={changedOnly}
+              seenMark={changedOnly}
             />
           );
         })}
@@ -1046,21 +1065,51 @@ function indexAt(e: { target: EventTarget }): number {
   return at == null ? -1 : Number(at);
 }
 
-/** Whether an event happened on a row's seen box (27.1). */
-const onSeenBox = (e: { target: EventTarget }) => !!(e.target as Element).closest(".seen-box");
+/** Whether an event happened on a row's eye button (27.1, 28.20). */
+const onSeenMark = (e: { target: EventTarget }) => !!(e.target as Element).closest(".seen-mark");
+
+/** A seen mark's tooltip: what pressing it does, or that the file changed since (27.1). */
+const seenTitle = (seen?: SeenMark) =>
+  seen === "changed"
+    ? "Changed since seen: mark as seen again"
+    : seen === "seen"
+      ? "Seen"
+      : "Mark as seen";
 
 /**
- * A changed file's "seen" box (27.1), checked while its diff is the one it was marked on; a
- * file changed since it was marked shows a dot before it, unchecked. The box's change is the
- * caller's.
+ * A Diff row's "seen" mark (27.1) at its right end: an eye button, pressed (filled) while the
+ * file's diff is the one it was marked on (28.20); a file changed since it was marked shows a dot
+ * before it, unpressed. Out of the tab order (the tree has the keys); the tree handles its click.
+ */
+function SeenMarkButton({ file }: { file: { path: string; seen?: SeenMark } }) {
+  const seen = file.seen === "seen";
+  return (
+    <>
+      {file.seen === "changed" && <span className="seen-changed" title="Changed since seen" />}
+      <button
+        type="button"
+        className="seen-mark"
+        aria-pressed={seen}
+        aria-label={`Seen: ${file.path}`}
+        title={seenTitle(file.seen)}
+        tabIndex={-1}
+      >
+        <SeenIcon seen={seen} />
+      </button>
+    </>
+  );
+}
+
+/**
+ * The diff header's "seen" box (27.1), checked while the file's diff is the one it was marked
+ * on; a file changed since it was marked shows a dot before it, unchecked. Its label is the
+ * header's.
  */
 function SeenBox(props: {
   file: { path: string; seen?: SeenMark };
-  onChange?: (seen: boolean) => void;
-  /** In the tree, which has the keys, the box takes no Tab stop. */
-  inTree?: boolean;
-  /** The id its visible label names (the diff header's). */
-  id?: string;
+  onChange: (seen: boolean) => void;
+  /** The id its visible label names. */
+  id: string;
 }) {
   const { file } = props;
   const changed = file.seen === "changed";
@@ -1071,11 +1120,9 @@ function SeenBox(props: {
         type="checkbox"
         className="seen-box"
         id={props.id}
-        aria-label={props.id ? undefined : `Seen: ${file.path}`}
         title={changed ? "Changed since seen: mark as seen again" : "Mark as seen"}
-        tabIndex={props.inTree ? -1 : undefined}
         checked={file.seen === "seen"}
-        onChange={(e) => props.onChange?.(e.target.checked)}
+        onChange={(e) => props.onChange(e.target.checked)}
       />
     </>
   );
@@ -1091,19 +1138,25 @@ const TreeRow = memo(function TreeRow(props: {
   selected: boolean;
   dropTarget: boolean;
   movable: boolean;
-  /** The Diff tree: each row starts with its staging box (27.6), or the space of one. */
+  /**
+   * The Diff tree: each row starts with its staging box (27.6), or the space of one, in one
+   * column under the commit box's (28.20); the row's indent follows it.
+   */
   stageable: boolean;
-  /** A file row's seen box at its right end (the Diff view, 27.1). */
-  seenBox: boolean;
+  /** A file row's eye button at its right end (the Diff view, 27.1, 28.20). */
+  seenMark: boolean;
 }) {
   const { row, index } = props;
+  const indent = row.depth * 14;
   const staged = row.kind === "file" ? row.file.staged : null;
+  const space = <span className="stage-space" style={{ width: 18 + indent }} />;
   const box = !props.stageable ? null : staged === null ? (
-    <span className="stage-space" />
+    space
   ) : (
     <input
       type="checkbox"
       className="stage-box"
+      style={{ marginRight: 6 + indent }}
       data-stage
       tabIndex={-1}
       checked={staged === "yes"}
@@ -1138,11 +1191,14 @@ const TreeRow = memo(function TreeRow(props: {
       data-file-drop={props.dropTarget}
       draggable={props.movable && (row.kind === "folder" || status !== "deleted")}
       title={row.kind === "file" ? row.key : undefined}
-      style={{ transform: `translateY(${props.start}px)`, paddingLeft: 8 + row.depth * 14 }}
+      style={{
+        transform: `translateY(${props.start}px)`,
+        paddingLeft: props.stageable ? 13 : 8 + indent,
+      }}
     >
       {row.kind === "folder" ? (
         <>
-          {props.stageable && <span className="stage-space" />}
+          {props.stageable && space}
           <ChevronIcon open={row.open} />
           <TreeFolderIcon name={row.name} open={row.open} />
           <span className="name">{row.name}</span>
@@ -1165,7 +1221,7 @@ const TreeRow = memo(function TreeRow(props: {
               {STATUS[status].letter}
             </span>
           )}
-          {props.seenBox && <SeenBox file={row.file} inTree />}
+          {props.seenMark && <SeenMarkButton file={row.file} />}
         </>
       )}
     </div>
@@ -1320,10 +1376,7 @@ export function FileView(props: {
   const text = usePane(own, (s) =>
     s.file?.worktree === worktree && s.file.path === openFile?.path ? s.file : null,
   );
-  const unsendable = usePane(own, (s) => {
-    const target = referenceTarget(s);
-    return "why" in target ? target.why : null;
-  });
+  const unsendable = usePane(own, noSelection);
   const editing = usePane(own, (s) => s.editing);
   const edit = usePane(own, (s) => s.edit);
   const editorNotice = usePane(own, (s) => s.editorNotice);
@@ -1457,19 +1510,16 @@ export function FileView(props: {
             <ExternalIcon />
           </button>
         )}
-        <button
-          type="button"
+        <SendButton
+          worktree={worktree}
+          why={unsendable}
           className="ghost"
-          aria-label="Send to terminal"
-          title={
-            unsendable ??
-            keyText("Send the selected lines' reference to the terminal (Ctrl+Shift+L)")
-          }
-          disabled={unsendable !== null}
-          onClick={sendReference}
+          label="Send to agent"
+          title={keyText("Send the selected lines' reference to the agent (Ctrl+Shift+L)")}
+          onSend={sendReference}
         >
           <TerminalIcon />
-        </button>
+        </SendButton>
         {file && <HeaderSeenBox worktree={worktree} file={file} />}
       </div>
       <CommentInput worktree={worktree} path={openFile.path} />

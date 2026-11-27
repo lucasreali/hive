@@ -1,8 +1,9 @@
 //! `hive statusline` (12.1): Claude Code's `statusLine` in Hive's terminals (set by the
-//! `--settings` the `claude` wrapper injects). It reports the 5-hour usage window of its input,
-//! with the 7-day one when it shows one (15.3), to the service, then runs the user's own statusline with the same input and prints what that
-//! prints, so what the user sees does not change. The service keeps the latest window per
-//! Claude config folder (`daemon::usage`).
+//! `--settings` the `claude` wrapper injects). It reports the 5-hour usage window of its input
+//! and the 7-day one (15.3), each when it shows one (28.1), to the service, then runs the
+//! user's own statusline with the same input and prints what that prints, so what the user sees
+//! does not change. The service keeps the latest windows per Claude config folder
+//! (`daemon::usage`).
 
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
@@ -22,7 +23,7 @@ use crate::paths::Paths;
 
 /// Set for the user's statusline: a `hive statusline` it starts prints nothing and reports
 /// nothing, so Hive's own statusline never runs itself.
-const GUARD: &str = "HIVE_STATUSLINE";
+pub(crate) const GUARD: &str = "HIVE_STATUSLINE";
 /// How long the user's statusline may run.
 pub const TIME_LIMIT: Duration = Duration::from_secs(10);
 /// The most the user's statusline may print; past it, nothing is printed.
@@ -56,9 +57,10 @@ pub async fn run(
     let claude_dir = crate::sessions::claude_dir(&var);
     let report = async {
         let window = |name| parsed.as_ref().and_then(|input| rate_limit(input, name));
-        if let (Some(dir), Some(usage)) = (&claude_dir, window("five_hour")) {
+        let (usage, week) = (window("five_hour"), window("seven_day"));
+        // Either window may come alone (28.1).
+        if let (Some(dir), true) = (&claude_dir, usage.is_some() || week.is_some()) {
             let claude_dir = dir.to_string_lossy().into_owned();
-            let week = window("seven_day");
             let message = Control::StatuslineUsage {
                 claude_dir,
                 usage,
