@@ -587,21 +587,34 @@ test("review comments on the open file mark its lines and are listed under it", 
   const marked = () =>
     [...view.querySelectorAll(".cm-line.cm-commented")].map((line) => line.textContent);
   expect(marked()).toEqual([]);
-  expect(screen.queryByRole("region", { name: "Review comments" })).toBeNull();
-  const comment = { from: 2, to: 3, text: "why?" };
+  const comment = {
+    id: 1,
+    from: 2,
+    to: 3,
+    body: "why?",
+    code: [],
+    before: [],
+    after: [],
+    author: "you",
+    ms: 0,
+    resolved: false,
+    outdated: false,
+  };
   act(() =>
     useHive.setState({
       comments: {
         [refactor.path]: [
-          { path: "README.md", ...comment },
-          { path: "b.ts", ...comment },
+          { ...comment, file: "README.md" },
+          { ...comment, file: "b.ts" },
+          // Neither a resolved nor an outdated one marks its lines.
+          { ...comment, file: "README.md", from: 1, to: 1, resolved: true },
+          { ...comment, file: "README.md", from: 4, to: 4, outdated: true },
         ],
       },
     }),
   );
-  // Only this file's comment marks lines; the list has the worktree's.
+  // Only this file's open comment marks lines.
   expect(marked()).toEqual(["two", "three"]);
-  expect(screen.getByRole("button", { name: "Send review (2)" })).toBeTruthy();
 });
 
 test("rows show the library's icon for their name, its defaults for unknown ones, open or closed", async () => {
@@ -755,6 +768,7 @@ test("the X closes only the view: its bar, content and resize handle go, the rai
   expect([...icons].map((t) => t.getAttribute("aria-label"))).toEqual([
     "Files",
     "Diff",
+    "Comments",
     "Scripts",
     "PRs",
     "Actions",
@@ -826,7 +840,7 @@ test("a folder project's rail keeps only its two views with the view closed", ()
 test("with nothing selected the rail lists every view; each says to select a place", () => {
   panel();
   closeView();
-  expect(screen.getAllByRole("tab").filter((t) => t.closest(".panel-rail")).length).toBe(6);
+  expect(screen.getAllByRole("tab").filter((t) => t.closest(".panel-rail")).length).toBe(7);
   for (const label of ["Files", "Actions"]) {
     fireEvent.click(railIcon(label));
     expect(selectedIcons()).toEqual([label]);
@@ -841,7 +855,7 @@ test("each rail icon keeps its label as its accessible name and tooltip, in its 
   const rail = screen.getByRole("tablist", { name: "Panel" });
   expect(rail.getAttribute("aria-orientation")).toBe("vertical");
   const tabs = rail.querySelectorAll('[role="tab"]');
-  const labels = ["Files", "Diff", "Scripts", "PRs", "Actions", "Sessions"];
+  const labels = ["Files", "Diff", "Comments", "Scripts", "PRs", "Actions", "Sessions"];
   expect([...tabs].map((t) => [t.getAttribute("aria-label"), t.getAttribute("title")])).toEqual(
     labels.map((l) => [l, l]),
   );
@@ -851,7 +865,7 @@ test("each rail icon keeps its label as its accessible name and tooltip, in its 
     [...rail.children].map((c) =>
       c.classList.contains("panel-rail-separator") ? "|" : c.getAttribute("aria-label"),
     ),
-  ).toEqual(["Files", "Diff", "Scripts", "|", "PRs", "Actions", "|", "Sessions"]);
+  ).toEqual(["Files", "Diff", "Comments", "Scripts", "|", "PRs", "Actions", "|", "Sessions"]);
   for (const l of labels) expect(screen.getByRole("tab", { name: l })).toBeDefined();
 });
 
@@ -898,7 +912,7 @@ test("the rail is one Tab stop: only the selected icon takes it, and a click mov
       .getAllByRole("tab")
       .filter((t) => t.getAttribute("tabindex") === "-1")
       .map((t) => t.getAttribute("aria-label")),
-  ).toEqual(["Diff", "Scripts", "PRs", "Actions", "Sessions"]);
+  ).toEqual(["Diff", "Comments", "Scripts", "PRs", "Actions", "Sessions"]);
   fireEvent.click(screen.getByRole("tab", { name: "PRs" }));
   expect(stops()).toEqual(["PRs"]);
   expect(shownView()).toBe("PRs");
@@ -921,7 +935,7 @@ test("↑/↓, Home and End move along the rail, selecting and focusing, and wra
   expect(press("ArrowDown")).toBe(true);
   on("Diff");
   press("ArrowDown");
-  on("Scripts");
+  on("Comments");
   press("ArrowUp");
   on("Diff");
   press("End");
@@ -974,7 +988,7 @@ test("a folder project's panel has its files and sessions only, and asks for no 
   fireEvent.click(screen.getByRole("tab", { name: "Sessions" }));
   expect(screen.getByRole("region", { name: "Sessions" })).toBeDefined();
   act(() => select(shop.id));
-  expect(screen.getAllByRole("tab")).toHaveLength(6);
+  expect(screen.getAllByRole("tab")).toHaveLength(7);
   expect(asked).toHaveBeenCalledWith(shop.path, "head");
 });
 

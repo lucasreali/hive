@@ -17,7 +17,9 @@ async function recordWrites(page: Page): Promise<() => Promise<string[]>> {
   return () => page.evaluate(() => (window as unknown as { writes: string[] }).writes);
 }
 
-test("review comments on the diff are pasted into the terminal as one text", async ({ page }) => {
+test("review comments on the diff are kept, listed, pasted into the terminal and resolved", async ({
+  page,
+}) => {
   await page.goto("/");
   const tree = page.getByRole("navigation", { name: "Projects" });
   await tree.getByRole("button", { name: "fix-login" }).click();
@@ -70,16 +72,25 @@ test("review comments on the diff are pasted into the terminal as one text", asy
   await page.keyboard.type("rename this");
   await page.keyboard.press("Enter");
 
-  const review = view.getByRole("region", { name: "Review comments" });
-  await expect(review.getByRole("listitem")).toHaveText([
-    "src/auth/session.ts:39–41handle the expired token",
-    "src/auth/session.ts:39rename this",
+  // The service keeps them: the right panel's Comments view lists them, open.
+  await panel
+    .getByRole("tablist", { name: "Panel" })
+    .getByRole("tab", { name: "Comments" })
+    .click();
+  const open = panel.getByRole("region", { name: "Open" });
+  await expect(open.locator(".comment-body")).toHaveText([
+    "handle the expired token",
+    "rename this",
+  ]);
+  await expect(open.locator(".comment-where")).toHaveText([
+    "src/auth/session.ts:39–41",
+    "src/auth/session.ts:39",
   ]);
   await page.screenshot({ path: "target/e2e/review.png" });
 
   // One text, bracketed so its newline does not submit; no Enter; the terminal is shown.
   expect(await writes()).toEqual([]);
-  await review.getByRole("button", { name: "Send review (2)" }).click();
+  await panel.getByRole("button", { name: "Send all open (2)" }).click();
   await expect
     .poll(writes)
     .toEqual([
@@ -88,7 +99,23 @@ test("review comments on the diff are pasted into the terminal as one text", asy
     ]);
   await expect(view).toBeHidden();
   await expect(page.locator(".terminal-pane:visible textarea")).toBeFocused();
+
+  // Sent, they stay open; one sent alone, then resolved: it leaves the open ones and its mark.
+  const second = open.getByRole("listitem").nth(1);
+  await second.getByRole("button", { name: "Send" }).click();
+  await expect
+    .poll(async () => (await writes()).at(-1))
+    .toBe("\x1b[200~@src/auth/session.ts (line 39) — rename this\x1b[201~");
+  await second.getByRole("button", { name: "Resolve" }).click();
+  await expect(open.locator(".comment-body")).toHaveText(["handle the expired token"]);
+  const resolved = panel.getByRole("region", { name: "Resolved" });
+  await expect(resolved.locator(".comment-body")).toHaveText(["rename this"]);
   await page.getByRole("tab", { name: "session.ts" }).click();
-  await expect(review).toBeHidden();
-  await expect(view.locator(".cm-line.cm-commented")).toHaveCount(0);
+  await expect(view.locator(".cm-line.cm-commented")).toHaveCount(3);
+  // Reopened, then deleted.
+  await resolved.getByRole("button", { name: "Reopen" }).click();
+  await expect(open.locator(".comment-body")).toHaveCount(2);
+  await open.getByRole("button", { name: "Delete comment" }).first().click();
+  await expect(open.locator(".comment-body")).toHaveText(["rename this"]);
+  await expect(view.locator(".cm-line.cm-commented")).toHaveCount(1);
 });

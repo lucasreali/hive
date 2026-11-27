@@ -12,6 +12,7 @@ import {
 import { isFor } from "./buffer";
 import { createViewer, restoreView, revealLine, snapshot, type Viewer } from "./editor";
 import { lineMenu, trackView } from "./lineAuthor";
+import { sendable } from "./review";
 
 /** Why the service sent no text to show, or null. */
 export function notice(text: FileText): string | null {
@@ -68,10 +69,10 @@ export function CodeView({ text, diff }: { text: FileText; diff: boolean }) {
     revealLine(view, goto.line);
     clearGotoLine();
   }, [goto, text, path]);
-  // Review comments on this file (6.7), marked on their lines.
+  // Review comments on this file (6.7), marked on their lines while open and still there.
   const comments = useHive((s) => s.comments[text.worktree]);
   useEffect(() => {
-    viewer.current?.mark((comments ?? []).filter((c) => c.path === path));
+    viewer.current?.mark((comments ?? []).filter((c) => c.file === path && sendable(c)));
   }, [comments, path]);
   return <div className="code-view" ref={parent} />;
 }

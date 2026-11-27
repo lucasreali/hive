@@ -50,5 +50,5 @@ test("a plain folder is a folder project: its files, no diff, then git init make
     .getByRole("button", { name: /^notes/ })
     .first()
     .click();
-  await expect(tabs).toHaveCount(6);
+  await expect(tabs).toHaveCount(7);
 });

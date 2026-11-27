@@ -18,7 +18,7 @@ import {
 import { showOpenFailure } from "../terminals";
 import { transport } from "../transport";
 import { cursorAsk } from "../viewer/lineAuthor";
-import { reviewTarget, sendReview } from "../viewer/review";
+import { commentsTarget, openComments, sendOpenComments } from "../viewer/review";
 import { composing, isMac, keyText } from "../window";
 import { askRemoveProject } from "./ConfirmDialog";
 import { ICON, SearchIcon, STATE_LABEL } from "./icons";
@@ -122,7 +122,10 @@ export function paletteCommands(s: HiveState): PaletteItem[] {
       },
     });
   }
-  if (!("why" in reviewTarget(s))) extra.push({ label: "Send review", run: sendReview });
+  const open = openComments(s);
+  if (!("why" in commentsTarget(s, open.worktree, open.comments))) {
+    extra.push({ label: "Send open comments", run: sendOpenComments });
+  }
   // The cursor's line of the editor shown (27.5); no shortcut (Q8).
   const line = s.openFile && s.fileShown ? cursorAsk(s.openFile) : null;
   if (line) {

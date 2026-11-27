@@ -224,6 +224,17 @@ export interface Transport {
    * answered by `changes`, or `error` when the marks cannot be kept.
    */
   markSeen(path: string, base: DiffBase, files: string[], seen: boolean): Promise<void>;
+  /** The review comments of the worktree at `path` (27.3); answered by `comments`. */
+  listComments(path: string): Promise<void>;
+  /**
+   * A review comment `body` on lines `from`–`to` (1-based) of `file` in the worktree at `path`
+   * (27.3); answered by `comments`, or `error` when it is refused.
+   */
+  addComment(path: string, file: string, from: number, to: number, body: string): Promise<void>;
+  /** Resolves the comment `id`, or opens it again (27.3); answered by `comments`. */
+  resolveComment(path: string, id: number, resolved: boolean): Promise<void>;
+  /** Deletes the comment `id` (27.3); answered by `comments`. */
+  deleteComment(path: string, id: number): Promise<void>;
   /** The scripts of the worktree at `path` (23.4); answered by `scripts`. */
   listScripts(path: string): Promise<void>;
   /** Claude sessions of the followed projects; answered by `sessions`. */

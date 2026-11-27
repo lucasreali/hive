@@ -57,6 +57,7 @@ export const REMOTE_TYPES = [
   "session_files",
   "files",
   "changes",
+  "comments",
   "commits",
   "scripts",
   "search_results",

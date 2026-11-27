@@ -463,6 +463,8 @@ function reduce(s: HiveState, m: HostMessage): Partial<HiveState> {
       const seen = { ...s.changesSeen, [m.path]: (s.changesSeen[m.path] ?? 0) + 1 };
       return { changes: { ...s.changes, [m.path]: kept }, changesSeen: seen };
     }
+    case "comments":
+      return { comments: { ...s.comments, [m.path]: m.comments } };
     case "commits": {
       const { type: _, ...commits } = m;
       return { commits: { ...s.commits, [m.path]: commits } };

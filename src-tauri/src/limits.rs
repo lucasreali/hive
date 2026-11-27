@@ -7,14 +7,15 @@
 //!   second; at most [`ALERTS`] that would show an OS notification in [`ALERT_WINDOW`]. One the
 //!   UI takes is read as its type ([`typed`]): a field of another type ends the link, an
 //!   unknown one is dropped.
-//! - **Lists:** at most [`PROJECTS`] projects, [`SESSIONS`] sessions, [`COMMITS`] commits, and
-//!   [`LIST`] items in any other list of a message.
+//! - **Lists:** at most [`PROJECTS`] projects, [`SESSIONS`] sessions, [`COMMITS`] commits,
+//!   [`COMMENTS`] review comments, and [`LIST`] items in any other list of a message.
 //! - **Terminal output:** at most [`UNACKED`] bytes of one terminal's output the UI has not
 //!   acknowledged (9.19), the service stopping at 512 KiB and a read, and [`LINK_UNACKED`] of
 //!   all of a link's terminals.
 //! - **Queue:** at most [`QUEUE_FRAMES`] frames, or [`QUEUE_BYTES`] bytes, waiting to be written
 //!   to a remote that stopped reading them.
-//! - **Text:** titles, badges, errors and the like ([`CLIPPED`]) cut at [`TEXT`] characters.
+//! - **Text:** titles, badges, errors and the like ([`CLIPPED`]) cut at [`TEXT`] characters, a
+//!   review comment's text ([`CLIPPED_LONG`]) at [`LONG_TEXT`].
 //!
 //! A frame over `MAX_PAYLOAD` or of an unknown type breaks the stream (the codec), which is
 //! retried as a network failure, as before.
@@ -40,6 +41,9 @@ pub(crate) const PROJECTS: usize = 1000;
 pub(crate) const SESSIONS: usize = 1000;
 /// The most commits a remote's `commits` lists (its service sends at most 500, 27.2).
 pub(crate) const COMMITS: usize = 1000;
+/// The most review comments a remote's `comments` lists (27.3; its service keeps at most 500
+/// a worktree).
+pub(crate) const COMMENTS: usize = 1000;
 /// The most items of any other list in a remote's message (its service lists at most 50,000
 /// files).
 pub(crate) const LIST: usize = 50_000;
@@ -63,7 +67,20 @@ const CLIPPED: &[&str] = &[
     "author",
 ];
 /// Fields clipped only in one type's messages: `body` is also a pull request's description.
-const CLIPPED_IN: &[(&str, &str)] = &[("terminal_notification", "body"), ("commits", "short")];
+/// A review comment's lines (27.3) are cut at 200 characters by its service.
+const CLIPPED_IN: &[(&str, &str)] = &[
+    ("terminal_notification", "body"),
+    ("commits", "short"),
+    ("comments", "code"),
+    ("comments", "before"),
+    ("comments", "after"),
+    ("comments", "author"),
+];
+/// The most characters of a remote's text in [`CLIPPED_LONG`] fields: a review comment's text
+/// is at most 4000.
+pub(crate) const LONG_TEXT: usize = 4096;
+/// Fields of one type's messages clipped at [`LONG_TEXT`].
+const CLIPPED_LONG: &[(&str, &str)] = &[("comments", "body")];
 
 /// Why the link was dropped once its remote stopped reading what the app sends.
 pub(crate) const QUEUE_FULL: &str = "stopped reading what the app sends";
@@ -193,11 +210,13 @@ pub(crate) fn unacked(unacked: u64, all: u64) -> Option<String> {
 /// Checks a remote's control `message` against the list caps, then clips its text.
 pub(crate) fn check(message: &mut Value) -> Result<(), String> {
     let kind = message["type"].as_str().unwrap_or_default().to_owned();
-    for (list, most) in [
+    let lists = [
         ("projects", PROJECTS),
         ("sessions", SESSIONS),
         ("commits", COMMITS),
-    ] {
+        ("comments", COMMENTS),
+    ];
+    for (list, most) in lists {
         let len = message[list].as_array().map_or(0, Vec::len);
         if kind == list && len > most {
             return Err(format!("sent {len} {list}, over the {most} the app takes"));
@@ -218,16 +237,20 @@ fn walk(value: &mut Value, kind: &str, key: &str) -> Result<(), String> {
             .iter_mut()
             .try_for_each(|(key, value)| walk(value, kind, key)),
         Value::String(text) if CLIPPED.contains(&key) || CLIPPED_IN.contains(&(kind, key)) => {
-            clip(text);
+            clip(text, TEXT);
+            Ok(())
+        }
+        Value::String(text) if CLIPPED_LONG.contains(&(kind, key)) => {
+            clip(text, LONG_TEXT);
             Ok(())
         }
         _ => Ok(()),
     }
 }
 
-/// Cuts `text` at [`TEXT`] characters, marked with an ellipsis.
-fn clip(text: &mut String) {
-    if let Some((end, _)) = text.char_indices().nth(TEXT) {
+/// Cuts `text` at `most` characters, marked with an ellipsis.
+fn clip(text: &mut String, most: usize) {
+    if let Some((end, _)) = text.char_indices().nth(most) {
         text.truncate(end);
         text.push('…');
     }

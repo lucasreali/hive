@@ -138,6 +138,7 @@ fn projects_sessions_commits_and_any_list_are_capped() {
         ("projects", PROJECTS),
         ("sessions", SESSIONS),
         ("commits", COMMITS),
+        ("comments", COMMENTS),
     ];
     for (kind, most) in lists {
         assert_eq!(check(&mut list(kind, kind, most)), Ok(()));
@@ -163,8 +164,8 @@ fn projects_sessions_commits_and_any_list_are_capped() {
     assert_eq!(check(&mut checked), Ok(()));
     assert_eq!(checked, fine);
     assert_eq!(
-        (PROJECTS, SESSIONS, COMMITS, LIST),
-        (1000, 1000, 1000, 50_000)
+        (PROJECTS, SESSIONS, COMMITS, COMMENTS, LIST),
+        (1000, 1000, 1000, 1000, 50_000)
     );
 }
 
@@ -190,7 +191,25 @@ fn a_remote_s_titles_badges_and_errors_are_clipped() {
     let mut commits = json!({"type": "commits", "commits": [{"short": long}]});
     check(&mut commits).unwrap();
     assert_eq!(commits["commits"][0]["short"], clipped);
-    let untouched = json!({"type": "pull", "body": long, "path": long, "title": 3, "text": null});
+    // A review comment's lines and author (27.3), and its text at 4096 characters.
+    let mut comments = json!({"type": "comments", "comments": [{
+        "code": [long], "before": [long], "after": [long], "author": long, "file": long,
+        "body": "é".repeat(LONG_TEXT + 1),
+    }]});
+    check(&mut comments).unwrap();
+    let comment = &comments["comments"][0];
+    for key in ["code", "before", "after"] {
+        assert_eq!(comment[key][0], clipped, "{key}");
+    }
+    assert_eq!(comment["author"], clipped);
+    assert_eq!(comment["file"], long);
+    assert_eq!(comment["body"], format!("{}…", "é".repeat(LONG_TEXT)));
+    let mut exact = json!({"type": "comments", "body": "a".repeat(LONG_TEXT)});
+    check(&mut exact).unwrap();
+    assert_eq!(exact["body"], "a".repeat(LONG_TEXT));
+    assert_eq!(LONG_TEXT, 4096);
+    let longer = "é".repeat(LONG_TEXT + 5);
+    let untouched = json!({"type": "pull", "body": long, "path": longer, "title": 3, "text": null});
     let mut message = untouched.clone();
     check(&mut message).unwrap();
     assert_eq!(message, untouched);

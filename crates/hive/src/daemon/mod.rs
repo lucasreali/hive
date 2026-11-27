@@ -397,6 +397,8 @@ struct State {
     offers: crate::offers::Offers,
     /// The files marked seen in each worktree's diff (27.1).
     seen: crate::seen::Seen,
+    /// The review comments of each worktree (27.3).
+    comments: crate::comments::Comments,
     restore: Restore,
     /// The worktree statuses the app has, so only changes are sent.
     sent: std::sync::Mutex<health::Sent>,
@@ -506,6 +508,7 @@ impl State {
             offers,
             // In Hive's folder, with the open sessions: `<data>/seen.json`.
             seen: crate::seen::Seen::new(restore.file.with_file_name("seen.json")),
+            comments: crate::comments::Comments::new(restore.file.with_file_name("comments.json")),
             restore,
             sent: Default::default(),
             listed: Default::default(),
@@ -1149,6 +1152,22 @@ impl State {
         }
     }
 
+    /// Drops the review comments (27.3) of `worktrees`, removed.
+    fn forget_comments(&self, worktrees: &[String]) {
+        if let Err(err) = self.comments.forget(worktrees) {
+            eprintln!("hive: warning: cannot drop the comments of removed worktrees: {err}");
+        }
+    }
+
+    /// Answers a request about the review comments of the worktree `path` (27.3) off the frame
+    /// loop: their files are read to move them.
+    fn comments(self: &Arc<Self>, path: String, request: crate::comments::Request) {
+        let state = self.clone();
+        self.projects(move |projects| {
+            crate::comments::answer(projects, &state.comments, path, request)
+        });
+    }
+
     /// Stops following the project `id` (9.28), a group with its repositories (14.1), unless a
     /// process of Hive's terminals (their `sessions`) works in it; their settings and their
     /// worktrees' port blocks and seen marks (27.1) go with them. A group's repositories are
@@ -1173,6 +1192,7 @@ impl State {
             eprintln!("hive: warning: cannot free the ports of {id}: {err}");
         }
         tokio::task::block_in_place(|| self.forget_seen(&worktrees));
+        tokio::task::block_in_place(|| self.forget_comments(&worktrees));
         for id in inside.into_iter().chain([id]) {
             let reply = match tokio::task::block_in_place(|| self.settings.forget(&id)) {
                 Ok(settings) => settings.map(|settings| Control::Settings { settings }),
@@ -1344,6 +1364,14 @@ impl State {
                 truncated: listing.truncated,
             };
             self.to_app(0, &files).await;
+        }
+        // Its comments move with their code (27.3).
+        if tokio::task::block_in_place(|| self.comments.has(path)) {
+            let list = crate::comments::Request::List;
+            let comments = tokio::task::block_in_place(|| {
+                crate::comments::answer(&self.projects, &self.comments, path.to_owned(), list)
+            });
+            self.to_app(0, &comments).await;
         }
         let Some(base) = base else { return };
         let titles = self.titles().await;
@@ -1572,6 +1600,23 @@ fn test_state_with(dir: &Path, power: Option<Box<dyn power::Power>>) -> Arc<Stat
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn comments_that_cannot_be_dropped_are_only_a_warning() {
+        let tmp = tempfile::tempdir().unwrap();
+        let state = test_state(tmp.path());
+        let worktree = tmp.path().join("w").display().to_string();
+        let file = tmp.path().join("comments.json");
+        let kept = serde_json::json!({ &worktree: { "next": 0, "comments": [], "files": {} } });
+        std::fs::write(&file, kept.to_string()).unwrap();
+        // The temporary file of the save is taken: nothing is saved.
+        std::fs::create_dir_all(tmp.path().join("comments.tmp/x")).unwrap();
+        state.forget_comments(std::slice::from_ref(&worktree));
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), kept.to_string());
+        std::fs::remove_dir_all(tmp.path().join("comments.tmp")).unwrap();
+        state.forget_comments(&[worktree]);
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), "{}");
+    }
 
     #[test]
     fn seen_marks_that_cannot_be_dropped_are_only_a_warning() {
