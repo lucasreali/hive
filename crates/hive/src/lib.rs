@@ -10,6 +10,7 @@ pub mod checkout;
 pub mod cli;
 pub mod comments;
 pub mod commit;
+pub mod cow;
 pub mod daemon;
 pub mod dirs;
 #[cfg(unix)]

@@ -662,3 +662,132 @@ async fn worktrees_whose_directory_is_gone_are_not_sent_to_the_app() {
     drop(app);
     assert!(daemon.wait_exit().success());
 }
+
+/// 28.9 on real filesystems: temp disk images (`hdiutil`), APFS that clones and HFS+ that
+/// does not, each detached at the end.
+#[cfg(target_os = "macos")]
+mod disk_images {
+    use super::*;
+    use std::ffi::OsStr;
+
+    const BIG: usize = 16 * 1024 * 1024;
+
+    fn hdiutil(args: &[&OsStr]) {
+        let out = Command::new("hdiutil").args(args).output().unwrap();
+        assert!(out.status.success(), "hdiutil {args:?}: {}", stderr(&out));
+    }
+
+    /// A temp sparse disk image of `fs` attached at `mount`; detached when dropped.
+    struct Volume {
+        mount: PathBuf,
+    }
+
+    impl Volume {
+        fn attach(env: &Env, fs: &str) -> Self {
+            let image = env.path("volume.sparseimage");
+            let mount = env.path("volume");
+            std::fs::create_dir_all(&mount).unwrap();
+            let create = [
+                "create", "-quiet", "-size", "64m", "-fs", fs, "-volname", "hivecow",
+            ];
+            let mut args: Vec<&OsStr> = create.iter().map(OsStr::new).collect();
+            args.extend([OsStr::new("-type"), OsStr::new("SPARSE"), image.as_os_str()]);
+            hdiutil(&args);
+            let attach = [
+                "attach",
+                "-quiet",
+                "-nobrowse",
+                "-noautoopen",
+                "-mountpoint",
+            ];
+            let mut args: Vec<&OsStr> = attach.iter().map(OsStr::new).collect();
+            args.extend([mount.as_os_str(), image.as_os_str()]);
+            hdiutil(&args);
+            Self { mount }
+        }
+    }
+
+    impl Drop for Volume {
+        fn drop(&mut self) {
+            let detach = |force: bool| {
+                let mut cmd = Command::new("hdiutil");
+                cmd.args(["detach", "-quiet"]);
+                cmd.args(force.then_some("-force")).arg(&self.mount);
+                cmd.status().is_ok_and(|status| status.success())
+            };
+            // Spotlight or fseventsd may still hold it for a moment.
+            let _ = detach(false) || detach(true);
+        }
+    }
+
+    /// A repository on its own volume; the volume is detached before the temp folder goes.
+    struct OnVolume {
+        volume: Volume,
+        repo: Repo,
+    }
+
+    impl OnVolume {
+        fn new(fs: &str) -> Self {
+            let env = Env::new();
+            let volume = Volume::attach(&env, fs);
+            let repo = Repo::in_env(env, "volume/repo");
+            Self { volume, repo }
+        }
+
+        fn free(&self) -> u64 {
+            nix::unistd::sync();
+            let stat = nix::sys::statvfs::statvfs(&self.volume.mount).unwrap();
+            stat.blocks_available() as u64 * stat.fragment_size()
+        }
+    }
+
+    /// A `node_modules` of one big file and 200 small ones, plus `.env`, all listed in
+    /// `.worktreeinclude`. Creates `x` and returns the bytes of free space it took.
+    fn create_with_includes(on: &OnVolume) -> u64 {
+        let repo = &on.repo;
+        repo.commit(".gitignore", "node_modules/\n.env\n");
+        repo.commit(".worktreeinclude", "node_modules/\n.env\n");
+        repo.write(".env", "SECRET=1");
+        let big: Vec<u8> = (0..BIG).map(|i| (i % 253) as u8).collect();
+        repo.write("node_modules/big/blob.bin", "");
+        std::fs::write(repo.root.join("node_modules/big/blob.bin"), &big).unwrap();
+        for i in 0..200 {
+            repo.write(&format!("node_modules/p{i}/index.js"), &format!("// {i}"));
+        }
+        let before = on.free();
+        let out = repo.hive(&["create", "x"]);
+        assert!(out.status.success(), "{}", stderr(&out));
+        let took = before.saturating_sub(on.free());
+        assert_eq!(
+            stderr(&out),
+            "hive: copied 202 files listed in .worktreeinclude\n"
+        );
+        let path = repo.path("x");
+        let copy = std::fs::read(path.join("node_modules/big/blob.bin")).unwrap();
+        assert!(copy == big);
+        assert_eq!(
+            std::fs::read_to_string(path.join("node_modules/p7/index.js")).unwrap(),
+            "// 7"
+        );
+        assert_eq!(
+            std::fs::read_to_string(path.join(".env")).unwrap(),
+            "SECRET=1"
+        );
+        took
+    }
+
+    #[test]
+    fn included_files_are_cloned_on_apfs() {
+        let on = OnVolume::new("APFS");
+        let took = create_with_includes(&on);
+        // The clone shares the 16 MiB file's blocks: only the checkout and metadata are new.
+        assert!(took < BIG as u64 / 4, "took {took} bytes");
+    }
+
+    #[test]
+    fn included_files_are_copied_where_there_are_no_clones() {
+        let on = OnVolume::new("HFS+");
+        let took = create_with_includes(&on);
+        assert!(took >= BIG as u64, "took {took} bytes");
+    }
+}

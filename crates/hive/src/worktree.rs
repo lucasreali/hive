@@ -9,6 +9,7 @@ use std::time::Duration;
 
 use serde_json::{Map, Value};
 
+use crate::cow;
 use crate::git::{self, Stdout};
 use crate::paths::canonical;
 
@@ -243,7 +244,7 @@ pub fn create_on(dir: &Path, name: &str, head: Head) -> io::Result<Created> {
         Head::Existing(_) => args.extend([path.as_os_str(), OsStr::new(branch)]),
     }
     git::run(&root, &args, &[], &[0], OUTPUT_LIMIT)?;
-    match copy_included(&root, &path, &included) {
+    match copy_included(&cow::System, &root, &path, &included) {
         Ok(0) => {}
         Ok(copied) => notes.push(copied_note(copied)),
         Err(err) => {
@@ -506,9 +507,14 @@ fn included_files(root: &Path) -> io::Result<Vec<u8>> {
 }
 
 /// Copies `included` (from [`included_files`]) from `root` into the new worktree. Only
-/// regular files are copied, never over an existing path nor through a symlink. Returns how
-/// many were copied.
-fn copy_included(root: &Path, worktree: &Path, included: &[u8]) -> io::Result<usize> {
+/// regular files are copied, never over an existing path nor through a symlink, each cloned
+/// where the filesystem allows (28.9, [`cow::copy_new`]). Returns how many were copied.
+fn copy_included(
+    copier: &dyn cow::Copier,
+    root: &Path,
+    worktree: &Path,
+    included: &[u8],
+) -> io::Result<usize> {
     let mut copied = 0;
     for rel in included
         .split(|&b| b == 0)
@@ -521,7 +527,7 @@ fn copy_included(root: &Path, worktree: &Path, included: &[u8]) -> io::Result<us
         }
         let dst = worktree.join(&rel);
         std::fs::create_dir_all(dst.parent().unwrap_or(worktree))?;
-        std::fs::copy(src, dst)?;
+        cow::copy_new(copier, &src, &dst)?;
         copied += 1;
     }
     Ok(copied)
@@ -757,6 +763,82 @@ worktree /repo/.claude/worktrees/c\0HEAD 3333\0branch refs/heads/worktree-c\0pru
             wslenv(Some("WT_SESSION/u".into())),
             *format!("WT_SESSION/u:{quiet}")
         );
+    }
+
+    /// A filesystem without clones: every file takes the plain copy.
+    #[cfg(unix)]
+    struct NoClones;
+
+    #[cfg(unix)]
+    impl cow::Copier for NoClones {
+        fn clone_file(&self, _src: &std::fs::File, _dst: &Path) -> io::Result<()> {
+            Err(io::ErrorKind::Unsupported.into())
+        }
+
+        fn copy_file(&self, src: &mut std::fs::File, dst: &Path) -> io::Result<()> {
+            cow::System.copy_file(src, dst)
+        }
+    }
+
+    /// Every file under `dir` with its bytes, and every symlink, relative to `dir`.
+    #[cfg(unix)]
+    fn tree(dir: &Path, rel: &Path, out: &mut Vec<(PathBuf, Option<Vec<u8>>)>) {
+        let mut entries: Vec<_> = std::fs::read_dir(dir.join(rel))
+            .unwrap()
+            .map(|e| e.unwrap())
+            .collect();
+        entries.sort_by_key(|e| e.file_name());
+        for entry in entries {
+            let rel = rel.join(entry.file_name());
+            let kind = entry.file_type().unwrap();
+            if kind.is_dir() {
+                tree(dir, &rel, out);
+            } else {
+                let bytes = kind
+                    .is_file()
+                    .then(|| std::fs::read(dir.join(&rel)).unwrap());
+                out.push((rel, bytes));
+            }
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_same_files_are_copied_with_or_without_clones() {
+        let root = tempfile::tempdir().unwrap();
+        let write = |rel: &str, text: &str| {
+            let path = root.path().join(rel);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, text).unwrap();
+        };
+        write(".env", "SECRET=1");
+        write("node_modules/a/index.js", "module.exports = 1;");
+        write("node_modules/a/package.json", "{}");
+        write("tracked", "the main worktree's");
+        std::os::unix::fs::symlink("a", root.path().join("node_modules/link")).unwrap();
+        let included = b".env\0node_modules/a/index.js\0node_modules/a/package.json\0\
+            node_modules/link\0node_modules\0tracked\0missing";
+        let mut trees = Vec::new();
+        for copier in [&cow::System as &dyn cow::Copier, &NoClones] {
+            let worktree = tempfile::tempdir().unwrap();
+            std::fs::write(worktree.path().join("tracked"), "the branch's").unwrap();
+            let copied = copy_included(copier, root.path(), worktree.path(), included).unwrap();
+            assert_eq!(copied, 3);
+            let mut files = Vec::new();
+            tree(worktree.path(), Path::new(""), &mut files);
+            trees.push(files);
+        }
+        let some = |text: &str| Some(text.as_bytes().to_vec());
+        let expected = vec![
+            (PathBuf::from(".env"), some("SECRET=1")),
+            (
+                "node_modules/a/index.js".into(),
+                some("module.exports = 1;"),
+            ),
+            ("node_modules/a/package.json".into(), some("{}")),
+            ("tracked".into(), some("the branch's")),
+        ];
+        assert_eq!(trees, [expected.clone(), expected]);
     }
 
     #[test]
