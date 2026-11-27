@@ -713,9 +713,15 @@ mod tests {
     fn a_partial_file_keeps_the_defaults_for_the_rest() {
         let tmp = tempfile::tempdir().unwrap();
         let file = tmp.path().join("settings.json");
-        std::fs::write(&file, r#"{"notifications":{"volume":0},"other":true}"#).unwrap();
+        std::fs::write(
+            &file,
+            r#"{"notifications":{"volume":0},"appearance":{"diff_colors":"color-blind"},"other":true}"#,
+        )
+        .unwrap();
         let mut expected = Settings::default();
         expected.notifications.volume = 0;
+        // The theme stays its default beside the diff's colours (28.6).
+        expected.appearance.diff_colors = hive_protocol::DiffColors::ColorBlind;
         assert_eq!(Store::load(file.clone()).get(), (expected, None));
         // A project allowed for the chats Hive once had (7.3) keeps its other settings.
         let old = r#"{"projects":{"/r":{"scripts":{"setup":"make"},"chat_confirmed":true}}}"#;
@@ -760,6 +766,10 @@ mod tests {
             (
                 r#"{"terminal":{"shell":"zsh"}}"#,
                 "unknown variant `zsh`, expected one of `default`, `cmd`, `git_bash`",
+            ),
+            (
+                r#"{"appearance":{"diff_colors":"red-green"}}"#,
+                "unknown variant `red-green`, expected `standard` or `color-blind`",
             ),
             (
                 &" ".repeat(FILE_LIMIT as usize + 1),

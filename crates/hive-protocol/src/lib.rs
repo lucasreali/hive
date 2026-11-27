@@ -1770,6 +1770,18 @@ pub enum CursorStyle {
 #[serde(default)]
 pub struct AppearanceSettings {
     pub theme: Theme,
+    /// The colours of added and removed lines in the diff view, the editor's gutter markers and
+    /// the Changes and Diff panel (28.6).
+    pub diff_colors: DiffColors,
+}
+
+/// The diff's colours (28.6): green and red, or blue and orange for colour-blind eyes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum DiffColors {
+    #[default]
+    Standard,
+    ColorBlind,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -4488,10 +4500,10 @@ mod tests {
         };
         assert_eq!(
             &Frame::control(0, &settings).payload[..],
-            br#"{"type":"settings","settings":{"terminal":{"font_family":"\"Hive Mono\", \"Symbols Nerd Font\", monospace","font_size":13,"scrollback":5000,"cursor_style":"block","cursor_blink":false,"copy_on_select":false,"option_as_meta":"off","screen_reader":false,"shell":"default"},"appearance":{"theme":"one-dark"},"notifications":{"volume":100,"bounce":true,"menu_bar":true,"command_secs":10},"agents":{"silence_secs":5,"confirm_close":true,"keep_awake":true},"worktrees":{"default_base":null},"projects":{},"claude":{"accounts":[],"default_name":"Default","share_sessions":false},"gh":{"config_dirs":[]},"remote":{"hosts":[],"keep_minutes":1440}}}"#
+            br#"{"type":"settings","settings":{"terminal":{"font_family":"\"Hive Mono\", \"Symbols Nerd Font\", monospace","font_size":13,"scrollback":5000,"cursor_style":"block","cursor_blink":false,"copy_on_select":false,"option_as_meta":"off","screen_reader":false,"shell":"default"},"appearance":{"theme":"one-dark","diff_colors":"standard"},"notifications":{"volume":100,"bounce":true,"menu_bar":true,"command_secs":10},"agents":{"silence_secs":5,"confirm_close":true,"keep_awake":true},"worktrees":{"default_base":null},"projects":{},"claude":{"accounts":[],"default_name":"Default","share_sessions":false},"gh":{"config_dirs":[]},"remote":{"hosts":[],"keep_minutes":1440}}}"#
         );
         let partial: Control = serde_json::from_str(
-            r#"{"type":"set_settings","settings":{"terminal":{"cursor_style":"bar","shell":"git_bash"},"appearance":{"theme":"one-light"},"projects":{"/r":{"later":1}},"claude":{"accounts":[{"name":"Work","config_dir":"/w"}],"account":"/w"},"unknown":1}}"#,
+            r#"{"type":"set_settings","settings":{"terminal":{"cursor_style":"bar","shell":"git_bash"},"appearance":{"theme":"one-light","diff_colors":"color-blind"},"projects":{"/r":{"later":1}},"claude":{"accounts":[{"name":"Work","config_dir":"/w"}],"account":"/w"},"unknown":1}}"#,
         )
         .unwrap();
         let mut expected = Settings::default();
@@ -4503,6 +4515,7 @@ mod tests {
         expected.terminal.cursor_style = CursorStyle::Bar;
         expected.terminal.shell = TerminalShell::GitBash;
         expected.appearance.theme = Theme::OneLight;
+        expected.appearance.diff_colors = DiffColors::ColorBlind;
         expected
             .projects
             .insert("/r".into(), ProjectSettings::default());
@@ -4567,6 +4580,17 @@ mod tests {
             serde_json::from_str::<Theme>(r#""system""#).unwrap(),
             Theme::System
         );
+        assert_eq!(
+            serde_json::from_str::<DiffColors>(r#""standard""#).unwrap(),
+            DiffColors::Standard
+        );
+        // Only the two names: any other value is refused, as the theme's.
+        for refused in [r#""color_blind""#, r#""colour-blind""#, r#""""#, "1"] {
+            assert!(
+                serde_json::from_str::<DiffColors>(refused).is_err(),
+                "{refused}"
+            );
+        }
         let failed = Control::SettingsFailed {
             message: "m".into(),
         };

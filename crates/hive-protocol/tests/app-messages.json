@@ -975,7 +975,8 @@
         "shell": "default"
       },
       "appearance": {
-        "theme": "one-dark"
+        "theme": "one-dark",
+        "diff_colors": "standard"
       },
       "notifications": {
         "volume": 100,
