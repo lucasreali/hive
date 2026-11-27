@@ -718,7 +718,7 @@ Today: a read-only diff against HEAD or the branch's fork point (9.11), live cha
 
 | Stage | Content | Points |
 |---|---|---|
-| 28 | The usage fix, skills, performance baselines, interface details, worktrees and tooling, and the designs the later stages need | 93 |
+| 28 | The usage fix, skills, performance baselines, interface details, worktrees and tooling, and the designs the later stages need, and two interface fixes (28.17–28.18) | 98 |
 | 29 | Pinned tabs, and working together over SSH | 98 (89 reserved) |
 | 30 | IDE features in the editor, themes from a file, the plugin design | 90 (34 reserved) |
 | 31 | Plugins, and the tooling audit | 95 (89 reserved) |
@@ -735,7 +735,7 @@ Created 2026-11-27 at the human's request: "quero algumas funcionalidades que te
 
 ## Stage 28 — Fixes, foundations and designs
 
-≈ 93 points. Three designs end here at ⏸ checkpoints (28.14–28.16), so the human approves them while this stage's other tasks run.
+≈ 98 points. Three designs end here at ⏸ checkpoints (28.14–28.16), so the human approves them while this stage's other tasks run.
 
 Created 2026-11-26 at the human's request: "o painel para mostrar o uso de plano não está mais funcionando, preciso que isso seja ajustado". In v0.30.0 the status bar shows the space's account ("Gmail - Visus") and the version, but no usage ring (12.1, 21.8, 22.5); the menu bar icon's usage lines (17.22) and the usage alerts (17.23) depend on the same reports. A bug fix: it restores the existing rules and changes no decision. *(From the old Stage 33.)*
 
@@ -799,6 +799,7 @@ Designs for the next stages (old 28.1, 34.1, 35.1):
 Reported by the human from v0.32.0 onward, to be spread over the next stages; each is a small fix in one area (D4: straight to `main` unless it grows).
 
 - [ ] **28.17 A select's menu opens inside the window.** · 2 pts `main` — The human, 2026-11-27 (screenshot of v0.32.0): the Diff view's base menu (27.2, "HEAD", "Since … turn", "A commit…") is a `Select` (`src/ui/Select.tsx`) at the right edge of the right panel, and its menu opens to the right, past the panel and the window's edge, so its items are cut off. Expected: a select's menu is placed where it fits — aligned to the trigger's right edge when it would overflow on the right (and above the trigger when it would overflow at the bottom), never outside the window. A fix in `Select` itself, so every select benefits. Tests: bun (placement from the trigger's and the window's rects: fits, overflows right, overflows bottom); e2e on the mock (the Diff base menu fully visible with the right panel at its narrowest), Chromium and WebKit.
+- [ ] **28.18 One checkbox per changed file in the Diff panel.** · 3 pts `task/28.18-diff-row-marks` — The human, 2026-11-27 (screenshot of v0.32.0, "ficou tenebrosamente horrível"): each file row of the Diff panel (`src/shell/RightPanel.tsx`) shows two identical, unlabelled checkboxes, the left one staging the file for the commit (27.6, "0 of 3 staged") and the right one marking it seen (27.1, "0 of 3 seen", "Unseen only"); only a hover tells them apart. Proposal (recommended to the human): keep the checkbox for staging only and show "seen" as an eye icon button at the row's end (`@phosphor-icons/react` `Eye` / `EyeSlash` or `Eye` regular/fill, #54; its tooltip "Mark as seen" / "Seen" / "Changed since seen: mark as seen again", its `aria-pressed` and label kept), the "Changed since seen" dot kept beside it; the header's "0 of 3 seen" and "0 of 3 staged" lines lined up so it is clear which control each one counts. No service change. **Look first** (⏸ checkpoint): screenshots of the mock in One Dark and One Light (no file staged or seen, some, all, one changed since seen, a long path), checked against `docs/prototype/`; the human may pick another layout (a column header over two controls, or the stage boxes shown only while a commit is being prepared). Tests: bun (each control's role, label and action, the counts); e2e on the mock (stage and mark seen on the same row by mouse and keyboard).
 
 ## Stage 29 — Pinned tabs, and working together over SSH
 
