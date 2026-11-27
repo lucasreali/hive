@@ -353,15 +353,100 @@ fn opened_with(dir: &Path, rel: &Path, between: impl FnOnce()) -> io::Result<Opt
 /// even one swapped in after the check, and a FIFO or a device is refused at once instead of
 /// blocking the open.
 pub(crate) fn open_plain(root: &Path, rel: &Path) -> io::Result<File> {
-    let names = plain_names(rel).unwrap_or_default();
-    let Some((name, folders)) = names.split_last() else {
-        return Err(io::Error::other("not a relative path inside the worktree"));
-    };
-    let file = open_parts(root, folders, name)?;
-    if !file.metadata()?.is_file() {
-        return Err(io::Error::other("not a regular file"));
+    PlainFiles::new(root)?.open(rel)
+}
+
+/// Many regular files of the canonical folder `root`, each opened as [`open_plain`] opens
+/// one. On Unix the folders of the last file stay open, so files listed folder by folder (as
+/// git lists them) cost about one `openat` each instead of one per part of their path (28.9:
+/// tens of thousands of `.worktreeinclude` files). A kept folder is the one reached without a
+/// link, even if a link takes its name afterwards.
+pub(crate) struct PlainFiles {
+    #[cfg(unix)]
+    root: std::os::fd::OwnedFd,
+    /// The folders of the last file opened, each with its descriptor.
+    #[cfg(unix)]
+    open: Vec<(std::ffi::OsString, std::os::fd::OwnedFd)>,
+    #[cfg(windows)]
+    root: PathBuf,
+}
+
+impl PlainFiles {
+    /// The regular file `rel` (normal parts only) of `root`, opened for reading.
+    pub(crate) fn open(&mut self, rel: &Path) -> io::Result<File> {
+        let names = plain_names(rel).unwrap_or_default();
+        let Some((name, folders)) = names.split_last() else {
+            return Err(io::Error::other("not a relative path inside the worktree"));
+        };
+        let file = self.open_parts(folders, name)?;
+        if !file.metadata()?.is_file() {
+            return Err(io::Error::other("not a regular file"));
+        }
+        Ok(file)
     }
-    Ok(file)
+}
+
+#[cfg(unix)]
+const READ: nix::fcntl::OFlag = nix::fcntl::OFlag::O_RDONLY.union(nix::fcntl::OFlag::O_CLOEXEC);
+/// A folder, never through a link (`O_NOFOLLOW`).
+#[cfg(unix)]
+const FOLDER: nix::fcntl::OFlag = READ
+    .union(nix::fcntl::OFlag::O_NOFOLLOW)
+    .union(nix::fcntl::OFlag::O_DIRECTORY);
+
+#[cfg(unix)]
+impl PlainFiles {
+    /// From `/`, the folders of `root`, each opened from the one before without following a
+    /// link: one swapped in at any time, the worktree folder itself included, fails the open
+    /// instead of leading out of `root`.
+    pub(crate) fn new(root: &Path) -> io::Result<Self> {
+        use nix::fcntl::{AT_FDCWD, OFlag, openat};
+        use nix::sys::stat::Mode;
+        let Some(base) = root.strip_prefix("/").ok().and_then(plain_names) else {
+            return Err(io::Error::other("not a canonical worktree path"));
+        };
+        let mut fd = openat(AT_FDCWD, "/", READ.union(OFlag::O_DIRECTORY), Mode::empty())?;
+        for folder in base {
+            fd = openat(&fd, folder, FOLDER, Mode::empty())?;
+        }
+        let open = Vec::new();
+        Ok(Self { root: fd, open })
+    }
+
+    /// `folders` from `root`, the ones the last file shares kept, and `name` in the last, all
+    /// without following a link. `O_NONBLOCK`: a FIFO opens at once, without waiting for a
+    /// writer.
+    fn open_parts(&mut self, folders: &[&OsStr], name: &OsStr) -> io::Result<File> {
+        use nix::fcntl::{OFlag, openat};
+        use nix::sys::stat::Mode;
+        let kept = self
+            .open
+            .iter()
+            .zip(folders)
+            .take_while(|((open, _), folder)| open == *folder)
+            .count();
+        self.open.truncate(kept);
+        for folder in &folders[kept..] {
+            let parent = self.open.last().map_or(&self.root, |(_, fd)| fd);
+            let fd = openat(parent, *folder, FOLDER, Mode::empty())?;
+            self.open.push((folder.to_os_string(), fd));
+        }
+        let parent = self.open.last().map_or(&self.root, |(_, fd)| fd);
+        let flags = READ.union(OFlag::O_NOFOLLOW).union(OFlag::O_NONBLOCK);
+        Ok(File::from(openat(parent, name, flags, Mode::empty())?))
+    }
+}
+
+#[cfg(windows)]
+impl PlainFiles {
+    pub(crate) fn new(root: &Path) -> io::Result<Self> {
+        let root = root.to_path_buf();
+        Ok(Self { root })
+    }
+
+    fn open_parts(&mut self, folders: &[&OsStr], name: &OsStr) -> io::Result<File> {
+        crate::windows::open_parts(&self.root, folders, name)
+    }
 }
 
 /// The parts of `path`, `None` unless each is a name (no root, `.` or `..`).
@@ -373,35 +458,6 @@ fn plain_names(path: &Path) -> Option<Vec<&OsStr>> {
         })
         .collect()
 }
-
-/// From `/`, the folders of `root` and then its `folders`, and `name` in the last, each
-/// opened from the one before without following a link (`O_NOFOLLOW`): one swapped in at any
-/// time, the worktree folder itself included, fails the open instead of leading out of `root`.
-/// `O_NONBLOCK`: a FIFO opens at once, without waiting for a writer.
-#[cfg(unix)]
-fn open_parts(root: &Path, folders: &[&OsStr], name: &OsStr) -> io::Result<File> {
-    use nix::fcntl::{AT_FDCWD, OFlag, openat};
-    use nix::sys::stat::Mode;
-    let Some(base) = root.strip_prefix("/").ok().and_then(plain_names) else {
-        return Err(io::Error::other("not a canonical worktree path"));
-    };
-    let read = OFlag::O_RDONLY.union(OFlag::O_CLOEXEC);
-    let mut fd = openat(AT_FDCWD, "/", read.union(OFlag::O_DIRECTORY), Mode::empty())?;
-    let nofollow = read.union(OFlag::O_NOFOLLOW);
-    for folder in base.iter().chain(folders) {
-        fd = openat(
-            &fd,
-            *folder,
-            nofollow.union(OFlag::O_DIRECTORY),
-            Mode::empty(),
-        )?;
-    }
-    let file = openat(&fd, name, nofollow.union(OFlag::O_NONBLOCK), Mode::empty())?;
-    Ok(File::from(file))
-}
-
-#[cfg(windows)]
-use crate::windows::open_parts;
 
 fn on_disk(dir: &Path, rel: &Path) -> io::Result<Side> {
     match opened(dir, rel)? {
@@ -1583,6 +1639,73 @@ mod tests {
         let code = open_plain(&root.join("link"), Path::new("a"))
             .unwrap_err()
             .raw_os_error();
+        let refused = matches!(code, Some(nix::libc::ELOOP | nix::libc::ENOTDIR));
+        assert!(refused, "{code:?}");
+    }
+
+    /// A folder `PlainFiles` tests run in, with `a/x`, `a/y`, `a/b/y`, `c/z` and `top`, each
+    /// holding its own path.
+    #[cfg(unix)]
+    fn plain_tree() -> (tempfile::TempDir, PathBuf) {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().canonicalize().unwrap().join("root");
+        for rel in ["a/x", "a/y", "a/b/y", "c/z", "top"] {
+            let path = root.join(rel);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, rel).unwrap();
+        }
+        (dir, root)
+    }
+
+    #[cfg(unix)]
+    fn read_plain(files: &mut PlainFiles, rel: &str) -> io::Result<String> {
+        let mut text = String::new();
+        files.open(Path::new(rel))?.read_to_string(&mut text)?;
+        Ok(text)
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn plain_files_open_each_file_of_any_folder_in_any_order() {
+        let (_dir, root) = plain_tree();
+        let mut files = PlainFiles::new(&root).unwrap();
+        for rel in ["a/x", "a/b/y", "a/y", "c/z", "top", "a/b/y", "a/x"] {
+            assert_eq!(read_plain(&mut files, rel).unwrap(), rel);
+        }
+        let missing = read_plain(&mut files, "a/b/missing").unwrap_err();
+        assert_eq!(missing.kind(), io::ErrorKind::NotFound);
+        assert_eq!(read_plain(&mut files, "c/z").unwrap(), "c/z");
+        let folder = read_plain(&mut files, "a/b").unwrap_err();
+        assert_eq!(folder.to_string(), "not a regular file");
+        let err = read_plain(&mut files, "../root/top").unwrap_err();
+        assert_eq!(err.to_string(), "not a relative path inside the worktree");
+        let err = PlainFiles::new(Path::new("relative")).err().unwrap();
+        assert_eq!(err.to_string(), "not a canonical worktree path");
+    }
+
+    /// The last file's folders stay open: one moved away afterwards, and a link put in its
+    /// place, still leads to the folder first reached, never through the link. A folder not
+    /// kept is opened anew, and a link there is refused.
+    #[cfg(unix)]
+    #[test]
+    fn plain_files_keep_the_folders_first_reached() {
+        let (dir, root) = plain_tree();
+        let outside = dir.path().join("outside");
+        std::fs::create_dir_all(outside.join("b")).unwrap();
+        std::fs::write(outside.join("y"), "outside").unwrap();
+        std::fs::write(outside.join("z"), "outside").unwrap();
+        let mut files = PlainFiles::new(&root).unwrap();
+        assert_eq!(read_plain(&mut files, "a/x").unwrap(), "a/x");
+        std::fs::rename(root.join("a"), root.join("moved")).unwrap();
+        std::os::unix::fs::symlink(&outside, root.join("a")).unwrap();
+        assert_eq!(read_plain(&mut files, "a/y").unwrap(), "a/y");
+        std::fs::remove_dir_all(root.join("c")).unwrap();
+        std::os::unix::fs::symlink(&outside, root.join("c")).unwrap();
+        let code = read_plain(&mut files, "c/z").unwrap_err().raw_os_error();
+        let refused = matches!(code, Some(nix::libc::ELOOP | nix::libc::ENOTDIR));
+        assert!(refused, "{code:?}");
+        // Back to `a` after another folder: opened anew, and a link now.
+        let code = read_plain(&mut files, "a/y").unwrap_err().raw_os_error();
         let refused = matches!(code, Some(nix::libc::ELOOP | nix::libc::ENOTDIR));
         assert!(refused, "{code:?}");
     }

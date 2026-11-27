@@ -509,8 +509,9 @@ fn included_files(root: &Path) -> io::Result<Vec<u8>> {
 /// Copies `included` (from [`included_files`]) from `root` into the new worktree. Only
 /// regular files are copied, never over an existing path nor through a symlink, each cloned
 /// where the filesystem allows (28.9, [`cow::copy_new`]). A source is opened with no link in
-/// any part of its path (`file::open_plain`): a folder swapped for a link after git listed it
-/// fails the copy instead of reading from outside the project. Returns how many were copied.
+/// any part of its path (`file::PlainFiles`, which keeps the last file's folders open): a
+/// folder swapped for a link after git listed it fails the copy instead of reading from outside
+/// the project. Returns how many were copied.
 fn copy_included(
     copier: &dyn cow::Copier,
     root: &Path,
@@ -518,6 +519,7 @@ fn copy_included(
     included: &[u8],
 ) -> io::Result<usize> {
     let root = canonical(root)?;
+    let mut sources = crate::file::PlainFiles::new(&root)?;
     let mut copied = 0;
     for rel in included
         .split(|&b| b == 0)
@@ -530,7 +532,7 @@ fn copy_included(
         if !is_file || unsafe_target(worktree, &rel) {
             continue;
         }
-        let src = crate::file::open_plain(&root, &rel)?;
+        let src = sources.open(&rel)?;
         let dst = worktree.join(&rel);
         std::fs::create_dir_all(dst.parent().unwrap_or(worktree))?;
         cow::copy_new(copier, src, &dst)?;

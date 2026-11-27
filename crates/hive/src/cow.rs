@@ -2,7 +2,7 @@
 //! source's blocks until either side changes: macOS `fclonefileat` (APFS), Linux's `FICLONE`
 //! ioctl (Btrfs, XFS). Where the filesystem has no clones, a plain copy of the bytes.
 //!
-//! The caller opens the source (`hive::worktree` through `file::open_plain`, which never
+//! The caller opens the source (`hive::worktree` through `file::PlainFiles`, which never
 //! follows a link in any part of its path); the destination is always a new file, never an
 //! existing path.
 
