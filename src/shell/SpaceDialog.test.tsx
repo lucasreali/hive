@@ -123,7 +123,7 @@ test("a space's Claude account is one of the accounts, kept as its folder (22.5)
 
 test("a new space's Claude account goes back to the default when another host is picked (27.11)", () => {
   const create = spyOn(transport, "createSpace").mockResolvedValue();
-  spyOn(transport, "listClaudeLogins").mockResolvedValue();
+  const ask = spyOn(transport, "listClaudeLogins").mockResolvedValue();
   show([home], "default");
   const accounts = [{ name: "Work account", config_dir: "/w" }];
   act(() => {
@@ -143,11 +143,12 @@ test("a new space's Claude account goes back to the default when another host is
   fireEvent.click(screen.getByRole("button", { name: "Create space" }));
   expect(create).toHaveBeenCalledWith("Remote", NO_ENV);
   create.mockRestore();
+  ask.mockRestore();
 });
 
 test("a remote space's Claude account is one of its host's, never this Mac's (27.11)", () => {
   const update = spyOn(transport, "updateSpace").mockResolvedValue();
-  spyOn(transport, "listClaudeLogins").mockResolvedValue();
+  const ask = spyOn(transport, "listClaudeLogins").mockResolvedValue();
   show([home], "default");
   const accounts = [{ name: "Ai1 - Visus", config_dir: "/w" }];
   act(() => {
@@ -178,6 +179,7 @@ test("a remote space's Claude account is one of its host's, never this Mac's (27
   const options = screen.getAllByRole("option").map((o) => o.textContent);
   expect(options).toEqual(["Default", "Server work"]);
   update.mockRestore();
+  ask.mockRestore();
 });
 
 test("the space dialog has no gh config folder field: the account brings its folder (24.13)", () => {
