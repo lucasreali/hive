@@ -37,7 +37,7 @@ import {
 } from "../store";
 import { transport } from "../transport";
 import { ICON, RefreshIcon, StateIcon } from "./icons";
-import { useKeptScroll, viewKey } from "./panelPlace";
+import { useKept, useKeptScroll, viewKey } from "./panelPlace";
 import { leaveFile } from "./RightPanel";
 import { SearchField } from "./SearchField";
 import { Submenu } from "./TerminalArea";
@@ -80,7 +80,8 @@ export function SessionsView({ worktree }: { worktree: string }) {
   const agents = useHive((s) => s.agents);
   // A remote's agents are keyed by host (26.18).
   const host = useHive((s) => s.host);
-  const [query, setQuery] = useState("");
+  // The search is this worktree's own, kept for this run while the view closes (28.27).
+  const [query, setQuery] = useKept(viewKey("sessions-query", host, worktree), "");
   const space = useHive((s) => s.currentSpace);
   // Asked when the tab opens and for another space (the service lists the current space's
   // only); the service sends the list again whenever it changes (D19.4).
