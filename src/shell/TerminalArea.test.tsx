@@ -329,9 +329,15 @@ test("the open file has its tab after the terminals, shown in place of the termi
       .getAllByRole("tab")
       .map((t) => t.textContent),
   ).toEqual(["main", "app.ts"]);
-  expect(tabs()).toEqual(["true", "false"]);
-  // Leaving the worktree while its file is shown hides the file; coming back shows a terminal.
-  fireEvent.click(tab("app.ts"));
+  // Coming back shows the tab shown when the worktree was left (28.19): the file.
+  expect(tabs()).toEqual(["false", "true"]);
+  // Leaving the worktree while its file is shown hides the file; coming back shows it again.
+  act(() => select(fixLogin.id));
+  expect(useHive.getState().fileShown).toBe(false);
+  act(() => select(shopMain.id));
+  expect(tabs()).toEqual(["false", "true"]);
+  // Left while its terminal shows, it shows that terminal again.
+  fireEvent.click(tab("main"));
   act(() => select(fixLogin.id));
   expect(useHive.getState().fileShown).toBe(false);
   act(() => select(shopMain.id));
