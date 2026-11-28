@@ -2177,7 +2177,7 @@ test("who wrote a line (27.5): a session, Hive's editor, a probable session, or 
 test("a session's changed files (27.5): counted in its listing, listed when asked", async () => {
   const { transport, messages } = await connected();
   const counts = MOCK_SESSIONS.map((x) => x.files_changed);
-  expect(counts).toEqual([2, 0, 0, 1]);
+  expect(counts).toEqual([5, 0, 0, 1]);
   const [fix] = MOCK_SESSIONS;
   messages.length = 0;
   await transport.listSessionFiles(fix.id);

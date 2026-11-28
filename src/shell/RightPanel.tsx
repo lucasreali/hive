@@ -614,7 +614,8 @@ const LazyFolderIcon = lazy(async () => {
 
 const iconSpace = <span className="tree-icon-space" />;
 
-const TreeFileIcon = ({ name }: { name: string }) => (
+/** A file's icon as the Files view shows it, a blank of its size while the icons load. */
+export const TreeFileIcon = ({ name }: { name: string }) => (
   <Suspense fallback={iconSpace}>
     <LazyFileIcon name={name} />
   </Suspense>
