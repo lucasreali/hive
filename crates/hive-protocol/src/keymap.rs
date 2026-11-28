@@ -194,10 +194,12 @@ pub struct Chord {
 /// `text` cut to [`CHORD_LIMIT`] bytes (at a character's start) and quoted, its control
 /// characters escaped.
 pub fn quote(text: &str) -> String {
-    let mut end = text.len().min(CHORD_LIMIT);
-    while !text.is_char_boundary(end) {
-        end -= 1;
-    }
+    // Bounded by the text, whatever a mutated step does (no loop of its own).
+    let ends = text.char_indices().map(|(i, c)| i + c.len_utf8());
+    let end = ends
+        .take_while(|end| *end <= CHORD_LIMIT)
+        .last()
+        .unwrap_or(0);
     format!("{:?}", &text[..end])
 }
 
