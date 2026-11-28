@@ -1140,9 +1140,10 @@ test("a dead key then a key it does not combine with types each once, on macOS (
   showTerminal(id);
   asMac();
   const sent = () => write.mock.calls.map(([, data]) => data);
-  // ´ then t: the apostrophe of "don't", as macOS types it; " then x, ~ then /.
+  // ´ then t: the apostrophe of "don't", as macOS types it, the t right after the accent xterm
+  // sends; " then x, ~ then /.
   await deadKey(term, "'", 222, "t");
-  expect(sent()).toEqual(["'", "t"]);
+  expect(sent()).toEqual(["'t"]);
   await deadKey(term, '"', 222, "x");
   await deadKey(term, "˜", 192, "/");
   expect(sent().join("")).toBe(`'t"x˜/`);
@@ -1153,7 +1154,7 @@ test("a dead key then a key it does not combine with types each once, on macOS (
   // A next key typed before xterm sent the accent comes after the taken one: never "'ht".
   const h = () => press(term, "h", { ctrlKey: false, shiftKey: false, keyCode: 72 });
   await deadKey(term, "'", 222, "t", "", h);
-  expect(sent()).toEqual(["'", "t", "h"]);
+  expect(sent().join("")).toBe("'th");
   write.mockRestore();
 });
 
@@ -1187,11 +1188,81 @@ test("only a dead key's shape is taken: a letter's commit, a composing key, off 
   await commit("'");
   expect(press(term, "'t", { ...none, metaKey: true, keyCode: 222 }).defaultPrevented).toBe(false);
   expect(sent()).not.toContain("t");
+  // A letter's commit (ã, press-and-hold's or an IME's) then a key starting with it: xterm's.
+  await commit("ã");
+  expect(press(term, "ãx", { ...none, keyCode: 222 }).defaultPrevented).toBe(false);
   write.mockClear();
-  // Off macOS xterm keeps its own handling.
+  // Off macOS xterm keeps its own handling: this records xterm's own loss of the t there (the
+  // traced shape is macOS WebKit's), not what Hive wants.
   Object.defineProperty(navigator, "userAgent", { value: "Linux", configurable: true });
   await deadKey(term, "'", 222, "t");
   expect(sent()).not.toContain("t");
+  write.mockRestore();
+});
+
+test("a key taken after an accent is never lost or reordered, however fast the next keys come (29.7)", async () => {
+  const write = spyOn(transport, "writeTerminal");
+  const { id, term } = await open();
+  showTerminal(id);
+  asMac();
+  const sent = () => write.mock.calls.map(([, data]) => data);
+  const area = term.textarea as HTMLTextAreaElement;
+  const composition = (type: string, data: string) => {
+    const event = new CompositionEvent(type, { bubbles: true });
+    Object.defineProperty(event, "data", { value: data });
+    area.dispatchEvent(event);
+  };
+  const key = (key: string, keyCode: number) => {
+    const event = new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true });
+    Object.defineProperty(event, "keyCode", { value: keyCode });
+    area.dispatchEvent(event);
+    return event;
+  };
+  // A dead key's composition committed as `text`, in one task, as WebKit sends it fast.
+  const accent = (text: string) => {
+    key("Dead", 229);
+    composition("compositionstart", "");
+    composition("compositionupdate", "'");
+    area.value += text;
+    composition("compositionend", text);
+  };
+  // ´ t ´ a and ´ t ´ x before xterm sends the first accent: it sends them in one piece.
+  accent("'");
+  expect(key("'t", 222).defaultPrevented).toBe(true);
+  accent("á");
+  key("á", 229);
+  await settle();
+  await settle();
+  expect(sent().join("")).toBe("'tá");
+  write.mockClear();
+  accent("'");
+  key("'t", 222);
+  accent("'");
+  key("'x", 222);
+  await settle();
+  await settle();
+  expect(sent().join("")).toBe("'t'x");
+  write.mockClear();
+  // A key Hive sends itself meanwhile (a focus report) leaves the t waiting for the accent.
+  accent("'");
+  key("'t", 222);
+  term.input("\x1b[O");
+  await settle();
+  expect(sent()).toEqual(["\x1b[O", "'t"]);
+  write.mockClear();
+  // The accent sent already: the t goes at once.
+  accent("'");
+  await settle();
+  key("'t", 222);
+  expect(sent()).toEqual(["'", "t"]);
+  write.mockClear();
+  // An accent xterm never sends as it was (its text gone from the field): the t still goes.
+  accent("'");
+  key("'t", 222);
+  area.value = area.value.slice(0, -1);
+  await settle();
+  await settle();
+  expect(sent()).toEqual(["t"]);
   write.mockRestore();
 });
 
