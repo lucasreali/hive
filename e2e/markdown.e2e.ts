@@ -1,4 +1,4 @@
-import { expect, test } from "@playwright/test";
+import { expect, type Locator, type Page, test } from "@playwright/test";
 import { keyLabel, mod } from "./host";
 
 test("markdown: the eye and Ctrl+Shift+V show a Markdown file rendered; Ctrl+S shows the text (11.2)", async ({
@@ -203,6 +203,110 @@ for (const panelWidth of [280, 640]) {
     expect(layout.pageFits).toBe(true);
     expect(layout.viewFits).toBe(true);
     if (panelWidth === 640) await expect(rendered).toHaveScreenshot("markdown-table-columns.png");
+  });
+}
+
+// 28.23: a table like TODO.md's Defaults ledger, one long column between two short ones.
+const LEDGER = `| Task | Default taken | Status |
+|---|---|---|
+| 1.1 | ${"The design tokens and the glossary are a proposal in the reference, kept until the human reviews them. ".repeat(3)}| accepted |
+| 12.10 | ${"Scrollback 5000 lines, WebGL only on the shown terminal and the DOM renderer on loss. ".repeat(4)}| pending |
+| 3.4 | A short one. | accepted |
+`;
+
+/**
+ * Each column of the rendered table: its width, the width its widest cell needs on one line, and
+ * the most lines a cell of it takes; and whether the table fills the document's column.
+ */
+const tableColumns = (rendered: Locator) =>
+  rendered.evaluate((root) => {
+    const table = root.querySelector("table") as HTMLTableElement;
+    const lines = (cell: Element) => {
+      const range = document.createRange();
+      range.selectNodeContents(cell);
+      return new Set([...range.getClientRects()].map((r) => Math.round(r.top))).size;
+    };
+    // The cell's text on one line, with the cell's padding and borders.
+    const need = (cell: HTMLElement) => {
+      const style = getComputedStyle(cell);
+      const probe = document.createElement("span");
+      probe.style.whiteSpace = "nowrap";
+      probe.style.font = style.font;
+      probe.append(...[...cell.childNodes].map((n) => n.cloneNode(true)));
+      document.body.append(probe);
+      const text = probe.getBoundingClientRect().width;
+      probe.remove();
+      const sides = ["paddingLeft", "paddingRight", "borderLeftWidth", "borderRightWidth"] as const;
+      return sides.reduce((sum, side) => sum + Number.parseFloat(style[side]), text);
+    };
+    const rows = [...table.rows];
+    const columns = [...rows[0].cells].map((_, i) => {
+      const cells = rows.map((r) => r.cells[i] as HTMLElement);
+      return {
+        width: cells[0].getBoundingClientRect().width,
+        need: Math.max(...cells.map(need)),
+        lines: Math.max(...cells.map(lines)),
+      };
+    });
+    const doc = root.querySelector(".markdown-doc") as HTMLElement;
+    const box = root.querySelector(".md-table") as HTMLElement;
+    return {
+      columns,
+      fills: Math.abs(table.getBoundingClientRect().width - doc.clientWidth) <= 1,
+      scrolls: box.scrollWidth > box.clientWidth,
+    };
+  });
+
+/** README.md of fix-login holding `text`, rendered; its view. */
+async function rendered(page: Page, text: string) {
+  const tree = page.getByRole("navigation", { name: "Projects" });
+  await tree.getByRole("button", { name: "fix-login" }).click();
+  await page
+    .getByRole("region", { name: "Files" })
+    .getByRole("treeitem", { name: "README.md" })
+    .click();
+  const view = page.getByRole("region", { name: "README.md" });
+  await view.locator(".cm-line").first().click();
+  await page.keyboard.press(`${mod}+a`);
+  await page.keyboard.insertText(text);
+  await view.getByRole("button", { name: "Show rendered Markdown" }).click();
+  await expect(view.locator(".markdown-view").getByRole("table")).toBeVisible();
+  return view;
+}
+
+for (const [pane, windowWidth, panelWidth, split] of [
+  ["narrow", 1280, 640, false],
+  ["wide", 1920, 280, false],
+  ["split", 1920, 280, true],
+] as const) {
+  test(`markdown: a table's short columns are as wide as their widest cell, in a ${pane} pane (28.23)`, async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width: windowWidth, height: 900 });
+    await page.addInitScript(
+      (w) => localStorage.setItem("hive.widths", JSON.stringify({ panelWidth: w })),
+      panelWidth,
+    );
+    await page.goto("/");
+    const view = await rendered(page, LEDGER);
+    if (split) {
+      // Beside a terminal, as the human had TODO.md's preview.
+      await page.keyboard.press(`${mod}+Shift+D`);
+      await expect(page.locator(".terminal-host")).toBeVisible();
+      await expect(view).toHaveAttribute("data-pane", "left");
+    }
+    const md = view.locator(".markdown-view");
+    const { columns, fills, scrolls } = await tableColumns(md);
+    await page.screenshot({ path: `target/e2e/markdown-ledger-${pane}.png` });
+    const [task, text, status] = columns;
+    for (const short of [task, status]) {
+      expect(short.lines).toBe(1);
+      expect(short.width).toBeLessThanOrEqual(short.need + 1);
+    }
+    // The rest goes to the text, which wraps, and the table fills its column without scrolling.
+    expect(text.lines).toBeGreaterThan(1);
+    expect(fills).toBe(true);
+    expect(scrolls).toBe(false);
   });
 }
 

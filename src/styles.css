@@ -3944,6 +3944,7 @@ button.result-file:hover,
 .session {
   position: relative;
   border-bottom: 1px solid var(--border-subtle);
+  container: session / inline-size;
 }
 
 /* Placed by the Sessions list's virtualizer (the pull requests list reuses `.session`). */
@@ -4036,21 +4037,40 @@ button.result-file:hover,
 }
 
 /* "Who wrote this line?" (27.5): the edit found, a session's changed files, and the session of
-   another worktree shown on top. */
+   another worktree shown on top. Laid out as the Files view's rows (28.22): inside the card's
+   padding, one 22px line each, the found file selected as the Files view selects the open one;
+   the found session marked by a bar on its left, so the selected file still shows in it. */
 .session[data-focused] {
-  background: var(--selected);
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+
+/* A file or the edit line hovered: it, not the whole card, takes the hover (as in the Files view). */
+.session:has(.session-file:hover, .session-edit:hover) {
+  background: transparent;
 }
 
 .session-edit {
-  font-size: var(--fs-meta);
-  color: var(--accent);
+  display: block;
+  width: calc(100% - 16px);
+  margin: -6px 8px 6px;
+  padding: 2px 4px;
+  border-radius: var(--radius-sm);
+  overflow-wrap: anywhere;
+  text-align: left;
+  font-size: var(--fs-small);
+  color: var(--text-2);
+}
+
+.session-edit:hover {
+  background: var(--hover);
+  color: var(--text);
 }
 
 .session-files-toggle {
   display: flex;
   align-items: center;
   gap: 4px;
-  margin: -4px 12px 8px;
+  margin: -4px 12px 6px;
   padding: 0 4px;
   border-radius: var(--radius-sm);
   font-size: var(--fs-meta);
@@ -4061,47 +4081,145 @@ button.result-file:hover,
 .session-files-toggle:focus-visible {
   background: var(--selected-hover);
   color: var(--text);
-  outline: none;
 }
 
 .session-files-toggle[aria-expanded="true"] .session-files-caret {
   transform: rotate(90deg);
 }
 
-.session-files {
+.session-edit + .session-files-toggle {
+  margin-top: 0;
+}
+
+/* Under its toggle's label, inside the card's padding (`.session` outranks `.sessions ul`). */
+.session .session-files {
   display: flex;
   flex-direction: column;
-  padding: 0 8px 8px 24px;
+  margin: 0;
+  padding: 0 12px 8px 24px;
+  list-style: none;
+}
+
+/* The right panel at its narrowest: the files under the caret, so the name keeps its room. */
+@container session (max-width: 280px) {
+  .session .session-files {
+    padding: 0 6px 8px 8px;
+  }
+
+  .session .session-file {
+    padding: 0 4px;
+  }
+
+  /* Only a sliver of it would show: the full path stays in the tooltip. */
+  .session .session-file-folder {
+    display: none;
+  }
+}
+
+.session-files.hint {
+  font-size: var(--fs-meta);
 }
 
 .session-file {
   width: 100%;
+  height: 22px;
+  overflow: hidden;
   display: flex;
-  flex-direction: column;
-  gap: 1px;
-  padding: 3px 6px;
-  text-align: left;
-  border-radius: var(--radius-sm);
+  align-items: center;
   min-width: 0;
+  padding: 0 6px;
+  border-radius: var(--radius-sm);
+  text-align: left;
+  white-space: nowrap;
+  color: var(--text-3);
 }
 
-.session-file:hover,
-.session-file:focus-visible {
-  background: var(--selected-hover);
-  outline: none;
+/* Spaces as margins, not a gap: a folder that gave way takes no room at all. */
+.session-file > :first-child {
+  margin-right: 6px;
+}
+
+/* Right-aligned; the numbers keep a space from the name even when nothing is between them. */
+.session-file-worktree,
+.session-file-numbers:first-child {
+  margin-left: auto;
+}
+
+.session-file-numbers:first-child {
+  padding-left: 6px;
+}
+
+/* Inside the worktree's name, so it goes with the name when that gives way. */
+.session-file-worktree::before {
+  content: "";
+  display: inline-block;
+  width: 6px;
+}
+
+.session-file:hover {
+  background: var(--hover);
 }
 
 .session-file[data-focused] {
-  box-shadow: inset 2px 0 0 var(--accent);
-  background: var(--selected-hover);
+  background: var(--selected);
 }
 
-.session-file-path {
+.session-file-name {
+  flex: 0 1 auto;
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
-  white-space: nowrap;
-  font-size: var(--fs-small);
+  font-size: var(--fs-mono);
   color: var(--text);
+}
+
+/* The folder, cut in the middle: its head gives way, then its last folder is cut at its end.
+   It gives way after another worktree's name and before the file's name (the shrink factors). */
+.session-file-folder {
+  flex: 0 10 auto;
+  min-width: 0;
+  overflow: hidden;
+  display: flex;
+  font-size: var(--fs-small);
+}
+
+.session-file-folder::before {
+  content: "";
+  flex: none;
+  width: 6px;
+}
+
+.session-file-head {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.session-file-tail {
+  flex: 0 0 auto;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* The meta's parts are the row's own flex items: another worktree's name gives way first, the
+   numbers never. */
+.session-file .session-meta {
+  display: contents;
+}
+
+.session-file-worktree {
+  flex: 0 100 auto;
+  min-width: 0;
+  white-space: pre;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.session-file-numbers {
+  flex: none;
+  white-space: pre;
 }
 
 .sessions-from {

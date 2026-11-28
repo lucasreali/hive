@@ -22,6 +22,7 @@ import {
   copy,
   locate,
   MOVE_NOTE,
+  pathParts,
   remove,
   resume,
   sessionName,
@@ -38,7 +39,7 @@ import {
 import { transport } from "../transport";
 import { ICON, RefreshIcon, StateIcon } from "./icons";
 import { useKeptScroll, viewKey } from "./panelPlace";
-import { leaveFile } from "./RightPanel";
+import { leaveFile, TreeFileIcon } from "./RightPanel";
 import { SearchField } from "./SearchField";
 import { Submenu } from "./TerminalArea";
 import { ContextMenu } from "./WorktreeMenu";
@@ -203,8 +204,8 @@ function FocusFrom({
               <span className="session-title">
                 <span className="label">{editAuthor(edit)}</span>
               </span>
-              <span className="session-edit">{editLine(edit)}</span>
             </div>
+            <EditLine focus={focus} />
             <SessionFiles id={edit.session} worktree={worktree} focus={focus} />
           </li>
         )}
@@ -269,8 +270,8 @@ function SessionRow({ session: x, live, worktree, index, measure, top }: RowProp
             .filter(Boolean)
             .join(" · ")}
         </span>
-        {focus && <span className="session-edit">{editLine(focus.edit)}</span>}
       </button>
+      {focus && <EditLine focus={focus} />}
       {files > 0 && (
         <button
           type="button"
@@ -304,18 +305,36 @@ const toggleFiles = (id: string) =>
       : [...s.openSessionFiles, id],
   }));
 
-/** A changed file's line: its edits, its lines still the session's, and the last edit's time. */
+/**
+ * The edit "Who wrote this line?" found (27.5), as a line of its session's row (28.22): a click
+ * opens its file at its first line.
+ */
+function EditLine({ focus: { edit, path } }: { focus: SessionFocus }) {
+  return (
+    <button
+      type="button"
+      className="session-edit"
+      title={`Open ${path} at line ${edit.start}`}
+      onClick={() => leaveFile({ worktree: edit.worktree, path }, true, edit.start)}
+    >
+      {editLine(edit)}
+    </button>
+  );
+}
+
+/** A changed file's numbers: its edits, its lines still the session's, and the last edit's time. */
 const fileMeta = (f: SessionFile) =>
   [
     f.edits === 1 ? "1 edit" : `${f.edits} edits`,
-    `${f.lines_now} ${f.lines_now === 1 ? "line" : "lines"} now`,
+    `${f.lines_now} ${f.lines_now === 1 ? "line" : "lines"}`,
     ago(f.last_ms),
   ].join(" · ");
 
 /**
- * A session's "Files changed" (27.5), asked of the service each time it opens: a click opens
- * the file at the first of its lines that are still the session's. The file an edit was found
- * in is highlighted.
+ * A session's "Files changed" (27.5), asked of the service each time it opens: one line per file
+ * (28.22), its name, then its folder dimmed and cut in the middle, then its numbers; a click opens
+ * the file at the first of its lines that are still the session's. The file an edit was found in
+ * is selected, as the Files view selects the open file.
  */
 function SessionFiles({
   id,
@@ -334,22 +353,39 @@ function SessionFiles({
     <ul className="session-files" aria-label="Files changed">
       {listed.files.map((f) => {
         const mark = focus?.path === f.path && focus.edit.worktree === f.worktree;
+        const { name, head, tail } = pathParts(f.path);
         return (
           <li key={`${f.worktree}\n${f.path}`}>
             <button
               type="button"
               className="session-file"
+              aria-current={mark || undefined}
               data-focused={mark || undefined}
               title={f.path}
               onClick={() =>
                 leaveFile({ worktree: f.worktree, path: f.path }, true, f.first_line ?? undefined)
               }
             >
-              <span className="session-file-path">{f.path}</span>
+              <TreeFileIcon name={name} />
+              {/* The file's name gives way last, and keeps about 7 characters (28.22). */}
+              <span
+                className="session-file-name"
+                style={{ minWidth: `${Math.min(name.length, 7)}ch` }}
+              >
+                {name}
+              </span>
+              <span className="session-file-folder">
+                <span className="session-file-head">{head}</span>
+                <span className="session-file-tail">{tail}</span>
+              </span>
+              {/* Another worktree's file names it first; that name gives way, its numbers never. */}
               <span className="session-meta">
-                {f.worktree === worktree
-                  ? fileMeta(f)
-                  : `${worktreeName(projects, f.worktree)} · ${fileMeta(f)}`}
+                {f.worktree !== worktree && (
+                  <span className="session-file-worktree">
+                    {`${worktreeName(projects, f.worktree)} · `}
+                  </span>
+                )}
+                <span className="session-file-numbers">{fileMeta(f)}</span>
               </span>
             </button>
           </li>
