@@ -126,14 +126,20 @@ impl State {
     /// The agent `id`'s own `kind` of event for its turn snapshots (27.2): a prompt takes one of
     /// `worktree` (a repository's, not a folder project's), an edit before it is done makes it
     /// late, its end drops its snapshots. Git runs on a blocking thread, never on the hook's path;
-    /// the watched worktree's changes are sent again once it is done.
-    fn turn_snapshot(self: &Arc<Self>, id: &str, worktree: Option<&str>, kind: &EventKind) {
+    /// the watched worktree's changes are sent again once it is done. Returns the task doing it,
+    /// when there is one.
+    fn turn_snapshot(
+        self: &Arc<Self>,
+        id: &str,
+        worktree: Option<&str>,
+        kind: &EventKind,
+    ) -> Option<tokio::task::JoinHandle<()>> {
         let (state, snapshots, id) = (self.clone(), self.snapshots.clone(), id.to_owned());
         match (kind, worktree) {
             (EventKind::PromptSubmitted, Some(worktree)) => {
                 snapshots.started(&id);
                 let (worktree, started) = (worktree.to_owned(), crate::hook::now_ms());
-                tokio::spawn(async move {
+                Some(tokio::spawn(async move {
                     let blocking = state.clone();
                     let taken = tokio::task::spawn_blocking(move || {
                         // A folder project's folder (23.1) is in no repository: git refuses it.
@@ -147,20 +153,19 @@ impl State {
                         Ok(worktree) => state.rewatch(Some(&worktree)).await,
                         Err(err) => eprintln!("hive: warning: no snapshot of this turn: {err}"),
                     }
-                });
+                }))
             }
             (EventKind::ToolFinished { tool: Some(tool) }, _)
                 if snapshot::EDITS.contains(&tool.as_str()) =>
             {
                 snapshots.edited(&id);
+                None
             }
-            (EventKind::SessionEnded { .. }, _) => {
-                tokio::spawn(async move {
-                    let _ = tokio::task::spawn_blocking(move || snapshots.end(&id)).await;
-                    state.rewatch(None).await;
-                });
-            }
-            _ => {}
+            (EventKind::SessionEnded { .. }, _) => Some(tokio::spawn(async move {
+                let _ = tokio::task::spawn_blocking(move || snapshots.end(&id)).await;
+                state.rewatch(None).await;
+            })),
+            _ => None,
         }
     }
 
@@ -425,6 +430,24 @@ mod tests {
         let left = state.agents.lock().await["s"].message("s");
         assert!(
             matches!(left, Control::AgentState { ref background, .. } if background.is_empty())
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_prompt_in_a_folder_hive_does_not_follow_takes_no_snapshot() {
+        let dir = tempfile::tempdir().unwrap();
+        let state = super::super::test_state(dir.path());
+        let elsewhere = dir.path().join("elsewhere");
+        std::fs::create_dir(&elsewhere).unwrap();
+        let id = elsewhere.display().to_string();
+        let task = state.turn_snapshot("s", Some(&id), &EventKind::PromptSubmitted);
+        task.unwrap().await.unwrap();
+        assert!(state.snapshots.turns(&elsewhere, &id).is_empty());
+        // Nothing to do for another event.
+        assert!(
+            state
+                .turn_snapshot("s", Some(&id), &EventKind::TurnFinished)
+                .is_none()
         );
     }
 }
