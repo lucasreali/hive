@@ -26,26 +26,27 @@ pub const CURRENT: Platform = if cfg!(target_os = "macos") {
     Platform::Windows
 };
 
-/// Every command id the keymap may name, sorted: the app's `COMMANDS` (`src/keymap.ts`), which
-/// a bun test checks equal.
+/// Every command id the keymap may name, in the app's table order (`COMMAND_TABLE` in
+/// `src/keymap.ts`, which a bun test checks equal): of two commands a user bound to one chord,
+/// the one first here runs ([`crate::keymap`]'s users, the app and the macOS menu alike).
 pub const COMMAND_IDS: &[&str] = &[
-    "add-project",
-    "close-tab",
-    "comment",
-    "find-in-terminal",
-    "font-bigger",
-    "font-reset",
-    "font-smaller",
+    "palette",
+    "settings",
     "keyboard-settings",
+    "worktree-picker",
     "new-terminal",
     "new-worktree",
-    "next-pending",
-    "next-tab",
-    "palette",
-    "previous-tab",
-    "send-reference",
-    "settings",
     "split-terminal",
+    "toggle-panel",
+    "add-project",
+    "send-reference",
+    "comment",
+    "next-pending",
+    "find-in-terminal",
+    "toggle-markdown",
+    "close-tab",
+    "next-tab",
+    "previous-tab",
     "tab-1",
     "tab-2",
     "tab-3",
@@ -55,9 +56,9 @@ pub const COMMAND_IDS: &[&str] = &[
     "tab-7",
     "tab-8",
     "tab-9",
-    "toggle-markdown",
-    "toggle-panel",
-    "worktree-picker",
+    "font-bigger",
+    "font-smaller",
+    "font-reset",
 ];
 
 /// The longest shortcut, and the longest piece of user text quoted in a problem, in bytes.
@@ -374,12 +375,14 @@ impl Keymap {
     }
 
     /// The valid shortcuts of the command `id` (the bad ones ignored), or `None` when the
-    /// keymap has no entry for it, or one of the wrong type: the command keeps its default.
+    /// keymap has no entry for it, one of the wrong type, or one whose every shortcut is bad:
+    /// the command keeps its default (an empty entry, `[]` or null, is no shortcut).
     pub fn chords(&self, id: &str, platform: Platform) -> Option<Vec<Chord>> {
         let (_, value) = self.entries().find(|(key, _)| *key == id)?;
         let (texts, _) = texts(value)?;
         let chords = texts.iter().map(|t| entry_chord(t, id, platform));
-        Some(chords.filter_map(Result::ok).collect())
+        let chords: Vec<Chord> = chords.filter_map(Result::ok).collect();
+        (!chords.is_empty() || texts.is_empty()).then_some(chords)
     }
 }
 
@@ -693,8 +696,11 @@ mod tests {
     }
 
     #[test]
-    fn command_ids_are_sorted_and_unique() {
-        assert!(COMMAND_IDS.windows(2).all(|w| w[0] < w[1]));
+    fn command_ids_are_unique() {
+        let mut sorted = COMMAND_IDS.to_vec();
+        sorted.sort_unstable();
+        sorted.dedup();
+        assert_eq!(sorted.len(), COMMAND_IDS.len(), "each id once");
         assert_eq!(CURRENT == Mac, cfg!(target_os = "macos"));
         // `FIXED`'s entries are made at compile time; so is this one at run time.
         assert_eq!(fixed(Mac, "Cmd+C", "w", Some("x")).except, Some("x"));
@@ -827,6 +833,11 @@ mod tests {
         assert_eq!(keymap.chords("close-tab", Mac), None);
         assert_eq!(keymap.chords("tab-1", Mac), None);
         assert_eq!(Keymap(json!([])).chords("palette", Mac), None);
+        // Every chord bad: the default applies (still listed as problems).
+        let bad = Keymap(json!({"palette": ["Hyper+P", "Cmd+C"], "comment": "M"}));
+        assert_eq!(bad.chords("palette", Mac), None);
+        assert_eq!(bad.chords("comment", Mac), None);
+        assert_eq!(check(&bad, Mac).len(), 3);
     }
 
     #[test]
