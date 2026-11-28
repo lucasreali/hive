@@ -96,7 +96,10 @@ const home: Space = { id: "default", name: "Home", projects: [shop.id], env: NO_
 const work: Space = { id: "w", name: "Work", projects: [api.id], env: NO_ENV };
 const spaces = (current: string) => apply({ type: "spaces", spaces: [home, work], current });
 /** A restart: the store as a new run starts it, with what the last run saved. */
-const restart = () => useHive.setState({ ...initialState, spacePlaces: savedSpacePlaces() }, true);
+const restart = () => {
+  useHive.setState(initialState, true);
+  useHive.setState({ ...initialState, spacePlaces: savedSpacePlaces(), restoring: true }, true);
+};
 
 test("the launch selects the place the current space was left on, others' kept too (rows 1, 2)", () => {
   spaces("default");

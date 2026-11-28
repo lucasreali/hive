@@ -458,6 +458,11 @@ export type HiveState = {
   resuming: string[] | null;
   /** The agent the current space was left on, not known yet at launch: selected once it is. */
   placeAwaited: string | null;
+  /**
+   * The launch's kept terminals being reattached (`terminal_kept`), null before any: once none
+   * is left and no chat is resumed, the restore ends.
+   */
+  reattaching: number | null;
   /** By worktree (`placeKey`): the right panel's view it showed last (28.19), kept between runs. */
   panelViews: Record<string, PanelView>;
   /** Every open file's tab, in the order they opened; reopened after a restart (28.27). */
@@ -711,6 +716,7 @@ export const initialState: HiveState = {
   restoring: false,
   resuming: null,
   placeAwaited: null,
+  reattaching: null,
   panelViews: {},
   openFiles: [],
   openFile: null,
@@ -1173,7 +1179,8 @@ export function followPlaces(s: HiveState, prev: HiveState): void {
 export function followSpacePlaces(s: HiveState, prev: HiveState): void {
   if (!s.placesRestored) {
     if (s.projects === null || s.spaces === null || s.currentSpace === null) return;
-    const kept = s.selection === null ? s.spacePlaces[spaceKey(s)] : null;
+    // Only the launch restore selects the place: after the user's move, nothing is.
+    const kept = s.selection === null && s.restoring ? s.spacePlaces[spaceKey(s)] : null;
     // An agent not known yet: its project for now, the agent once it comes (while restoring).
     const unknown = !!kept && !owner(s.projects, kept.place) && !s.agents[kept.place];
     const awaited = unknown && s.restoring ? { placeAwaited: kept?.place ?? null } : {};
@@ -1245,11 +1252,12 @@ export function placesOf(view: HiveState): HostPlaces {
  */
 export function saveHosts(s: HiveState, prev: HiveState): void {
   if (HOST_PLACE_FIELDS.every((field) => s[field] === prev[field])) return;
-  const keys = new Set([...Object.keys(lastRun), ...knownHosts(s).map(hostKey)]);
-  const hosts = Object.fromEntries(
-    [...keys].map((key) => [key, placesOf(hostView(s, key === "" ? null : key))]),
-  );
-  saveHostPlaces(hosts);
+  const known = new Set(knownHosts(s).map(hostKey));
+  const keys = new Set([...Object.keys(lastRun), ...known]);
+  // A host not linked in this run keeps what the last run saved, untouched.
+  const places = (key: string) =>
+    known.has(key) ? placesOf(hostView(s, key === "" ? null : key)) : (lastRun[key] as HostPlaces);
+  saveHostPlaces(Object.fromEntries([...keys].map((key) => [key, places(key)])));
 }
 
 /**
@@ -1340,12 +1348,26 @@ const linkDropped = (s: HiveState, prev: HiveState): boolean =>
  */
 export function followRestore(s: HiveState, prev: HiveState): void {
   if (!useHive.getState().restoring) return;
+  // Bounded in any case: at most `RESTORE_LIMIT_MS` after the service's connection.
+  const connected = s.connection.status === "connected";
+  if (connected && prev.connection.status !== "connected" && restoreTimer === null) {
+    restoreTimer = setTimeout(endRestore, RESTORE_LIMIT_MS);
+  }
   const named = s.resuming?.every((id) => id in s.agents);
-  if (named || userMoved(s, prev) || linkDropped(s, prev)) endRestore();
+  // No chat resumed (the service sends none then): done once the kept terminals are reattached.
+  const reattached = s.reattaching === 0 && s.resuming === null;
+  if (named || reattached || userMoved(s, prev) || linkDropped(s, prev)) endRestore();
 }
+
+/** The longest the launch restore lasts after the service's connection (28.27). */
+export const RESTORE_LIMIT_MS = 30_000;
+/** The timer that ends the launch restore at `RESTORE_LIMIT_MS`, once started. */
+let restoreTimer: ReturnType<typeof setTimeout> | null = null;
 
 /** Ends the launch restore for good (`followRestore`). */
 export function endRestore(): void {
+  if (restoreTimer !== null) clearTimeout(restoreTimer);
+  restoreTimer = null;
   if (!useHive.getState().restoring) return;
   launchOver = true;
   starts.clear();
@@ -1355,6 +1377,7 @@ export function endRestore(): void {
     lastRunHistory: {},
     resuming: null,
     placeAwaited: null,
+    reattaching: null,
     pendingSplits: [],
     stash: Object.fromEntries(
       Object.entries(s.stash).map(([host, data]) => [host, { ...data, pendingSplits: [] }]),
@@ -1365,6 +1388,14 @@ export function endRestore(): void {
 /** The launch resumes chats `ids` (`restore_sessions`): the restore lasts until they are named. */
 export const resumeAtLaunch = (ids: string[]) =>
   useHive.setState((s) => (s.restoring ? { resuming: [...(s.resuming ?? []), ...ids] } : {}));
+
+/** A kept terminal of the launch is being reattached (`terminal_kept`). */
+export const reattachStarted = () =>
+  useHive.setState((s) => (s.restoring ? { reattaching: (s.reattaching ?? 0) + 1 } : {}));
+
+/** A kept terminal of the launch is reattached, or could not be. */
+export const reattachDone = () =>
+  useHive.setState((s) => (s.restoring && s.reattaching ? { reattaching: s.reattaching - 1 } : {}));
 
 /** Chat `id` could not be resumed: the restore waits for it no more. */
 export const resumeFailed = (id: string) =>

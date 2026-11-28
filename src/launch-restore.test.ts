@@ -1,23 +1,29 @@
-import { afterEach, beforeEach, expect, test } from "bun:test";
+import { afterEach, beforeEach, expect, jest, test } from "bun:test";
 import { savedHostPlaces, savedSpacePlaces } from "./persist";
 import type { ServiceMessage, Space } from "./protocol";
 import { apply } from "./reduce";
+import { goToAgent } from "./shortcuts";
 import {
   activateTab,
   addTab,
   endRestore,
+  followQuietTabs,
   type HiveState,
   hostStart,
   initialState,
   leaveSpace,
   type OpenFile,
   placesOf,
+  RESTORE_LIMIT_MS,
+  reattachDone,
+  reattachStarted,
   restoredHost,
   resumeAtLaunch,
   resumeFailed,
   setDiffBase,
   setOpenFile,
   startHosts,
+  toggleCollapsed,
   useHive,
   withCollapsed,
 } from "./store";
@@ -38,7 +44,8 @@ const a: OpenFile = { worktree: W, path: "a.ts" };
 const detected = (channel: number, id: string) =>
   apply({ type: "agent_detected", channel, id, project: shop.id, worktree: W, cwd: W });
 /** A chat resumed at launch, or a terminal reattached: its tab takes no focus. */
-const reopen = (id: number) => addTab(id, W, undefined, false);
+const reopen = (id: number, host?: string) => addTab(id, W, host, false);
+const connected = { status: "connected", version: "1", distro: null } as const;
 
 /**
  * A launch whose last run left the Home space on `place` and fix-login with `history` (the most
@@ -65,8 +72,14 @@ function launch(history: string[], files: OpenFile[] = [], place: string = fixLo
   apply({ type: "spaces", spaces: [home], current: "default" });
 }
 
-beforeEach(() => startHosts({}));
+beforeEach(() => {
+  // No restore timer of another test's left.
+  endRestore();
+  startHosts({});
+});
 afterEach(() => {
+  jest.useRealTimers();
+  endRestore();
   startHosts({});
   useHive.setState(initialState, true);
 });
@@ -240,4 +253,85 @@ test("the caps forget the least recently changed; nodes as by default are not sa
   const places = { x: null, default: null, y: null };
   const left = leaveSpace({ ...s(), currentSpace: "default", spacePlaces: places });
   expect(Object.keys(left.spacePlaces ?? {})).toEqual(["x", "y", "default"]);
+});
+
+test("with nothing selected, or another host's terminal, the restore picks nothing", () => {
+  launch(["session:s2"]);
+  reopen(7);
+  reopen(8);
+  expect(shownPane(s())).toBe(7);
+  detected(8, "s2");
+  expect(shownPane(s())).toBe(8);
+  // Another host's reattached terminal waits there, never taking the focus.
+  reopen(10, "gpu");
+  expect([shownPane(s()), s().quietTabs.at(-1)]).toEqual([8, 10]);
+  // With nothing selected (every tab shown), the history picks nothing.
+  const before = s();
+  followQuietTabs({ ...before, selection: null, tabs: [...before.tabs] }, before);
+  expect(s()).toBe(before);
+});
+
+test("no chat resumed: the restore ends once the kept terminals are reattached", () => {
+  launch(["session:s1"]);
+  reattachStarted();
+  reattachStarted();
+  reopen(7);
+  expect([s().reattaching, s().restoring]).toEqual([2, true]);
+  reattachDone();
+  expect(s().restoring).toBe(true);
+  reattachDone();
+  expect([s().restoring, s().reattaching]).toEqual([false, null]);
+  // After the restore, these change nothing.
+  reattachStarted();
+  reattachDone();
+  expect(s().reattaching).toBeNull();
+});
+
+test("the restore ends at the latest 30 s after the service connects, even with a chat never named", () => {
+  jest.useFakeTimers();
+  launch(["session:s1"]);
+  resumeAtLaunch(["s1"]);
+  useHive.setState({ connection: connected });
+  jest.advanceTimersByTime(RESTORE_LIMIT_MS - 1);
+  expect(s().restoring).toBe(true);
+  jest.advanceTimersByTime(1);
+  expect(s().restoring).toBe(false);
+  // Nothing resumed nor kept: it ends then too.
+  launch(["session:s1"]);
+  useHive.setState({ connection: { status: "connecting" } });
+  useHive.setState({ connection: connected });
+  jest.advanceTimersByTime(RESTORE_LIMIT_MS);
+  expect(s().restoring).toBe(false);
+});
+
+test("once the restore ended, the space's place is not selected; going to an agent ends it", () => {
+  useHive.setState(initialState, true);
+  useHive.setState({ spacePlaces: { default: { place: fixLogin.id, project: shop.id } } });
+  apply({ type: "projects", projects: [shop, api] });
+  apply({ type: "spaces", spaces: [home], current: "default" });
+  expect([s().placesRestored, s().selection]).toEqual([true, null]);
+  launch(["session:s1"]);
+  addTab(7, W, undefined, false);
+  detected(7, "s1");
+  const agent = s().agents.s1;
+  if (!agent) throw new Error("no agent");
+  goToAgent(agent);
+  expect(s().restoring).toBe(false);
+});
+
+test("a host not linked in this run keeps its saved places and pairs untouched", () => {
+  const c = fileKey({ worktree: "/srv/w", path: "c.ts" });
+  const off = {
+    files: [{ worktree: "/srv/w", path: "c.ts" }],
+    pairs: [["session:s1", c]] as [string, string][],
+    diffBases: { "/srv/w": "head" as const },
+    collapsed: { "files:/srv/w/src": false },
+  };
+  startHosts({ off });
+  launch(["session:s1"]);
+  endRestore();
+  toggleCollapsed(shop.id);
+  expect(savedHostPlaces().off).toEqual(off);
+  // Linked after the restore, its waiting pairs expire.
+  expect(hostStart("off").pendingSplits).toEqual([]);
 });
