@@ -346,7 +346,7 @@ impl Agent {
         let by = event.subagent.as_ref().map(|s| s.id.as_str());
         match (&event.kind, by) {
             (EventKind::ToolFinished { .. }, _) => {
-                self.background.launch(&event.raw, by, sent_ns, wall);
+                self.background.launch(&event.raw, by, sent_ns, wall, now);
             }
             (EventKind::SessionEnded { .. }, None) => self.background.clear(),
             _ => {}

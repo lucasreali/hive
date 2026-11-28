@@ -9,6 +9,7 @@
 //! text is cleaned of control and invisible characters and cut, and at most
 //! [`MAX_COMMANDS`] are kept, so an `agent_state` stays far under the frame limit.
 
+use std::collections::HashSet;
 use std::time::{Duration, Instant};
 
 use hive_protocol::{
@@ -57,6 +58,8 @@ pub struct Commands {
     entries: Vec<Entry>,
     /// The `sent_ns` of the last `background_tasks` applied: an older list arrived late.
     last_list_ns: u64,
+    /// The task ids of that list (of at most [`MAX_ID`] bytes).
+    last_list: HashSet<String>,
     /// Ended since last taken ([`Commands::take_ended`]).
     ended: Vec<Ended>,
 }
@@ -65,8 +68,17 @@ impl Commands {
     /// The `PostToolUse` `raw` (`hive::slim`'s) that started a background command: a Bash
     /// `tool_response.backgroundTaskId` (its `tool_input.command` and `description` with it)
     /// or a `Monitor`'s `taskId`, by the subagent `by` when it is one's. A command already
-    /// known (from a list that came first) gets what it lacked.
-    pub fn launch(&mut self, raw: &Value, by: Option<&str>, sent_ns: u64, wall_ms: u64) {
+    /// known (from a list that came first) gets what it lacked. A new one sent before the last
+    /// list applied and missing from it had already ended when that list was sent (the hook
+    /// calls arrived out of order): it is recorded ended, `unknown`.
+    pub fn launch(
+        &mut self,
+        raw: &Value,
+        by: Option<&str>,
+        sent_ns: u64,
+        wall_ms: u64,
+        now: Instant,
+    ) {
         let (kind, key) = match raw.get("tool_name").and_then(Value::as_str) {
             Some("Bash") => (BackgroundKind::Shell, "backgroundTaskId"),
             Some("Monitor") => (BackgroundKind::Monitor, "taskId"),
@@ -81,12 +93,16 @@ impl Commands {
         };
         let input = raw.get("tool_input");
         let by = by.filter(|by| by.len() <= MAX_ID);
+        let known = self.entries.iter().any(|e| e.shown.id == id);
         let Some(entry) = self.entry(id, kind, sent_ns, wall_ms) else {
             return;
         };
         fill(&mut entry.shown, input);
         if entry.shown.by.is_none() {
             entry.shown.by = by.map(str::to_owned);
+        }
+        if !known && sent_ns < self.last_list_ns && !self.last_list.contains(id) {
+            self.end(id, BackgroundStatus::Unknown, None, wall_ms, now);
         }
     }
 
@@ -100,12 +116,16 @@ impl Commands {
             return;
         }
         self.last_list_ns = sent_ns;
+        self.last_list.clear();
         let mut listed = Vec::new();
         for task in live {
             let Some(id) = task.get("id").and_then(Value::as_str) else {
                 continue;
             };
             listed.push(id);
+            if id.len() <= MAX_ID {
+                self.last_list.insert(id.to_owned());
+            }
             let kind = match task.get("type").and_then(Value::as_str) {
                 Some("shell") => BackgroundKind::Shell,
                 Some("monitor") => BackgroundKind::Monitor,
@@ -290,10 +310,10 @@ mod tests {
     #[test]
     fn a_launch_lists_the_command_with_its_text_and_who_started_it() {
         let mut commands = Commands::default();
-        commands.launch(&bash("b1", "sleep 20"), None, 1, 5_000);
-        commands.launch(&bash("b2", "make"), Some("sub"), 2, 6_000);
+        commands.launch(&bash("b1", "sleep 20"), None, 1, 5_000, Instant::now());
+        commands.launch(&bash("b2", "make"), Some("sub"), 2, 6_000, Instant::now());
         let monitor = json!({"tool_name": "Monitor", "tool_response": {"taskId": "m1"}});
-        commands.launch(&monitor, None, 3, 7_000);
+        commands.launch(&monitor, None, 3, 7_000, Instant::now());
         let listed = commands.listed();
         assert_eq!(
             listed[0],
@@ -314,8 +334,8 @@ mod tests {
         );
         assert_eq!(listed[2].description, None);
         // A launch seen again changes nothing it already has.
-        commands.launch(&bash("b1", "other"), None, 4, 9_000);
-        commands.launch(&bash("b2", "other"), Some("x"), 4, 9_000);
+        commands.launch(&bash("b1", "other"), None, 4, 9_000, Instant::now());
+        commands.launch(&bash("b2", "other"), Some("x"), 4, 9_000, Instant::now());
         assert_eq!(commands.listed()[..2], listed[..2]);
     }
 
@@ -331,7 +351,7 @@ mod tests {
             json!({"tool_response": {"backgroundTaskId": "t"}}),
         ];
         for raw in &cases {
-            commands.launch(raw, None, 1, 1);
+            commands.launch(raw, None, 1, 1, Instant::now());
         }
         assert!(commands.listed().is_empty());
     }
@@ -342,25 +362,37 @@ mod tests {
         let long = "x".repeat(COMMAND_CHARS + 5);
         let mut raw = bash("b1", &format!("\u{1b}[31m{long}"));
         raw["tool_input"]["description"] = json!("d".repeat(DESCRIPTION_CHARS + 1));
-        commands.launch(&raw, Some(&"s".repeat(MAX_ID + 1)), 1, 1);
+        commands.launch(&raw, Some(&"s".repeat(MAX_ID + 1)), 1, 1, Instant::now());
         let shown = &commands.listed()[0];
         assert_eq!(shown.command.chars().count(), COMMAND_CHARS);
         assert!(shown.command.starts_with("[31mxx") && shown.command.ends_with('…'));
         let description = shown.description.as_deref().unwrap();
         assert_eq!(description.chars().count(), DESCRIPTION_CHARS);
         assert_eq!(shown.by, None);
-        commands.launch(&bash("b2", "ok"), Some(&"s".repeat(MAX_ID)), 1, 1);
+        commands.launch(
+            &bash("b2", "ok"),
+            Some(&"s".repeat(MAX_ID)),
+            1,
+            1,
+            Instant::now(),
+        );
         assert_eq!(
             commands.listed()[1].by.as_ref().map(String::len),
             Some(MAX_ID)
         );
         // An id too long is ignored; one at the limit is kept.
-        commands.launch(&bash(&"i".repeat(MAX_ID + 1), "x"), None, 1, 1);
-        commands.launch(&bash(&"i".repeat(MAX_ID), "x"), None, 1, 1);
+        commands.launch(
+            &bash(&"i".repeat(MAX_ID + 1), "x"),
+            None,
+            1,
+            1,
+            Instant::now(),
+        );
+        commands.launch(&bash(&"i".repeat(MAX_ID), "x"), None, 1, 1, Instant::now());
         let lengths: Vec<usize> = commands.listed().iter().map(|c| c.id.len()).collect();
         assert_eq!(lengths, [2, 2, MAX_ID]);
         // Blank text is no text.
-        commands.launch(&bash("b3", " \u{7} "), None, 1, 1);
+        commands.launch(&bash("b3", " \u{7} "), None, 1, 1, Instant::now());
         assert_eq!(commands.listed()[3].command, "");
     }
 
@@ -388,7 +420,7 @@ mod tests {
             (3_000, Some("d"))
         );
         // Its launch, late, says who started it and keeps the list's text.
-        commands.launch(&bash("b1", "other"), Some("sub"), 4, 9_000);
+        commands.launch(&bash("b1", "other"), Some("sub"), 4, 9_000, Instant::now());
         let shown = &commands.listed()[0];
         assert_eq!(
             (shown.command.as_str(), shown.by.as_deref()),
@@ -396,7 +428,7 @@ mod tests {
         );
         // A list fills in a command its launch did not give.
         let monitor = json!({"tool_name": "Monitor", "tool_response": {"taskId": "m2"}});
-        commands.launch(&monitor, None, 6, 1);
+        commands.launch(&monitor, None, 6, 1, Instant::now());
         commands.reconcile(&[task("m2", "monitor", "watch it")], 7, 1, now);
         assert_eq!(commands.listed()[2].command, "watch it");
         assert!(commands.take_ended().iter().all(|e| e.command.id != "m2"));
@@ -406,8 +438,8 @@ mod tests {
     fn a_running_command_missing_from_a_later_list_ended_unknown_and_quiet() {
         let start = Instant::now();
         let mut commands = Commands::default();
-        commands.launch(&bash("b1", "sleep 20"), None, 10, 1_000);
-        commands.launch(&bash("b2", "sleep 30"), None, 11, 2_000);
+        commands.launch(&bash("b1", "sleep 20"), None, 10, 1_000, Instant::now());
+        commands.launch(&bash("b2", "sleep 30"), None, 11, 2_000, Instant::now());
         commands.reconcile(&[task("b2", "shell", "sleep 30")], 12, 21_500, start);
         assert_eq!(
             ids(&commands),
@@ -449,7 +481,7 @@ mod tests {
     fn a_list_sent_before_a_launch_or_older_than_the_last_one_ends_nothing() {
         let now = Instant::now();
         let mut commands = Commands::default();
-        commands.launch(&bash("b1", "x"), None, 20, 1);
+        commands.launch(&bash("b1", "x"), None, 20, 1, Instant::now());
         // Sent before the launch, read after it.
         commands.reconcile(&[], 19, 2, now);
         assert_eq!(ids(&commands), [("b1".into(), None)]);
@@ -461,9 +493,49 @@ mod tests {
         assert_eq!(commands.take_ended().len(), 1);
         // Seen in the same event as the list: that list ends it.
         let mut same = Commands::default();
-        same.launch(&bash("b1", "x"), None, 7, 1);
+        same.launch(&bash("b1", "x"), None, 7, 1, Instant::now());
         same.reconcile(&[], 7, 2, now);
         assert_eq!(same.take_ended().len(), 1);
+    }
+
+    #[test]
+    fn a_launch_read_after_a_later_list_without_it_had_already_ended() {
+        let now = Instant::now();
+        let mut commands = Commands::default();
+        commands.reconcile(&[task("b2", "shell", "y")], 30, 5_000, now);
+        // Sent before that list and missing from it: it ended before the list was sent.
+        commands.launch(&bash("b1", "x"), None, 20, 6_000, now);
+        // Sent before it and in it: still running.
+        commands.launch(&bash("b2", "y"), Some("sub"), 25, 6_000, now);
+        // Sent after it: running.
+        commands.launch(&bash("b3", "z"), None, 31, 6_000, now);
+        assert_eq!(
+            ids(&commands),
+            [
+                ("b2".into(), None),
+                ("b1".into(), Some(BackgroundStatus::Unknown)),
+                ("b3".into(), None)
+            ]
+        );
+        let ended = commands.take_ended();
+        assert_eq!(ended.len(), 1);
+        assert_eq!(
+            (ended[0].command.id.as_str(), ended[0].alert),
+            ("b1", BackgroundAlert::Quiet)
+        );
+        // The list kept is the last one applied: a newer one without b2 ends it, and an id of
+        // the older list sent before the newer one is no longer taken for running.
+        commands.reconcile(&[], 40, 7_000, now);
+        assert_eq!(commands.take_ended()[0].command.id, "b2");
+        commands.launch(&bash("b4", "w"), None, 35, 7_000, now);
+        assert_eq!(commands.take_ended()[0].command.id, "b4");
+        // An id over the limit in a list is not kept, nor ever listed.
+        let long = "i".repeat(MAX_ID + 1);
+        commands.reconcile(&[task(&long, "shell", "x")], 50, 8_000, now);
+        assert!(commands.last_list.is_empty());
+        let at_limit = "i".repeat(MAX_ID);
+        commands.reconcile(&[task(&at_limit, "subagent", "")], 60, 8_000, now);
+        assert!(commands.last_list.contains(&at_limit));
     }
 
     #[test]
@@ -471,7 +543,7 @@ mod tests {
         let now = Instant::now();
         let mut commands = Commands::default();
         for id in ["c", "f", "s", "x"] {
-            commands.launch(&bash(id, id), None, 1, 1_000);
+            commands.launch(&bash(id, id), None, 1, 1_000, Instant::now());
         }
         let cases = [
             (
@@ -506,7 +578,7 @@ mod tests {
         assert!(!commands.end("zz", BackgroundStatus::Failed, None, 1, now));
         assert!(commands.take_ended().is_empty());
         // A clock that went back gives 0 s, not a wrap.
-        commands.launch(&bash("late", "x"), None, 1, 9_000);
+        commands.launch(&bash("late", "x"), None, 1, 9_000, Instant::now());
         commands.end("late", BackgroundStatus::Completed, None, 1_000, now);
         assert_eq!(commands.take_ended()[0].secs, 0);
     }
@@ -515,8 +587,8 @@ mod tests {
     fn ended_commands_stay_listed_ten_seconds() {
         let start = Instant::now();
         let mut commands = Commands::default();
-        commands.launch(&bash("b1", "x"), None, 1, 1);
-        commands.launch(&bash("b2", "y"), None, 1, 1);
+        commands.launch(&bash("b1", "x"), None, 1, 1, Instant::now());
+        commands.launch(&bash("b2", "y"), None, 1, 1, Instant::now());
         commands.end("b1", BackgroundStatus::Completed, Some(0), 2, start);
         assert!(!commands.expire(start + SHOWN_ENDED - Duration::from_millis(1)));
         assert_eq!(commands.listed().len(), 2);
@@ -531,7 +603,7 @@ mod tests {
         let now = Instant::now();
         let mut commands = Commands::default();
         for i in 0..MAX_COMMANDS + 1 {
-            commands.launch(&bash(&format!("b{i}"), "x"), None, 1, 1);
+            commands.launch(&bash(&format!("b{i}"), "x"), None, 1, 1, Instant::now());
         }
         assert_eq!(commands.listed().len(), MAX_COMMANDS);
         assert!(
@@ -545,7 +617,7 @@ mod tests {
         assert!(commands.listed().iter().all(|c| c.id != "new"));
         commands.end("b3", BackgroundStatus::Completed, None, 1, now);
         commands.end("b5", BackgroundStatus::Completed, None, 1, now);
-        commands.launch(&bash("late", "x"), None, 1, 1);
+        commands.launch(&bash("late", "x"), None, 1, 1, Instant::now());
         let listed = commands.listed();
         assert_eq!(listed.len(), MAX_COMMANDS);
         assert_eq!(listed.last().map(|c| c.id.as_str()), Some("late"));
@@ -557,8 +629,8 @@ mod tests {
     fn clear_forgets_every_command_and_what_ended() {
         let now = Instant::now();
         let mut commands = Commands::default();
-        commands.launch(&bash("b1", "x"), None, 1, 1);
-        commands.launch(&bash("b2", "x"), None, 1, 1);
+        commands.launch(&bash("b1", "x"), None, 1, 1, Instant::now());
+        commands.launch(&bash("b2", "x"), None, 1, 1, Instant::now());
         commands.end("b1", BackgroundStatus::Completed, None, 1, now);
         commands.clear();
         assert!(commands.listed().is_empty());
