@@ -228,14 +228,12 @@ pub fn accelerators(keymap: &Keymap) -> Vec<(&'static str, Option<String>)> {
         let own = entry(id);
         let default = Chord::parse(default, Platform::Mac).into_iter().collect();
         let mine: Vec<Chord> = own.clone().unwrap_or(default);
+        // Its own entry counts as one that does not come before it.
         let wins = |chord: &Chord| {
-            COMMAND_IDS
-                .iter()
-                .filter(|other| **other != id)
-                .all(|other| {
-                    let theirs = entry(other).unwrap_or_default();
-                    !theirs.contains(chord) || (own.is_some() && place(other) > place(id))
-                })
+            COMMAND_IDS.iter().all(|other| {
+                let theirs = entry(other).unwrap_or_default();
+                !theirs.contains(chord) || (own.is_some() && place(other) >= place(id))
+            })
         };
         mine.iter().find(|c| wins(c)).map(Chord::accelerator)
     };
