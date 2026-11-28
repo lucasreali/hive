@@ -25,7 +25,7 @@ use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering::SeqCst};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use hive_protocol::{check_host, Control, RemoteSettings, Role, PROTOCOL_VERSION};
+use hive_protocol::{check_host, check_login, Control, RemoteSettings, Role, PROTOCOL_VERSION};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use tauri::ipc::Channel;
@@ -73,11 +73,12 @@ macro_rules! bin {
     };
 }
 
-/// Runs the remote `hive bridge --remote` (`--replace` when `$2` says so) when its version is
-/// this app's; else names the host's OS and CPU on stderr and exits 3.
+/// Runs the remote `hive bridge --remote` with the arguments after the version (`--replace`, or
+/// `--join <owner>`) when its version is this app's; else names the host's OS and CPU on stderr
+/// and exits 3.
 const RUN: &str = concat!(
     bin!(),
-    r#"h=$d/hive; if [ -x "$h" ] && [ "$("$h" --version 2>/dev/null)" = "hive $v" ]; then exec "$h" bridge --remote $2; fi; echo "hive-needs $(uname -s) $(uname -m)" >&2; exit 3"#
+    r#"shift; h=$d/hive; if [ -x "$h" ] && [ "$("$h" --version 2>/dev/null)" = "hive $v" ]; then exec "$h" bridge --remote "$@"; fi; echo "hive-needs $(uname -s) $(uname -m)" >&2; exit 3"#
 );
 
 /// Installs the `hive` on stdin, after a first line `<byte count> <sha256>`: written private as
@@ -89,22 +90,38 @@ const UPLOAD: &str = concat!(
 );
 
 /// What a remote command does.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Script {
     /// Check the remote `hive` and run its bridge.
     Run,
     /// The same, ending the running service first (`hive bridge --replace`, Q8).
     Replace,
+    /// The same, joining the Hive of the owner there instead (`hive bridge --join`, 29.12).
+    Join(Owner),
     /// Install the `hive` given on stdin.
     Upload,
 }
 
-/// The constant remote command of `script`: from compile-time text only.
+/// The login name of a Hive's owner ([`check_login`]: only `a-z`, `0-9`, `_` and `-`), the one
+/// argument of a remote command that is not compile-time text.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Owner(String);
+
+impl Owner {
+    pub fn new(owner: String) -> Result<Self, String> {
+        check_login(&owner)?;
+        Ok(Self(owner))
+    }
+}
+
+/// The remote command of `script`: compile-time text only, but for a joined Hive's validated
+/// owner, given as a separate argument of `sh -c`, single-quoted, never spliced into the script.
 pub fn command(script: Script) -> String {
     let (text, extra) = match script {
-        Script::Run => (RUN, ""),
-        Script::Replace => (RUN, " --replace"),
-        Script::Upload => (UPLOAD, ""),
+        Script::Run => (RUN, String::new()),
+        Script::Replace => (RUN, " --replace".to_owned()),
+        Script::Join(owner) => (RUN, format!(" --join '{}'", owner.0)),
+        Script::Upload => (UPLOAD, String::new()),
     };
     format!("exec /bin/sh -c '{text}' hive {VERSION}{extra}")
 }
@@ -152,6 +169,8 @@ impl Arch {
 
 /// The most characters of a host's `uname` text shown.
 const UNAME_LIMIT: usize = 64;
+/// The most characters of why joining a Hive was refused shown.
+const JOIN_LIMIT: usize = 300;
 
 /// Why a link failed or ended.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -170,6 +189,14 @@ pub enum Failure {
     Version(String, Option<u64>),
     /// The remote went past one of its link's caps, or broke the protocol (26.19): what it did.
     Limit(String),
+    /// The joined Hive is not running there, or not shared (29.12).
+    Down,
+    /// Joining a Hive there was refused before its service was reached (29.12): why, as the
+    /// bridge said it.
+    Join(String),
+    /// The service refused the link before its welcome (29.12: a teammate not on its Sharing
+    /// list): what it said.
+    Denied(String),
     /// Anything else: the network, or a link that dropped, with what `ssh` said.
     Network(String),
 }
@@ -184,14 +211,31 @@ impl Failure {
             Self::Platform(_) => "platform",
             Self::Version(..) => "version",
             Self::Limit(_) => "limit",
-            Self::Network(_) => "network",
+            Self::Network(_) | Self::Down => "network",
+            Self::Join(_) | Self::Denied(_) => "denied",
         }
     }
 
-    /// Whether trying again may help: not for a host key, a login, a platform, an install, a
-    /// version or a remote past its caps.
+    /// Whether trying again may help: a network failure, or a joined Hive not running yet; not
+    /// a host key, a login, a platform, an install, a version, a remote past its caps or a
+    /// refusal.
     pub fn retries(&self) -> bool {
-        matches!(self, Self::Network(_))
+        matches!(self, Self::Network(_) | Self::Down)
+    }
+
+    /// What the UI shows for `owner`'s Hive on host `alias` (29.12): its own words for a
+    /// joined Hive's failures; the others name the host as [`Failure::message`] does. A version
+    /// is the owner's to update (Q5): nothing restarts it from here.
+    pub fn joined_message(&self, owner: &str, alias: &str) -> String {
+        match self {
+            Self::Down => format!("{owner}'s Hive is not running on {alias}."),
+            Self::Version(version, _) => {
+                format!("{owner}'s Hive is {version}, yours is {VERSION}; ask {owner} to update.")
+            }
+            Self::Join(why) => format!("Cannot join {owner}'s Hive on {alias}: {why}"),
+            Self::Denied(why) => format!("{owner}'s Hive on {alias} refused you: {why}"),
+            other => other.message(alias),
+        }
     }
 
     /// What the UI shows for host `alias`.
@@ -221,6 +265,9 @@ impl Failure {
                 )
             }
             Self::Limit(why) => format!("Hive dropped the link to {alias}: it {why}."),
+            Self::Down => format!("The Hive joined on {alias} is not running."),
+            Self::Join(why) => format!("Cannot join a Hive on {alias}: {why}"),
+            Self::Denied(why) => format!("{alias}'s Hive refused the link: {why}"),
             Self::Network(why) => format!("Cannot reach {alias}: {why}"),
         }
     }
@@ -245,6 +292,13 @@ pub fn classify(text: &str) -> Failure {
     }
     if let Some(why) = line("hive-upload: ") {
         return Failure::Install(why);
+    }
+    if line("hive-join-down").is_some() {
+        return Failure::Down;
+    }
+    if let Some(why) = line("hive-join: ") {
+        let printable = |c: char| if c.is_control() { ' ' } else { c };
+        return Failure::Join(why.chars().take(JOIN_LIMIT).map(printable).collect());
     }
     if text.contains("Host key verification failed")
         || text.contains("REMOTE HOST IDENTIFICATION HAS CHANGED")
@@ -299,6 +353,8 @@ type Sleep = dyn Fn(Duration) -> std::pin::Pin<Box<dyn std::future::Future<Outpu
 struct Remote {
     name: String,
     alias: Alias,
+    /// The owner of the Hive joined there (29.12); `None` for the user's own.
+    owner: Option<Owner>,
     link: Arc<Mutex<Link>>,
     /// A reconnect asked for (Reconnect, wake): ends a wait, and does nothing while the link
     /// is up or connecting.
@@ -359,36 +415,52 @@ impl Remotes {
         let keep = u64::from(settings.keep_minutes) * 60;
         self.keep_secs.store(keep, SeqCst);
         let mut hosts = self.hosts();
+        // The user's own Hives, then the ones joined (29.12). The service checks each alias and
+        // owner; one that is not valid is never linked to.
+        let own = settings.hosts.into_iter().filter_map(|name| {
+            let alias = Alias::new(name.clone()).ok()?;
+            Some((name, alias, None))
+        });
+        let joined = settings.joined.into_iter().filter_map(|joined| {
+            let alias = Alias::new(joined.alias.clone()).ok()?;
+            let owner = Owner::new(joined.owner.clone()).ok()?;
+            Some((joined.name(), alias, Some(owner)))
+        });
+        let wanted: Vec<_> = own.chain(joined).collect();
         let (kept, gone) = std::mem::take(&mut *hosts)
             .into_iter()
-            .partition::<Vec<_>, _>(|remote| settings.hosts.contains(&remote.name));
+            .partition::<Vec<_>, _>(|remote| wanted.iter().any(|(name, ..)| *name == remote.name));
         for remote in gone {
             remote.end();
         }
-        // The service checks each alias; one that is not valid is never linked to.
-        let valid = settings
-            .hosts
-            .into_iter()
-            .filter_map(|name| Alias::new(name).ok());
-        for alias in valid {
-            let known = kept.iter().find(|remote| remote.alias == alias);
-            let remote = known.cloned().unwrap_or_else(|| self.start(alias, ui));
+        for (name, alias, owner) in wanted {
+            let known = kept.iter().find(|remote| remote.name == name);
+            let remote = known
+                .cloned()
+                .unwrap_or_else(|| self.start(name, alias, owner, ui));
             hosts.push(remote);
         }
     }
 
-    /// A new link to `name`, connecting.
-    fn start(self: &Arc<Self>, alias: Alias, ui: Option<&Channel<Value>>) -> Arc<Remote> {
-        let name = alias.0.clone();
+    /// A new link to `name` (`alias`, or `owner`'s Hive there), connecting.
+    fn start(
+        self: &Arc<Self>,
+        name: String,
+        alias: Alias,
+        owner: Option<Owner>,
+        ui: Option<&Channel<Value>>,
+    ) -> Arc<Remote> {
         let link = Link {
             ui: ui.cloned(),
             ids: Arc::clone(&self.ids),
             host: Some(name.clone()),
+            owner: owner.as_ref().map(|owner| owner.0.clone()),
             ..Link::default()
         };
         let remote = Arc::new(Remote {
             name,
             alias,
+            owner,
             link: Arc::new(Mutex::new(link)),
             retry: Notify::new(),
             replace: AtomicBool::new(false),
@@ -449,11 +521,15 @@ impl Remotes {
         Ok(())
     }
 
-    /// Restarts `host`'s service of another version (Q8): the next try ends it first.
+    /// Restarts `host`'s service of another version (Q8): the next try ends it first. Only the
+    /// user's own: a joined Hive is its owner's to update (29.12, Q5).
     pub fn restart(&self, host: &str) -> Result<(), String> {
         let remote = self
             .find(host)
             .ok_or_else(|| format!("no link to the host {host}"))?;
+        if let Some(owner) = &remote.owner {
+            return Err(format!("Only {} can restart their Hive", owner.0));
+        }
         remote.replace.store(true, SeqCst);
         self.reconnect(host)
     }
@@ -513,6 +589,7 @@ impl Remotes {
             End::Closed => classify(&exit.await),
             End::Broken(error) => Failure::Network(error),
             End::Limit(why) => Failure::Limit(why),
+            End::Denied(why) => Failure::Denied(why),
         };
         let mut link = lock(&remote.link);
         let welcomed = link.welcome.is_some();
@@ -591,6 +668,10 @@ impl Remote {
 /// for a reloaded UI.
 fn status(link: &mut Link, mut fields: Value) {
     fields["type"] = "host_link".into();
+    // A joined Hive's (29.12): the UI offers no restart for it.
+    if let Some(owner) = &link.owner {
+        fields["owner"] = owner.as_str().into();
+    }
     let message = link.tagged(fields);
     link.status = Some(message.clone());
     link.to_ui(message);
@@ -609,10 +690,10 @@ async fn supervise(remotes: Arc<Remotes>, remote: Arc<Remote>) {
     let mut attempt = 0;
     let mut installed = false;
     loop {
-        let script = if remote.replace.swap(false, SeqCst) {
-            Script::Replace
-        } else {
-            Script::Run
+        let script = match (&remote.owner, remote.replace.swap(false, SeqCst)) {
+            (Some(owner), _) => Script::Join(owner.clone()),
+            (None, true) => Script::Replace,
+            (None, false) => Script::Run,
         };
         status(&mut remote.link(), json!({"state": "connecting"}));
         let (mut failure, welcomed) = remotes.connect_once(&remote, script).await;
@@ -639,7 +720,10 @@ async fn supervise(remotes: Arc<Remotes>, remote: Arc<Remote>) {
         } else {
             None
         };
-        let reason = failure.message(&remote.name);
+        let reason = match &remote.owner {
+            Some(owner) => failure.joined_message(&owner.0, &remote.alias.0),
+            None => failure.message(&remote.name),
+        };
         // Waiting before the UI learns it, so a reconnect it asks for is never missed.
         let retry = remote.retry.notified();
         tokio::pin!(retry);

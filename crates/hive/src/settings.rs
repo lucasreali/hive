@@ -11,7 +11,7 @@ use std::time::Duration;
 
 use hive_protocol::{
     Account, AccountDir, ClaudeSettings, Control, DEFAULT_ACCOUNT, GhSettings, HOST_LIMIT,
-    ProjectScripts, Settings, check_host, keymap,
+    ProjectScripts, RemoteSettings, Settings, check_host, check_login, keymap,
 };
 
 use crate::git::read_limited;
@@ -553,16 +553,26 @@ fn gh_folders(gh: &GhSettings) -> Result<(), String> {
     Ok(())
 }
 
-/// The remote hosts (26.17): at most [`HOST_LIMIT`] aliases `ssh` may be given
-/// ([`check_host`]), each once.
-fn hosts(hosts: &[String]) -> Result<(), String> {
-    if hosts.len() > HOST_LIMIT {
+/// The remote hosts (26.17) and the Hives joined there (29.12): at most [`HOST_LIMIT`] in all,
+/// each alias one `ssh` may be given ([`check_host`]), each owner a login name
+/// ([`check_login`]), and each name (a joined one's `<owner>@<alias>`) once.
+fn hosts(remote: &RemoteSettings) -> Result<(), String> {
+    if remote.hosts.len() + remote.joined.len() > HOST_LIMIT {
         return Err(format!("At most {HOST_LIMIT} hosts can be added"));
     }
-    for (i, host) in hosts.iter().enumerate() {
+    let mut names: Vec<String> = Vec::new();
+    for host in &remote.hosts {
         check_host(host)?;
-        if hosts[..i].contains(host) {
-            return Err(format!("The host {host} is there twice"));
+        names.push(host.clone());
+    }
+    for joined in &remote.joined {
+        check_host(&joined.alias)?;
+        check_login(&joined.owner)?;
+        names.push(joined.name());
+    }
+    for (i, name) in names.iter().enumerate() {
+        if names[..i].contains(name) {
+            return Err(format!("The host {name} is there twice"));
         }
     }
     Ok(())
@@ -572,7 +582,7 @@ fn hosts(hosts: &[String]) -> Result<(), String> {
 pub fn check(settings: &Settings) -> Result<(), String> {
     accounts(&settings.claude)?;
     gh_folders(&settings.gh)?;
-    hosts(&settings.remote.hosts)?;
+    hosts(&settings.remote)?;
     range(
         "remote.keep_minutes",
         settings.remote.keep_minutes,
@@ -982,6 +992,50 @@ mod tests {
         let many: Vec<&str> = many.iter().map(String::as_str).collect();
         assert_eq!(with(&many[..HOST_LIMIT]), Ok(()));
         assert_eq!(with(&many), Err("At most 32 hosts can be added".into()));
+    }
+
+    #[test]
+    fn a_joined_hive_has_a_valid_alias_and_owner_and_a_name_of_its_own() {
+        let join = |alias: &str, owner: &str| hive_protocol::JoinedHost {
+            alias: alias.into(),
+            owner: owner.into(),
+        };
+        let with = |hosts: &[&str], joined: Vec<hive_protocol::JoinedHost>| {
+            let mut settings = Settings::default();
+            settings.remote.hosts = hosts.iter().map(|h| (*h).to_owned()).collect();
+            settings.remote.joined = joined;
+            check(&settings)
+        };
+        // The same alias as one's own host, and two owners there.
+        let both = vec![join("gpu-box", "alice"), join("gpu-box", "bob")];
+        assert_eq!(with(&["gpu-box"], both), Ok(()));
+        assert_eq!(
+            with(&[], vec![join("-oX", "alice")]),
+            Err("The host alias \"-oX\" must not start with -".into())
+        );
+        assert_eq!(
+            with(&[], vec![join("gpu-box", "Alice;x")]),
+            Err(check_login("Alice;x").unwrap_err())
+        );
+        assert_eq!(
+            with(
+                &[],
+                vec![join("gpu-box", "alice"), join("gpu-box", "alice")]
+            ),
+            Err("The host alice@gpu-box is there twice".into())
+        );
+        // One's own alias `alice@gpu-box` and alice's Hive on `gpu-box` would share a name.
+        assert_eq!(
+            with(&["alice@gpu-box"], vec![join("gpu-box", "alice")]),
+            Err("The host alice@gpu-box is there twice".into())
+        );
+        // The limit counts both.
+        let own: Vec<String> = (0..HOST_LIMIT).map(|i| format!("h{i}")).collect();
+        let own: Vec<&str> = own.iter().map(String::as_str).collect();
+        assert_eq!(
+            with(&own, vec![join("gpu-box", "alice")]),
+            Err("At most 32 hosts can be added".into())
+        );
     }
 
     #[test]

@@ -60,8 +60,9 @@ fn the_ssh_command_is_fixed_options_then_the_alias_then_a_constant_command() {
 
 #[test]
 fn each_remote_command_is_one_line_any_login_shell_reads_alike() {
-    for script in [Script::Run, Script::Replace, Script::Upload] {
-        let command = command(script);
+    let alice = || Script::Join(Owner::new("alice".into()).unwrap());
+    for script in [Script::Run, Script::Replace, alice(), Script::Upload] {
+        let command = command(script.clone());
         let (head, rest) = command.split_once(" -c '").unwrap();
         assert_eq!(head, "exec /bin/sh");
         let (text, tail) = rest.rsplit_once("' ").unwrap();
@@ -69,12 +70,17 @@ fn each_remote_command_is_one_line_any_login_shell_reads_alike() {
         for c in ['\'', '\\', '!', '\n', '\r'] {
             assert!(!text.contains(c), "{script:?} holds {c:?}");
         }
-        let replace = if script == Script::Replace {
-            " --replace"
-        } else {
-            ""
+        // A joined Hive's owner is its own single-quoted argument, after the script.
+        let extra = match script {
+            Script::Replace => " --replace",
+            Script::Join(_) => " --join 'alice'",
+            _ => "",
         };
-        assert_eq!(tail, format!("hive {VERSION}{replace}"));
+        assert_eq!(tail, format!("hive {VERSION}{extra}"));
+    }
+    // Only a login name is ever an owner.
+    for bad in ["alice'; rm -rf ~; '", "Alice", "", "a b", "-x"] {
+        assert!(Owner::new(bad.into()).is_err(), "{bad:?}");
     }
     assert!(VERSION
         .chars()
@@ -109,10 +115,19 @@ fn ssh_s_stderr_says_what_went_wrong() {
             Failure::Network("Timeout, server gpu-box not responding.".into()),
         ),
         ("", Failure::Network("the link closed".into())),
+        // `hive bridge --join` (29.12).
+        ("hive-join-down\n", Failure::Down),
+        (
+            "hive-join: others can write to /tmp/hive-shared-1000\n",
+            Failure::Join("others can write to /tmp/hive-shared-1000".into()),
+        ),
+        ("hive-join: a\u{1b}[2Jb", Failure::Join("a [2Jb".into())),
     ];
     for (text, failure) in cases {
         assert_eq!(classify(text), failure, "{text:?}");
     }
+    let long = format!("hive-join: {}", "x".repeat(400));
+    assert_eq!(classify(&long), Failure::Join("x".repeat(JOIN_LIMIT)));
     // The `uname` text is cut to 64 characters.
     let long = format!("hive-needs Linux {}", "é".repeat(100));
     let Failure::Platform(shown) = classify(&long) else {
@@ -176,11 +191,49 @@ fn each_failure_has_its_kind_message_and_retry() {
             "network",
             "Cannot reach gpu: No route to host".to_owned(),
         ),
+        (
+            Failure::Down,
+            "network",
+            "The Hive joined on gpu is not running.".to_owned(),
+        ),
+        (
+            Failure::Join("no".into()),
+            "denied",
+            "Cannot join a Hive on gpu: no".to_owned(),
+        ),
+        (
+            Failure::Denied("no".into()),
+            "denied",
+            "gpu's Hive refused the link: no".to_owned(),
+        ),
     ];
     for (failure, kind, message) in cases {
         assert_eq!(failure.kind(), kind);
         assert_eq!(failure.message("gpu"), message);
         assert_eq!(failure.retries(), kind == "network", "{failure:?}");
+    }
+    // A joined Hive's own words (29.12); the rest name the host by its alias.
+    let joined = [
+        (
+            Failure::Down,
+            "alice's Hive is not running on gpu.".to_owned(),
+        ),
+        (
+            Failure::Version("0.1.0".into(), Some(3)),
+            format!("alice's Hive is 0.1.0, yours is {VERSION}; ask alice to update."),
+        ),
+        (
+            Failure::Join("no".into()),
+            "Cannot join alice's Hive on gpu: no".to_owned(),
+        ),
+        (
+            Failure::Denied("no".into()),
+            "alice's Hive on gpu refused you: no".to_owned(),
+        ),
+        (Failure::Auth, Failure::Auth.message("gpu")),
+    ];
+    for (failure, message) in joined {
+        assert_eq!(failure.joined_message("alice", "gpu"), message);
     }
     assert_eq!(Arch::X86_64.build(), "hive-linux-x86_64");
     assert_eq!(Arch::Aarch64.build(), "hive-linux-aarch64");
@@ -369,8 +422,10 @@ fn the_check_runs_a_bridge_of_this_version_only_else_names_the_platform() {
     std::fs::remove_file(lab.path("ran")).unwrap();
     remote(&lab, Script::Run, "home", b"");
     remote(&lab, Script::Replace, "home", b"");
+    let alice = Script::Join(Owner::new("alice".into()).unwrap());
+    remote(&lab, alice, "home", b"");
     let ran = std::fs::read_to_string(lab.path("ran")).unwrap();
-    let bridges = "--version\nbridge --remote\n--version\nbridge --remote --replace\n";
+    let bridges = "--version\nbridge --remote\n--version\nbridge --remote --replace\n--version\nbridge --remote --join alice\n";
     assert_eq!(ran, bridges);
 }
 
@@ -599,6 +654,7 @@ fn settings(hosts: &[&str], keep_minutes: u32) -> RemoteSettings {
     RemoteSettings {
         hosts: hosts.iter().map(|host| (*host).to_owned()).collect(),
         keep_minutes,
+        joined: Vec::new(),
     }
 }
 
@@ -968,6 +1024,80 @@ async fn a_service_of_another_version_is_restarted_only_when_asked() {
 }
 
 #[tokio::test]
+async fn a_joined_hive_links_with_its_owner_and_its_owner_alone_restarts_it() {
+    let lab = Lab::new("joined");
+    let listener = lab.listen();
+    let remotes = Arc::new(lab.remotes(Arc::default()));
+    lab.plan(&[lab.pipe(), lab.pipe(), lab.pipe()]);
+    let (channel, mut rx) = ui();
+    // alice's Hive on the host; an owner that is not a login is never linked to.
+    let mut both = settings(&[], 1);
+    let join = |owner: &str| hive_protocol::JoinedHost {
+        alias: "gpu".into(),
+        owner: owner.into(),
+    };
+    both.joined = vec![join("alice"), join("Bad;owner")];
+    remotes.sync(both.clone(), Some(&channel));
+    let mut alices = Service::accept(&listener).await;
+    alices.control().await;
+    let runs = lab.runs();
+    let alice = command(Script::Join(Owner::new("alice".into()).unwrap()));
+    assert_eq!(runs.len(), 1);
+    assert_eq!(runs[0].last().unwrap(), &alice);
+    assert!(remotes.link("alice@gpu").is_some());
+    assert!(remotes.link("Bad;owner@gpu").is_none());
+    // alice's service refuses before its welcome (not on her Sharing list): no toast, the
+    // link stops with why, and says whose it is.
+    let refused = Control::Error {
+        message: "bob is not on alice's Sharing list".into(),
+    };
+    alices.send(0, refused).await;
+    let stopped = loop {
+        let message = next_of(&mut rx, "host_link").await;
+        if message["host"] == "alice@gpu" && message["state"] == "disconnected" {
+            break message;
+        }
+    };
+    assert_eq!(stopped["kind"], "denied");
+    assert_eq!(stopped["owner"], "alice");
+    assert_eq!(
+        stopped["reason"],
+        "alice's Hive on gpu refused you: bob is not on alice's Sharing list"
+    );
+    // A version only alice can update: no restart from here.
+    assert_eq!(
+        remotes.restart("alice@gpu"),
+        Err("Only alice can restart their Hive".into())
+    );
+    remotes.reconnect("alice@gpu").unwrap();
+    let mut alices = Service::accept(&listener).await;
+    alices.control().await;
+    let refused = Control::VersionMismatch {
+        protocol: PROTOCOL_VERSION,
+        version: "0.1.0".into(),
+        terminals: None,
+    };
+    alices.send(0, refused).await;
+    let stopped = loop {
+        let message = next_of(&mut rx, "host_link").await;
+        if message["host"] == "alice@gpu" && message["state"] == "disconnected" {
+            break message;
+        }
+    };
+    assert_eq!(stopped["kind"], "version");
+    assert_eq!(
+        stopped["reason"],
+        format!("alice's Hive is 0.1.0, yours is {VERSION}; ask alice to update.")
+    );
+    // Kept on a sync that keeps it, gone on one that drops it.
+    remotes.sync(both, Some(&channel));
+    assert!(remotes.link("alice@gpu").is_some());
+    remotes.sync(settings(&[], 1), Some(&channel));
+    assert!(remotes.link("alice@gpu").is_none());
+    remotes.end();
+}
+
+#[tokio::test]
 async fn installs_that_fail_say_why_and_stop() {
     let lab = Lab::new("install-fails");
     let cases: [(&[String], &str); 4] = [
@@ -1286,6 +1416,25 @@ async fn the_local_settings_link_the_hosts_and_requests_go_to_each_host_s_link()
         (Some("gpu"), &logins["logins"])
     );
     assert_eq!(got["claude"], false);
+    // Its own Settings → Sharing (29.12), asked of it and saved on it.
+    hive.on(Some("gpu")).unwrap().get_sharing().unwrap();
+    assert_eq!(remote.control().await, (0, Control::GetSharing));
+    let sharing = hive_protocol::Sharing {
+        on: true,
+        group: "team".into(),
+        ..Default::default()
+    };
+    hive.on(Some("gpu"))
+        .unwrap()
+        .set_sharing(sharing.clone())
+        .unwrap();
+    assert_eq!(remote.control().await, (0, Control::SetSharing { sharing }));
+    let shared = json!({"type": "sharing", "sharing": {"on": false, "group": "", "spaces": [], "people": []}, "owner": "me", "groups": ["team"], "spaces": [], "unavailable": null, "error": null});
+    remote.writer.send(raw(&shared)).await.unwrap();
+    assert_eq!(next_of(&mut rx, "sharing").await["host"], "gpu");
+    let failed = json!({"type": "sharing_failed", "message": "no"});
+    remote.writer.send(raw(&failed)).await.unwrap();
+    assert_eq!(next_of(&mut rx, "sharing_failed").await["host"], "gpu");
     let state = |state: &str| json!({"type": "agent_state", "id": "a", "state": state, "urgency": 2, "pending": false, "interrupted": false, "alert": null, "notify": false, "subagents": [], "activity": null, "since_ms": 1});
     remote.writer.send(raw(&state("working"))).await.unwrap();
     assert_eq!(next_of(&mut rx, "agent_state").await["host"], "gpu");

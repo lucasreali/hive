@@ -2217,6 +2217,8 @@ async fn bridge_exit_ends_terminals_then_disconnects() {
     assert_eq!(hive.create_dir("/p".into(), "d".into()), not_connected);
     assert_eq!(hive.select_space("w".into()), not_connected);
     assert_eq!(hive.list_claude_logins(), not_connected);
+    assert_eq!(hive.get_sharing(), not_connected);
+    assert_eq!(hive.set_sharing(Default::default()), not_connected);
     assert_eq!(hive.list_gh_accounts(None), not_connected);
     let account = GhAccount {
         host: "h".into(),
@@ -2563,6 +2565,8 @@ fn commands_reach_the_managed_hive() {
             create_dir,
             select_space,
             list_claude_logins,
+            get_sharing,
+            set_sharing,
             list_gh_accounts,
             switch_gh_account,
             get_gh_identity,
@@ -2754,6 +2758,11 @@ fn commands_reach_the_managed_hive() {
         ("create_dir", &new_dir),
         ("select_space", &space),
         ("list_claude_logins", &json!({})),
+        ("get_sharing", &json!({})),
+        (
+            "set_sharing",
+            &json!({"sharing": {"on": false, "group": "", "spaces": [], "people": []}}),
+        ),
         ("list_gh_accounts", &json!({"ghConfigDir": null})),
         ("switch_gh_account", &switch_gh),
         ("get_gh_identity", &switch_gh),

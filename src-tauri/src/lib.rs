@@ -869,6 +869,8 @@ struct Link {
     host: Option<String>,
     /// A remote's refusal of the handshake (`version_mismatch`), for its link's state.
     refused: Option<Value>,
+    /// The owner of the Hive this remote link joined (29.12); `None` for the user's own.
+    owner: Option<String>,
     /// A remote link's last state (`host_link`), replayed to a reloaded UI.
     status: Option<Value>,
     /// The remote links, which the local service's `remote` settings start and end (26.17);
@@ -1283,6 +1285,8 @@ enum End {
     Broken(String),
     /// A remote went past one of its link's caps (26.19): why.
     Limit(String),
+    /// A remote's service refused the link before its welcome (29.12): what it said.
+    Denied(String),
 }
 
 impl Hive {
@@ -1824,7 +1828,7 @@ impl Hive {
                 // the connection is kept for the next one.
                 End::Refused => return refused(&mut lock(&link)),
                 End::Closed => exit.await,
-                End::Broken(error) | End::Limit(error) => error,
+                End::Broken(error) | End::Limit(error) | End::Denied(error) => error,
             };
             disconnected(&mut lock(&link), reason);
         });
@@ -2471,6 +2475,16 @@ impl Host {
         self.link().send(0, &Control::ListClaudeLogins)
     }
 
+    /// Settings → Sharing of a remote host's service (29.12); the answer arrives as `sharing`.
+    pub fn get_sharing(&self) -> Result<(), String> {
+        self.link().send(0, &Control::GetSharing)
+    }
+
+    /// The answer arrives as `sharing`, or `sharing_failed` (29.12).
+    pub fn set_sharing(&self, sharing: hive_protocol::Sharing) -> Result<(), String> {
+        self.link().send(0, &Control::SetSharing { sharing })
+    }
+
     /// The answer to both arrives as `gh_accounts` (9.30).
     pub fn list_gh_accounts(&self, gh_config_dir: Option<String>) -> Result<(), String> {
         self.link()
@@ -2989,6 +3003,13 @@ async fn pump(link: &Mutex<Link>, mut frames: FramedRead<Reader<'_>, FrameCodec>
                     continue;
                 }
             }
+            // An error before the welcome is a remote service's refusal (29.12: a teammate not
+            // on its Sharing list): its link's state, not a toast.
+            "error" if remote && !welcomed => {
+                link.frames = None;
+                let message = value["message"].as_str().unwrap_or_default();
+                return End::Denied(message.to_owned());
+            }
             // A remote's refusal is its link's state (26.17), not the local service's dialog.
             "version_mismatch" if remote => {
                 link.refused = Some(value);
@@ -3147,6 +3168,9 @@ const REMOTE_TO_UI: &[&str] = &[
     // The host's own Claude accounts and whether it has a `claude` (27.11): the status bar of
     // its spaces shows them, never this Mac's.
     "claude_logins",
+    // The host's own Settings → Sharing (29.12): only a remote Linux host's Hive is shared.
+    "sharing",
+    "sharing_failed",
 ];
 
 /// Whether `frame` is the service's `terminals_kept` (26.16), on channel 0.
@@ -3957,6 +3981,20 @@ pub mod commands {
     #[tauri::command]
     pub fn list_claude_logins(hive: State<'_, Hive>, host: Option<String>) -> Result<(), String> {
         hive.on(host.as_deref())?.list_claude_logins()
+    }
+
+    #[tauri::command]
+    pub fn get_sharing(hive: State<'_, Hive>, host: Option<String>) -> Result<(), String> {
+        hive.on(host.as_deref())?.get_sharing()
+    }
+
+    #[tauri::command]
+    pub fn set_sharing(
+        hive: State<'_, Hive>,
+        host: Option<String>,
+        sharing: hive_protocol::Sharing,
+    ) -> Result<(), String> {
+        hive.on(host.as_deref())?.set_sharing(sharing)
     }
 
     #[tauri::command]
