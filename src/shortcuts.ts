@@ -20,6 +20,7 @@ import {
   spaceProjects,
   terminalShown,
   useHive,
+  withCollapsed,
 } from "./store";
 import { barItems, fileVisible, shownPane } from "./tabs";
 import {
@@ -76,12 +77,11 @@ export function goToAgent(agent: Agent): void {
   useHive.setState({
     // The place left behind is the one that space shows again (11.5).
     ...(away ? leaveSpace(s) : {}),
-    collapsed: {
-      ...s.collapsed,
+    collapsed: withCollapsed(s.collapsed, {
       [group]: false,
       [agent.project ?? ""]: false,
       [`worktree:${agent.worktree}`]: false,
-    },
+    }),
     selection: agent.id,
     activeTab: tab?.id ?? s.activeTab,
     fileShown: tab ? false : s.fileShown,

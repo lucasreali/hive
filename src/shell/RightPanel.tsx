@@ -65,6 +65,7 @@ import {
   showPanelView,
   tableShown,
   useHive,
+  withCollapsed,
   within,
 } from "../store";
 import { dropFile, fileTabState, paneState } from "../tabs";
@@ -937,7 +938,9 @@ function FileTree({ worktree, changedOnly }: { worktree: string; changedOnly: bo
   // The Diff tab opens a file as its diff; the Files tab as editable text (#31).
   const pick = (row: FileRow) =>
     row.kind === "folder"
-      ? useHive.setState((s) => ({ collapsed: { ...s.collapsed, [row.key]: row.open } }))
+      ? useHive.setState((s) => ({
+          collapsed: withCollapsed(s.collapsed, { [row.key]: row.open }),
+        }))
       : leaveFile({ worktree, path: row.key }, !changedOnly);
   // The Diff tree's boxes stage a file or unstage it (27.6): what is left to commit only.
   const stageable = (row: FileRow | undefined) =>
@@ -1254,7 +1257,9 @@ function useFileDrag(worktree: string, rows: FileRow[]) {
   const setOpen = (folders: string[], open: boolean) => {
     if (folders.length === 0) return;
     const keys = folders.map((f) => [`files:${worktree}/${f}`, !open]);
-    useHive.setState((s) => ({ collapsed: { ...s.collapsed, ...Object.fromEntries(keys) } }));
+    useHive.setState((s) => ({
+      collapsed: withCollapsed(s.collapsed, Object.fromEntries(keys)),
+    }));
   };
   // Closes the folders the drag opened, except those holding `folder`.
   const closeOutside = (folder: string | null) => {
