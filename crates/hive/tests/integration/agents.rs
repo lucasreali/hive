@@ -812,6 +812,43 @@ async fn hook_events_delivered_out_of_order_apply_in_the_order_they_were_sent() 
 }
 
 #[tokio::test]
+async fn a_hook_stamped_far_in_the_future_never_makes_later_events_look_older() {
+    let repo = Repo::new();
+    let mut daemon = repo.env.daemon();
+    let mut app = repo.env.connect(Role::App).await;
+    app.open_terminal(1, &repo.root).await;
+    let cwd = repo.root.display().to_string();
+    let start = json!({"session_id": "s", "cwd": cwd});
+    hook(&repo, &mut app, "1", "SessionStart", start).await;
+    let now = hive::hook::monotonic_ns;
+    let launch = json!({"session_id": "s", "tool_name": "Bash",
+        "tool_response": {"backgroundTaskId": "b1"}});
+    hook(&repo, &mut app, "1", "PostToolUse", launch).await;
+    // A forged stamp: its prompt and its list apply as if sent now.
+    let prompt = json!({"session_id": "s"});
+    hook_sent(&repo, &mut app, "1", "UserPromptSubmit", prompt, u64::MAX).await;
+    let listed = json!({"session_id": "s", "background_tasks": [{"id": "b1", "type": "shell"}]});
+    hook_sent(&repo, &mut app, "1", "Stop", listed, u64::MAX).await;
+    // So a later turn still changes the state, and a later list still ends the command.
+    let prompt = json!({"session_id": "s"});
+    let working = hook_sent(&repo, &mut app, "1", "UserPromptSubmit", prompt, now()).await;
+    assert!(
+        working
+            .iter()
+            .any(|(_, m)| matches!(m, Control::AgentState { state: Working, .. }))
+    );
+    let empty = json!({"session_id": "s", "background_tasks": []});
+    let stop = hook_sent(&repo, &mut app, "1", "Stop", empty, now()).await;
+    let ended = stop.iter().filter_map(|(_, m)| match m {
+        Control::BackgroundFinished { id, .. } => Some(id.as_str()),
+        _ => None,
+    });
+    assert_eq!(ended.collect::<Vec<_>>(), ["b1"]);
+    drop(app);
+    assert!(daemon.wait_exit().success());
+}
+
+#[tokio::test]
 async fn an_agent_finishing_in_view_of_the_focused_window_is_not_pending() {
     let repo = Repo::new();
     let mut daemon = repo.env.daemon();
