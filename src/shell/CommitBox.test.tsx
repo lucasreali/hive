@@ -108,3 +108,22 @@ test("Push… opens the push dialog; a detached worktree cannot push", () => {
   expect(detached.title).toBe("This worktree is on no branch");
   target.mockRestore();
 });
+
+test("in a jj repository a note shows by the main worktree's Stage/Commit only", () => {
+  const main = shop.worktrees[0];
+  const note = () => screen.queryByRole("note");
+  show([file("a", "no")]);
+  expect(note()).toBeNull();
+  act(() => apply({ type: "projects", projects: [{ ...shop, jj: true }] }));
+  // A linked worktree is plain git.
+  expect(note()).toBeNull();
+  cleanup();
+  const changes = { path: main.path, base: "head", branch: null, base_error: null } as const;
+  apply({ type: "changes", ...changes, files: [], added: 0, removed: 0, error: null });
+  render(<CommitBox worktree={main} />);
+  expect(note()?.textContent).toBe(
+    "This is a jj repository: jj rewrites git's index; commit with jj",
+  );
+  act(() => apply({ type: "projects", projects: [shop] }));
+  expect(note()).toBeNull();
+});

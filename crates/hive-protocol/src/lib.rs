@@ -2301,6 +2301,16 @@ pub struct Project {
     /// The group holding this project; `None` for one followed on its own.
     #[serde(default)]
     pub parent: Option<String>,
+    /// A colocated Jujutsu repository (28.26): a `.jj` folder sits beside the main worktree's
+    /// `.git`. The Changes panel warns next to the main worktree's Stage/Commit. Optional, so
+    /// adding it kept protocol 1 compatible.
+    #[serde(default)]
+    pub jj: bool,
+    /// In a [`jj`](Project::jj) repository whose main worktree is detached (jj keeps it so),
+    /// the branch the other worktrees are compared with instead of the main worktree's: the
+    /// first of `main`, `master`, `trunk` under `refs/heads/` (28.26). Optional, as `jj`.
+    #[serde(default)]
+    pub trunk: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -3915,6 +3925,8 @@ mod tests {
             group: false,
             folder: false,
             parent: None,
+            jj: true,
+            trunk: Some("main".into()),
         };
         let msg = Control::ProjectAdded {
             project: project.clone(),
@@ -3928,13 +3940,14 @@ mod tests {
         let json = serde_json::to_string(&created).unwrap();
         assert!(json.starts_with(r#"{"type":"project_created","project":{"#));
         assert!(json.ends_with(r#","path":"/r"}"#));
-        // From a service without groups (14.1): neither a group nor in one.
+        // From a service without groups (14.1) or jj (28.26): neither a group nor in one.
         let older = br#"{"id":"/r","name":"r","path":"/r","worktrees":[],"error":null}"#;
         let project: Project = serde_json::from_slice(older).unwrap();
         assert_eq!(
             (project.group, project.folder, project.parent),
             (false, false, None)
         );
+        assert_eq!((project.jj, project.trunk), (false, None));
         let failed = Control::AddProjectFailed {
             path: "x".into(),
             error: ProjectError::NotAGitRepository,

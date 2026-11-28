@@ -991,6 +991,8 @@ garbage\0\
             group: false,
             folder: false,
             parent: None,
+            jj: false,
+            trunk: None,
         }
     }
 

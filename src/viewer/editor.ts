@@ -1,5 +1,5 @@
 import { defaultKeymap, history, historyKeymap, indentWithTab } from "@codemirror/commands";
-import { LanguageDescription } from "@codemirror/language";
+import { HighlightStyle, LanguageDescription, syntaxHighlighting } from "@codemirror/language";
 import { languages } from "@codemirror/language-data";
 import { unifiedMergeView } from "@codemirror/merge";
 import { search, searchKeymap } from "@codemirror/search";
@@ -12,7 +12,7 @@ import {
   type StateEffect,
   type Text,
 } from "@codemirror/state";
-import { oneDark } from "@codemirror/theme-one-dark";
+import { oneDarkTheme } from "@codemirror/theme-one-dark";
 import {
   Decoration,
   drawSelection,
@@ -22,6 +22,7 @@ import {
   keymap,
   lineNumbers,
 } from "@codemirror/view";
+import { tags as t } from "@lezer/highlight";
 import type { Lines } from "../store";
 import { changeMarkers } from "./gutterMarkers";
 import { createSearchPanel } from "./searchPanel";
@@ -29,11 +30,62 @@ import { createSearchPanel } from "./searchPanel";
 /** What the viewer shows: `content`, and as a unified diff against `original` when given. */
 export type Doc = { content: string; original: string | null };
 
+/**
+ * The code's colours (28.25): One Dark's highlight style (`oneDarkHighlightStyle`, rule for rule)
+ * with each colour a token of `src/styles.css`, so the editor shows One Dark's colours in One
+ * Dark and One Light's in One Light, switched with the theme by the style sheet alone.
+ */
+export const codeHighlightStyle = HighlightStyle.define([
+  { tag: t.keyword, color: "var(--syn-keyword)" },
+  {
+    tag: [t.name, t.deleted, t.character, t.propertyName, t.macroName],
+    color: "var(--syn-name)",
+  },
+  { tag: [t.function(t.variableName), t.labelName], color: "var(--syn-function)" },
+  { tag: [t.color, t.constant(t.name), t.standard(t.name)], color: "var(--syn-constant)" },
+  { tag: [t.definition(t.name), t.separator], color: "var(--syn-plain)" },
+  {
+    tag: [
+      t.typeName,
+      t.className,
+      t.number,
+      t.changed,
+      t.annotation,
+      t.modifier,
+      t.self,
+      t.namespace,
+    ],
+    color: "var(--syn-type)",
+  },
+  {
+    tag: [t.operator, t.operatorKeyword, t.url, t.escape, t.regexp, t.link, t.special(t.string)],
+    color: "var(--syn-operator)",
+  },
+  { tag: [t.meta, t.comment], color: "var(--editor-comment)" },
+  { tag: t.strong, fontWeight: "bold" },
+  { tag: t.emphasis, fontStyle: "italic" },
+  { tag: t.strikethrough, textDecoration: "line-through" },
+  { tag: t.link, color: "var(--editor-comment)", textDecoration: "underline" },
+  { tag: t.heading, fontWeight: "bold", color: "var(--syn-name)" },
+  { tag: [t.atom, t.bool, t.special(t.variableName)], color: "var(--syn-constant)" },
+  { tag: [t.processingInstruction, t.string, t.inserted], color: "var(--syn-string)" },
+  { tag: t.invalid, color: "var(--editor-invalid)" },
+]);
+
+/** One Dark's editor theme (#23) with the code's colours of the current theme. */
+const codeColors = [oneDarkTheme, syntaxHighlighting(codeHighlightStyle)];
+
 /** The prototype's look (screen 1g) over One Dark (#23): its surfaces and diff colors. */
 const theme = Prec.highest(
   EditorView.theme(
     {
-      "&": { height: "100%", fontSize: "12px", backgroundColor: "var(--bg)" },
+      // The text outside any highlighted token: One Dark's or One Light's plain (28.25).
+      "&": {
+        height: "100%",
+        fontSize: "12px",
+        backgroundColor: "var(--bg)",
+        color: "var(--syn-plain)",
+      },
       "&.cm-focused": { outline: "none" },
       ".cm-scroller": { fontFamily: "var(--font-code)", lineHeight: "18px" },
       ".cm-content": { padding: "4px 0" },
@@ -282,7 +334,7 @@ export function createViewer(
           extensions: [
             EditorState.readOnly.of(true),
             lineNumbers(),
-            oneDark,
+            codeColors,
             theme,
             language.extension(),
             diff,
@@ -388,7 +440,7 @@ export function createEditor(
         lineNumbers(),
         highlightActiveLine(),
         highlightActiveLineGutter(),
-        oneDark,
+        codeColors,
         theme,
         language.extension(),
         comparing.of([]),
