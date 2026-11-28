@@ -1417,6 +1417,10 @@ async fn the_local_settings_link_the_hosts_and_requests_go_to_each_host_s_link()
         (Some("gpu"), &logins["logins"])
     );
     assert_eq!(got["claude"], false);
+    // An error after its welcome is a toast of that host's, never a refusal of the link.
+    let error = json!({"type": "error", "message": "no"});
+    remote.writer.send(raw(&error)).await.unwrap();
+    assert_eq!(next_of(&mut rx, "error").await["host"], "gpu");
     // Its own Settings → Sharing (29.12), asked of it and saved on it.
     hive.on(Some("gpu")).unwrap().get_sharing().unwrap();
     assert_eq!(remote.control().await, (0, Control::GetSharing));

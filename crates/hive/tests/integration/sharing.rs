@@ -138,34 +138,38 @@ async fn a_joining_bridge_reaches_only_its_owners_shared_socket() {
 
 #[tokio::test]
 async fn a_service_that_is_not_a_remote_linux_one_is_never_shared() {
-    let env = Env::new();
-    let daemon = env.daemon();
-    let mut app = env.app().await;
-    app.send(0, Control::GetSharing).await;
-    let (
-        _,
-        Control::Sharing {
-            unavailable,
-            sharing,
-            ..
-        },
-    ) = app.control().await
-    else {
-        panic!()
-    };
-    assert!(unavailable.is_some());
-    assert_eq!(sharing, Sharing::default());
-    let on = Sharing {
-        on: true,
-        group: "x".into(),
-        ..Sharing::default()
-    };
-    app.send(0, Control::SetSharing { sharing: on }).await;
-    let (_, reply) = app.control().await;
-    assert!(matches!(reply, Control::SharingFailed { .. }), "{reply:?}");
-    assert!(!shared_dir(&env).exists());
-    drop(app);
-    crate::common::stop(daemon);
+    // A local service; and off Linux, a remote one too (a remote is Linux, Stage 26 Q5).
+    let mut kinds = vec![&["daemon"][..]];
+    if !cfg!(target_os = "linux") {
+        kinds.push(&["daemon", "--remote"]);
+    }
+    for args in kinds {
+        let env = Env::new();
+        let mut cmd = env.hive();
+        cmd.args(args).stdin(Stdio::null());
+        let daemon = crate::common::Daemon(cmd.spawn().unwrap());
+        crate::common::wait_until(|| std::os::unix::net::UnixStream::connect(env.socket()).is_ok());
+        let mut app = env.app().await;
+        app.send(0, Control::GetSharing).await;
+        let (_, reply) = app.control().await;
+        let reply = serde_json::to_value(reply).unwrap();
+        assert!(reply["unavailable"].is_string(), "{args:?}: {reply}");
+        assert_eq!(
+            reply["sharing"],
+            serde_json::to_value(Sharing::default()).unwrap()
+        );
+        let on = Sharing {
+            on: true,
+            group: "x".into(),
+            ..Sharing::default()
+        };
+        app.send(0, Control::SetSharing { sharing: on }).await;
+        let (_, reply) = app.control().await;
+        assert!(matches!(reply, Control::SharingFailed { .. }), "{reply:?}");
+        assert!(!shared_dir(&env).exists());
+        drop(app);
+        crate::common::stop(daemon);
+    }
 }
 
 /// The name of this process's group.

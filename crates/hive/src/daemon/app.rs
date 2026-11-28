@@ -56,7 +56,8 @@ where
     }
 }
 
-/// Whether the service is shared now (29.12, `welcome.shared`); a Windows one never is.
+/// Whether the service is shared now (29.12, `welcome.shared`); a Windows one never is (a
+/// remote is Linux, Stage 26 Q5: it answers `get_sharing` and `set_sharing` as unexpected).
 fn shared(state: &State) -> bool {
     #[cfg(unix)]
     return state.shared();
@@ -427,12 +428,6 @@ async fn app_frame(
         Ok(Control::SetSharing { sharing }) => {
             let reply = tokio::task::block_in_place(|| state.set_sharing(sharing));
             state.to_app(0, &reply).await;
-        }
-        // Never shared: a remote is Linux (Stage 26 Q5).
-        #[cfg(windows)]
-        Ok(Control::GetSharing | Control::SetSharing { .. }) => {
-            let message = share_unavailable();
-            state.to_app(0, &Control::SharingFailed { message }).await;
         }
         Ok(Control::Resync) => resync(state).await,
         Ok(Control::SetSettings { settings }) => {
@@ -1433,9 +1428,4 @@ mod tests {
         drop((frames, to_service));
         assert_eq!(serving.await.unwrap(), Some(Gone::End));
     }
-}
-
-#[cfg(windows)]
-fn share_unavailable() -> String {
-    "Only the Hive of a remote Linux host can be shared".to_owned()
 }

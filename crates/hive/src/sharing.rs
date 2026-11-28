@@ -98,6 +98,8 @@ pub fn dir(root: &Path, uid: u32) -> PathBuf {
 pub struct Store {
     file: PathBuf,
     current: Mutex<Sharing>,
+    /// Why the file was ignored when read, if it was.
+    problem: Option<String>,
 }
 
 impl Store {
@@ -106,21 +108,25 @@ impl Store {
         let read = std::fs::File::open(&file)
             .and_then(|mut f| crate::git::read_limited(&mut f, FILE_LIMIT))
             .and_then(|bytes| serde_json::from_slice(&bytes).map_err(io::Error::other));
-        let current = match read {
-            Ok(sharing) => sharing,
-            Err(err) if err.kind() == io::ErrorKind::NotFound => Sharing::default(),
+        let (current, problem) = match read {
+            Ok(sharing) => (sharing, None),
+            Err(err) if err.kind() == io::ErrorKind::NotFound => (Sharing::default(), None),
             Err(err) => {
-                eprintln!(
-                    "hive: warning: ignoring {} ({err}): sharing is off",
-                    file.display()
-                );
-                Sharing::default()
+                let problem = format!("ignoring {} ({err}): sharing is off", file.display());
+                eprintln!("hive: warning: {problem}");
+                (Sharing::default(), Some(problem))
             }
         };
         Self {
             file,
             current: Mutex::new(current),
+            problem,
         }
+    }
+
+    /// Why the file was ignored when read (shown as Settings → Sharing's error), if it was.
+    pub fn problem(&self) -> Option<String> {
+        self.problem.clone()
     }
 
     pub fn get(&self) -> Sharing {
@@ -556,6 +562,8 @@ mod tests {
         let store = Store::load(file.clone());
         assert_eq!(store.get(), Sharing::default());
         assert_eq!(store.guest("bob"), None);
+        // A missing file is no problem.
+        assert_eq!(store.problem(), None);
         let mut bob = person("bob");
         bob.role = ShareRole::Collaborator;
         let mut carol = person("carol");
@@ -587,10 +595,26 @@ mod tests {
             guest("carol", "Carol C", ShareRole::Viewer)
         );
         assert_eq!(store.guest("alice"), None);
-        // Unreadable or too large: sharing is off.
+        // A file as large as the limit is read.
+        let mut text = serde_json::to_vec(&sharing).unwrap();
+        text.resize(FILE_LIMIT as usize, b' ');
+        assert_eq!(FILE_LIMIT, 64 * 1024);
+        assert_eq!(Store::load(file.clone()).problem(), None);
+        std::fs::write(&file, &text).unwrap();
+        let read = Store::load(file.clone());
+        assert_eq!((read.get(), read.problem()), (sharing.clone(), None));
+        // Unreadable or too large: sharing is off, and why is kept.
         std::fs::write(&file, "{").unwrap();
-        assert_eq!(Store::load(file.clone()).get(), Sharing::default());
-        std::fs::write(&file, vec![b' '; FILE_LIMIT as usize + 1]).unwrap();
+        let broken = Store::load(file.clone());
+        assert_eq!(broken.get(), Sharing::default());
+        let problem = broken.problem().unwrap();
+        assert!(
+            problem.starts_with(&format!("ignoring {} (", file.display())),
+            "{problem}"
+        );
+        assert!(problem.ends_with("): sharing is off"), "{problem}");
+        text.push(b' ');
+        std::fs::write(&file, &text).unwrap();
         assert_eq!(Store::load(file.clone()).get(), Sharing::default());
         // A failed write keeps the list in use.
         let gone = Store::load(tmp.path().join("missing/sharing.json"));
@@ -766,10 +790,17 @@ mod tests {
         std::fs::set_permissions(&mine, std::fs::Permissions::from_mode(0o710)).unwrap();
         let err = join(&long, "alice", &users).await.unwrap_err();
         assert!(matches!(err, JoinError::Refused(_)), "{err:?}");
-        // The owner's side: a folder at the socket's path cannot be cleared.
+        // The owner's side: a folder at the socket's path cannot be cleared, and says so.
         let gid = nix::unistd::getegid().as_raw();
         let ours = dir(tmp.path(), me());
         std::fs::create_dir_all(ours.join(SOCKET)).unwrap();
-        assert!(open(&ours, me(), gid).is_err());
+        let cleared = std::fs::remove_file(ours.join(SOCKET)).unwrap_err();
+        assert_eq!(open(&ours, me(), gid).unwrap_err().kind(), cleared.kind());
+        // A parent it may not write in: the folder cannot be made, and says why.
+        let closed = tmp.path().join("closed");
+        std::fs::create_dir(&closed).unwrap();
+        std::fs::set_permissions(&closed, std::fs::Permissions::from_mode(0o500)).unwrap();
+        let err = open(&dir(&closed, me()), me(), gid).unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::PermissionDenied);
     }
 }
