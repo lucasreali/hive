@@ -5,8 +5,8 @@ import { apply } from "../reduce";
 import { TerminalArea } from "../shell/TerminalArea";
 import {
   initialState,
+  keepFile,
   type OpenFile,
-  pinFile,
   select,
   setEditing,
   setOpenFile,
@@ -125,7 +125,7 @@ const answer = (path: string, content = DOC) =>
   });
 function open(path: string) {
   setOpenFile(file(path), false);
-  pinFile(file(path));
+  keepFile(file(path));
   answer(path);
 }
 const scroller = () => document.querySelector(".markdown-view") as HTMLElement;

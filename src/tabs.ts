@@ -136,6 +136,7 @@ export function dropFile(s: HiveState, f: OpenFile): Partial<HiveState> {
   const base = {
     openFiles: s.openFiles.filter((t) => !isFor(t, f)),
     tabOrder: s.tabOrder.filter((k) => k !== fileKey(f)),
+    pinnedTabs: s.pinnedTabs.filter((k) => k !== fileKey(f)),
     splits: s.splits.filter((p) => p !== split),
   };
   if (!s.openFile || !isFor(f, s.openFile)) return base;
@@ -304,7 +305,7 @@ export function barItems(s: HiveState): BarItem[] {
 export const placeKey = (s: Pick<HiveState, "host">, place: string) => `${s.host ?? ""}\n${place}`;
 
 /** The keys a tab is remembered by: its bar key, and a terminal's channel too (`inBarOrder`). */
-const keysOf = (s: HiveState, item: BarItem): string[] =>
+export const keysOf = (s: HiveState, item: BarItem): string[] =>
   "path" in item ? [fileKey(item)] : [barKey(s, item), `tab:${item.id}`];
 
 /**
@@ -346,4 +347,64 @@ export function lastShown<T extends BarItem>(
 export function fileVisible(s: HiveState): boolean {
   const place = tabsPlace(s);
   return !!s.openFile && (place === null || s.openFile.worktree === place);
+}
+
+/** Whether the tab is pinned (29.2): by any of its keys, a terminal's channel or its session. */
+export const isPinned = (s: HiveState, item: BarItem): boolean =>
+  keysOf(s, item).some((k) => s.pinnedTabs.includes(k));
+
+/**
+ * The tab pinned, or unpinned when it is (29.2). A pinned file is kept (11.1): no longer the
+ * preview, as a pinned tab is never replaced either.
+ */
+export function withPin(s: HiveState, item: BarItem): Partial<HiveState> {
+  const keys = keysOf(s, item);
+  if (isPinned(s, item)) return { pinnedTabs: s.pinnedTabs.filter((k) => !keys.includes(k)) };
+  const pinnedTabs = keys.reduce(withKey, s.pinnedTabs);
+  return "path" in item ? { pinnedTabs, openFiles: kept(s.openFiles, item) } : { pinnedTabs };
+}
+
+/**
+ * The pins with every key of a pinned terminal of the host shown (29.2): a chat resumed after a
+ * restart, pinned by its session, gains its channel, so the pin stays once `claude` exits; a
+ * terminal pinned before a session started in it gains the session, so the pin is kept between
+ * runs. The same list when nothing is missing.
+ */
+export function pinsFollowed(s: HiveState): string[] {
+  let pins = s.pinnedTabs;
+  for (const tab of s.tabs.filter((t) => onShownHost(s, t))) {
+    const keys = keysOf(s, tab);
+    if (keys.some((k) => pins.includes(k))) pins = keys.reduce(withKey, pins);
+  }
+  return pins;
+}
+
+/** The tab of the bar shown now, the focused pane's in a pair; none when nothing shows. */
+export function shownTab(s: HiveState): BarItem | undefined {
+  const pane = shownPane(s);
+  return barItems(s).find((t) => paneIdOf(t) === pane);
+}
+
+/** The worktree at `path` and its project, as the service reports them. */
+export function worktreeAt(s: HiveState, path: string) {
+  for (const project of Object.values(s.projects ?? {})) {
+    const worktree = project.worktrees.find((w) => w.id === path);
+    if (worktree) return { worktree, project };
+  }
+  return null;
+}
+
+/** What a terminal's tab is called: its agent's session name, else its worktree's name. */
+function tabLabel(s: HiveState, tab: Tab): string {
+  const agent = Object.values(s.agents).find((a) => a.terminal === tab.id)?.id;
+  return (agent && s.agentTitles[agent]) || (worktreeAt(s, tab.cwd)?.worktree.name ?? tab.cwd);
+}
+
+/** A file's name, as its tab shows it. */
+export const fileName = (path: string) => path.slice(path.lastIndexOf("/") + 1);
+
+/** What a tab of the bar is called. */
+export function itemLabel(s: HiveState, item: BarItem): string {
+  if ("path" in item) return fileName(item.path);
+  return tabLabel(s, item);
 }

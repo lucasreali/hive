@@ -826,6 +826,18 @@ label:has(> input[type="checkbox"]:disabled) {
   color: var(--text);
 }
 
+/* A pinned tab (29.2): a pin in the ×'s slot, the same size so the tab keeps its width; not a
+   button, so a click on it does nothing. Unsaved edits' dot takes its place. */
+.tab-pin {
+  flex: none;
+  width: 22px;
+  height: 22px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-3);
+}
+
 .terminal-body {
   flex: 1;
   min-height: 0;
@@ -3690,6 +3702,13 @@ button.chevron:hover {
 
 .context-menu [role="menuitem"] kbd {
   margin-left: auto;
+}
+
+/* Why an item is disabled, at its end (29.2: "Unpin to close"). */
+.context-menu .menu-item-note {
+  margin-left: auto;
+  padding-left: 16px;
+  font-size: 12px;
 }
 
 /* A menu item's leading icon (7.7), muted; agent state icons keep their color. */

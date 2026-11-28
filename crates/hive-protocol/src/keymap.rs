@@ -45,6 +45,7 @@ pub const COMMAND_IDS: &[&str] = &[
     "find-in-terminal",
     "toggle-markdown",
     "close-tab",
+    "pin-tab",
     "next-tab",
     "previous-tab",
     "tab-1",

@@ -84,6 +84,8 @@ import {
   editFor,
   fileKey,
   fileVisible,
+  isPinned,
+  itemLabel,
   itemWorktree,
   kept,
   lastShown,
@@ -93,6 +95,7 @@ import {
   paneIdOf,
   paneKey,
   patchEdits,
+  pinsFollowed,
   placeKey,
   shownInstead,
   shownPane,
@@ -102,6 +105,7 @@ import {
   tabWorktree,
   visibleTabs,
   withKey,
+  withPin,
   withShown,
 } from "./tabs";
 import { type EditBuffer, isDirty, isFor } from "./viewer/buffer";
@@ -161,7 +165,7 @@ export type FileTab = OpenFile & {
   view: unknown;
   /**
    * The preview tab (11.1), at most one: opening another file replaces it. It is kept (false)
-   * once pinned (a double click) or given unsaved edits.
+   * once kept (a double click) or given unsaved edits.
    */
   preview?: boolean;
   rendered?: boolean;
@@ -511,6 +515,13 @@ export type HiveState = {
    */
   pendingSplits: [string, string][];
   /**
+   * The pinned tabs (29.2) by their bar keys: a pinned tab has no ×, and the user's ways to close
+   * it (⌘W, the palette, its menu) refuse. A terminal is pinned by its channel and, while a Claude
+   * session runs in it, by its session too (`followPins`), so the pin outlasts either; only
+   * files' and sessions' keys are kept between runs, per host (28.27's places).
+   */
+  pinnedTabs: string[];
+  /**
    * The terminal whose search bar is open (17.21): it shows while that terminal is the active
    * tab, over its pane.
    */
@@ -735,6 +746,7 @@ export const initialState: HiveState = {
   activeTab: null,
   splits: [],
   pendingSplits: [],
+  pinnedTabs: [],
   terminalSearch: null,
   inbox: [],
   inboxSeen: 0,
@@ -910,6 +922,7 @@ export const HOST_FIELDS = [
   "collapsed",
   "splits",
   "pendingSplits",
+  "pinnedTabs",
   "fileDialog",
   "fileMenu",
 ] as const satisfies readonly (keyof HiveState)[];
@@ -966,6 +979,8 @@ export function restoredHost(
     collapsed: places.collapsed,
     splits,
     pendingSplits,
+    // A file not reopened is no longer pinned; a chat stays pinned until it is resumed (29.2).
+    pinnedTabs: places.pins.filter((k) => !k.startsWith("file:") || open.has(k)),
   };
 }
 
@@ -1128,6 +1143,7 @@ useHive.subscribe(saveUnseenOnly);
 useHive.subscribe(followSpacePlaces);
 useHive.subscribe(saveHosts);
 useHive.subscribe(followPairs);
+useHive.subscribe(followPins);
 useHive.subscribe(followQuietTabs);
 useHive.subscribe(followRestore);
 
@@ -1211,6 +1227,7 @@ const HOST_PLACE_FIELDS = [
   "diffBases",
   "changes",
   "collapsed",
+  "pinnedTabs",
   "agents",
   "stash",
   "host",
@@ -1247,6 +1264,8 @@ export function placesOf(view: HiveState): HostPlaces {
     collapsed: Object.fromEntries(
       Object.entries(view.collapsed).filter(([key, value]) => !byDefault(key, value)),
     ),
+    // A plain terminal's channel is one run's (29.2).
+    pins: view.pinnedTabs.filter((k) => !k.startsWith("tab:")),
   };
 }
 
@@ -1661,8 +1680,30 @@ export const setEdit = (edit: EditBuffer | null) =>
     edit,
     openFiles: edit && isDirty(edit) ? kept(s.openFiles, edit) : s.openFiles,
   }));
+/** Pins tab `item`, or unpins it when it is pinned (29.2). */
+export const togglePin = (item: BarItem) => useHive.setState((s) => withPin(s, item));
+
+/** Keeps every key of a pinned terminal pinned (29.2, `pinsFollowed`) as its sessions come and go. */
+export function followPins(s: HiveState, prev: HiveState): void {
+  const fields = ["tabs", "agents", "pinnedTabs", "host"] as const;
+  if (fields.every((field) => s[field] === prev[field])) return;
+  const pinnedTabs = pinsFollowed(s);
+  if (pinnedTabs !== s.pinnedTabs) useHive.setState({ pinnedTabs });
+}
+
+/**
+ * Whether the user's close of tab `item` (⌘W, the palette, its menu) is refused because it is
+ * pinned (29.2): a toast then says how to close it.
+ */
+export function closeRefused(item: BarItem): boolean {
+  const s = useHive.getState();
+  if (!isPinned(s, item)) return false;
+  showNotice("info", `${itemLabel(s, item)} is pinned. Unpin it to close it.`);
+  return true;
+}
+
 /** Keeps file `f`'s tab: it stops being the preview tab (11.1, a double click). */
-export const pinFile = (f: OpenFile) =>
+export const keepFile = (f: OpenFile) =>
   useHive.setState((s) => ({ openFiles: kept(s.openFiles, f) }));
 export const setEditorNotice = (editorNotice: string | null) => useHive.setState({ editorNotice });
 export const setSelectedLines = (selectedLines: Lines | null) =>
@@ -1823,6 +1864,7 @@ export const removeTab = (id: number) =>
       scriptRuns,
       tabs: s.tabs.filter((t) => t.id !== id),
       tabOrder: s.tabOrder.filter((k) => !gone.includes(k)),
+      pinnedTabs: s.pinnedTabs.filter((k) => !gone.includes(k)),
       activeTab: s.activeTab === id ? next : s.activeTab,
       splits: s.splits.filter((p) => p !== split),
     };

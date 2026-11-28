@@ -185,6 +185,7 @@ test("the last run's pairs waiting for a chat expire when the restore ends", () 
     pairs: [["session:s1", c]] as [string, string][],
     diffBases: {},
     collapsed: {},
+    pins: [],
   };
   startHosts({ "": places, gpu: places });
   launch(["session:s1"], [{ worktree: W, path: "c.ts" }]);
@@ -333,6 +334,7 @@ test("a host not linked in this run keeps its saved places and pairs untouched",
     pairs: [["session:s1", c]] as [string, string][],
     diffBases: { "/srv/w": "head" as const },
     collapsed: { "files:/srv/w/src": false },
+    pins: [],
   };
   startHosts({ off });
   launch(["session:s1"]);

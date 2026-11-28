@@ -21,8 +21,8 @@ import {
   focusFilePane,
   focusPane,
   initialState,
+  keepFile,
   moveTab,
-  pinFile,
   renderedShown,
   replacePane,
   select,
@@ -102,15 +102,15 @@ const table = (path: string) =>
 /** `a` and `b` open with tabs of their own, `b` the open file. */
 function twoFiles(editing = false) {
   setOpenFile(a, editing);
-  pinFile(a);
+  keepFile(a);
   setOpenFile(b, editing);
-  pinFile(b);
+  keepFile(b);
 }
 
 test("a file and a terminal pair: both show, the focused one's tab active, in the bar's order", () => {
   addTab(1, W);
   setOpenFile(a);
-  pinFile(a);
+  keepFile(a);
   addTab(2, W);
   setSplit({ left: 1, right: A });
   expect(s().splits).toEqual([{ left: 1, right: A }]);
@@ -216,9 +216,9 @@ test("a save's answer reaches the buffer of the pane that lost the focus meanwhi
 
 test("a pane's answers and modes: a tab without a buffer yet, a read-only one, a table", () => {
   setOpenFile(a, true);
-  pinFile(a);
+  keepFile(a);
   setOpenFile(b);
-  pinFile(b);
+  keepFile(b);
   setSplit({ left: B, right: A }, B);
   // Editing, no buffer yet: the first answer starts it. Read-only: only the text is kept.
   answer(a.path, "ay\n");
@@ -263,7 +263,7 @@ test("closing a paired tab ends its pair and the other pane shows", () => {
   expect([s().splits, s().fileShown, s().activeTab, s().openFile]).toEqual([[], false, 1, null]);
   // A file beside a file: the other file shows.
   setOpenFile(a);
-  pinFile(a);
+  keepFile(a);
   setSplit({ left: A, right: B }, A);
   useHive.setState((x) => ({ ...x, ...dropFile(s(), a) }));
   expect([s().splits, s().fileShown, s().openFile]).toEqual([[], true, b]);
@@ -376,11 +376,11 @@ test('"Split right" on a file skips a tab in a pair', async () => {
 
 test('"Split right" on a file skips another worktree\'s tabs, files and terminals', async () => {
   setOpenFile(a);
-  pinFile(a);
+  keepFile(a);
   // Right after `a` in the order: a file and a terminal of another worktree.
   const away = { worktree: checkout.path, path: "away.ts" };
   setOpenFile(away);
-  pinFile(away);
+  keepFile(away);
   addTab(9, checkout.path);
   addTab(1, W);
   select(fixLogin.id);
@@ -417,7 +417,7 @@ test("a pair's other table with unsaved edits (25.4) is its buffer's, in its tab
     { worktree: W, path: "d.csv" },
   ];
   setOpenFile(c);
-  pinFile(c);
+  keepFile(c);
   answer(c.path, "a\n");
   editOpenTable({ op: "insert_row", at: 0 });
   const sheet = (rows: string[][]) => ({ name: "", rows, total: rows.length, partial: false });
@@ -428,7 +428,7 @@ test("a pair's other table with unsaved edits (25.4) is its buffer's, in its tab
   openTable.mockClear();
 
   setOpenFile(d);
-  pinFile(d);
+  keepFile(d);
   setSplit({ left: fileKey(c), right: fileKey(d) }, fileKey(d));
   // Asked from its buffer, not the disk; the open file from the disk.
   expect(editTable.mock.calls).toEqual([[W, c.path, "x\na\n", null]]);
@@ -477,9 +477,9 @@ test("a pair's other file is followed as the open one is, its table too", () => 
     { worktree: W, path: "d.csv" },
   ];
   setOpenFile(c);
-  pinFile(c);
+  keepFile(c);
   setOpenFile(d);
-  pinFile(d);
+  keepFile(d);
   setSplit({ left: fileKey(c), right: fileKey(d) }, fileKey(d));
   expect(tableShown(paneState(s(), c))).toBe(true);
   expect(openFile.mock.calls.at(-1)?.slice(0, 2)).toEqual([W, c.path]);
@@ -578,9 +578,9 @@ test("a rendered Markdown pane's ⌘S acts only when it has the focus", () => {
   ];
   addTab(1, W);
   setOpenFile(m, true);
-  pinFile(m);
+  keepFile(m);
   setOpenFile(n, true);
-  pinFile(n);
+  keepFile(n);
   render(<TerminalArea />);
   act(() => {
     answer(n.path, "# n\n");
@@ -621,7 +621,7 @@ test("a rendered Markdown pane's ⌘S acts only when it has the focus", () => {
 test("a file beside a terminal: the host takes its side and keeps the keyboard until the file has it", () => {
   addTab(1, W);
   setOpenFile(a, true);
-  pinFile(a);
+  keepFile(a);
   render(<TerminalArea />);
   act(() => setSplit({ left: 1, right: A }, 1));
   act(() => answer(a.path, "ay\n"));
@@ -652,7 +652,7 @@ test("the file tab's and the pane header's menu split, replace and close; Replac
   twoFiles();
   const c = { worktree: W, path: "src/c.ts" };
   setOpenFile(c);
-  pinFile(c);
+  keepFile(c);
   render(<TerminalArea />);
   const fileTab = (name: string) => bar().getByRole("tab", { name: new RegExp(`^${name}`) });
   const items = () =>
@@ -662,7 +662,7 @@ test("the file tab's and the pane header's menu split, replace and close; Replac
 
   // Alone: Split right and Close.
   fireEvent.contextMenu(fileTab("a.ts"));
-  expect(items()).toEqual(["Split right", "Close file"]);
+  expect(items()).toEqual(["Split right", "Pin tab", "Close file"]);
   await act(async () => {
     fireEvent.click(screen.getByRole("menuitem", { name: "Split right" }));
   });
@@ -683,7 +683,7 @@ test("the file tab's and the pane header's menu split, replace and close; Replac
 
   // The header of a pane has the same menu.
   fireEvent.contextMenu(pane(a).querySelector(".file-view-bar") as HTMLElement);
-  expect(items()).toEqual(["Unsplit", "Replace with", "Swap sides", "Close file"]);
+  expect(items()).toEqual(["Unsplit", "Replace with", "Swap sides", "Pin tab", "Close file"]);
   // Anywhere else in the pane, not.
   fireEvent.click(screen.getByRole("menuitem", { name: "Swap sides" }));
   expect(s().splits).toEqual([{ left: B, right: A }]);
@@ -716,7 +716,7 @@ test("the file tab's and the pane header's menu split, replace and close; Replac
 test("Replace with follows the bar's order and says a tab's place in it, not its id", () => {
   for (const id of [1, 2, 3, 4]) addTab(id, W);
   setOpenFile(a);
-  pinFile(a);
+  keepFile(a);
   // The bar: a.ts, 4, 3, 1, 2.
   moveTab("tab:3", "tab:1", false);
   moveTab("tab:4", "tab:3", false);
@@ -740,7 +740,7 @@ test("Replace with follows the bar's order and says a tab's place in it, not its
 test("Replace with says why it is off when the pair holds the worktree's only tabs", () => {
   addTab(1, W);
   setOpenFile(a);
-  pinFile(a);
+  keepFile(a);
   render(<TerminalArea />);
   act(() => setSplit({ left: 1, right: A }));
   fireEvent.contextMenu(bar().getByRole("tab", { name: /^a\.ts/ }));
@@ -780,7 +780,7 @@ test("a tab dragged over a file pane is highlighted and dropped there, ahead of 
 test("the bar's number keys show a paired file's pair", () => {
   addTab(1, W);
   setOpenFile(a);
-  pinFile(a);
+  keepFile(a);
   setSplit({ left: 1, right: A }, 1);
   showBarItem(1);
   expect([shownPanes(s()), shownPane(s())]).toEqual([[1, A], A]);

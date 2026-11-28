@@ -555,6 +555,13 @@ export const COMMAND_TABLE: readonly Bindable[] = [
     defaults: { windows: none, mac: ["Cmd+W"] },
   },
   {
+    // 29.2: no default on either platform; Settings → Keyboard binds one.
+    id: "pin-tab",
+    label: "Pin or unpin the tab",
+    context: "any",
+    defaults: { windows: none, mac: none },
+  },
+  {
     id: "next-tab",
     label: "Show the next tab",
     context: "any",

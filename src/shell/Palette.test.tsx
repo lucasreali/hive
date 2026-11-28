@@ -72,7 +72,9 @@ test("lists every command with its keys but itself, then agents and worktrees", 
     [
       // No Markdown file shown: its toggle (11.2) is not offered.
       // Nor macOS' own commands, off macOS.
-      ...COMMANDS.filter((c) => c.id !== "palette" && c.context === "any").map((c) => c.label),
+      ...COMMANDS.filter((c) => c.id !== "palette" && c.context === "any").map((c) =>
+        c.id === "pin-tab" ? "Pin the tab" : c.label,
+      ),
       "Remove merged worktrees…",
       "Remove project…",
       // One per view of the rail (25.3), with no shortcut.

@@ -6,7 +6,7 @@ import {
   initialState,
   isTable,
   isWorkbook,
-  pinFile,
+  keepFile,
   select,
   setOpenFile,
   setTableShown,
@@ -209,7 +209,7 @@ test("the text view is the tab's choice, and unsaved edits can go back to the ta
   open(CSV, true);
   file(CSV, TEXT);
   fireEvent.click(toggle() as HTMLElement);
-  act(() => pinFile({ worktree: refactor.path, path: CSV }));
+  act(() => keepFile({ worktree: refactor.path, path: CSV }));
   open("data/other.tsv");
   expect(pressed()).toBe("true");
   open(CSV, true);

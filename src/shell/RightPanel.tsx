@@ -50,12 +50,12 @@ import {
   isMarkdown,
   isTable,
   isWorkbook,
+  keepFile,
   type OpenFile,
   onRemote,
   openFileMenu,
   type PanelView,
   panelWorktree,
-  pinFile,
   renderedShown,
   setDiffBase,
   setEditing,
@@ -1029,7 +1029,7 @@ function FileTree({ worktree, changedOnly }: { worktree: string; changedOnly: bo
         onDoubleClick={(e) => {
           const row = rows[indexAt(e)];
           const box = onSeenMark(e) || !!(e.target as Element).closest("[data-stage]");
-          if (row?.kind === "file" && !box) pinFile({ worktree, path: row.key });
+          if (row?.kind === "file" && !box) keepFile({ worktree, path: row.key });
         }}
         // On a row, its menu; on the tree itself: a click below the rows (the root), or the Menu
         // key (the active row).
