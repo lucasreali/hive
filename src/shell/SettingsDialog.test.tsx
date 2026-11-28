@@ -1019,9 +1019,9 @@ test("a recorded chord is added, saved as a change, and its terminal key named",
   // A lone modifier is no chord yet.
   record("Command palette", { key: "Control", code: "ControlLeft", ctrlKey: true });
   expect(screen.getByRole("textbox", { name: "New shortcut for Command palette" })).toBeTruthy();
-  // Option's character is the key's: Alt+K, never "˚".
+  // Ctrl+Alt+K (on Windows, where a Ctrl+Alt character would be AltGr's).
   const field = screen.getByRole("textbox", { name: "New shortcut for Command palette" });
-  expect(fireEvent.keyDown(field, { key: "˚", code: "KeyK", ctrlKey: true, altKey: true })).toBe(
+  expect(fireEvent.keyDown(field, { key: "k", code: "KeyK", ctrlKey: true, altKey: true })).toBe(
     false,
   );
   await waitFor(() => expect(keymap().palette).toEqual(["Ctrl+Shift+P", "Ctrl+Alt+K"]));
@@ -1068,6 +1068,17 @@ test("a chord with no modifier or a fixed key is refused, and Esc or a click awa
   fireEvent.blur(screen.getByRole("textbox", { name: /^New shortcut/ }));
   expect(screen.queryByRole("textbox", { name: /^New shortcut/ })).toBeNull();
   expect(keymap()).toEqual({});
+});
+
+test("an AltGr character (Windows) is not recorded as Ctrl+Alt+key", async () => {
+  open();
+  section("Keyboard");
+  record("Command palette", { key: "@", code: "KeyQ", ctrlKey: true, altKey: true });
+  expect(note()?.textContent).toBe("@ is a character AltGr types, not a shortcut");
+  expect(keymap()).toEqual({});
+  // Ctrl+Alt+Q itself is.
+  record("Command palette", { key: "q", code: "KeyQ", ctrlKey: true, altKey: true });
+  await waitFor(() => expect(keymap().palette).toEqual(["Ctrl+Shift+P", "Ctrl+Alt+Q"]));
 });
 
 test("a chord another command has asks: keep both, or take it", async () => {

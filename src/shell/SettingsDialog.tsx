@@ -15,6 +15,7 @@ import { type CSSProperties, Fragment, type ReactNode, useEffect, useRef, useSta
 import { useShallow } from "zustand/react/shallow";
 import { version as appVersion } from "../../package.json";
 import {
+  altGr,
   bindings,
   chordOf,
   chordText,
@@ -795,6 +796,11 @@ function Keyboard({ search }: { search?: string }) {
     const chord = chordOf(event);
     if (!chord) return;
     setRecording(null);
+    // An AltGr character (Windows) is never a shortcut: it is not recorded as Ctrl+Alt+key.
+    if (altGr(event)) {
+      setNote({ id: c.id, text: `${event.key} is a character AltGr types, not a shortcut` });
+      return;
+    }
     const parsed = parseChord(chord, on, c.id);
     if (parsed.error !== undefined) {
       setNote({ id: c.id, text: parsed.error.replace(JSON.stringify(chord), chordText(chord)) });

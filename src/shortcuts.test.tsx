@@ -703,3 +703,10 @@ test("on Windows an AltGr character (Ctrl+Alt) is the field's or the terminal's,
   expect(useHive.getState().modal).toBeNull();
   write.mockRestore();
 });
+
+test("on AZERTY a recorded Ctrl+Alt+letter runs: its letter is the one the layout types", () => {
+  app();
+  rebind({ palette: "Ctrl+Alt+A" });
+  expect(press({ key: "a", code: "KeyQ", ctrlKey: true, altKey: true })).toBe(true);
+  expect(useHive.getState().modal).toBe("palette");
+});

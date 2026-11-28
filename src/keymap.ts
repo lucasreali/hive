@@ -349,7 +349,8 @@ export function chordOf(event: KeyboardEvent): string | null {
  */
 export function altGr(event: KeyboardEvent): boolean {
   if (isMac() || !event.ctrlKey || !event.altKey || event.metaKey) return false;
-  if ([...event.key].length !== 1) return false;
+  // A letter is the one the layout types (AZERTY's Ctrl+Alt+A: key a, code KeyQ), as matched.
+  if ([...event.key].length !== 1 || /^[A-Za-z]$/.test(event.key)) return false;
   const key = event.key.toUpperCase();
   const physical = physicalKey(event.code);
   if (Object.values(EVENT_KEYS).includes(event.key)) return false;

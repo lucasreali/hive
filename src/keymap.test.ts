@@ -177,6 +177,11 @@ test("AltGr (Ctrl+Alt on Windows) typing a character is told from Ctrl+Alt+key",
   const at = key({ key: "@", code: "KeyQ", ctrlKey: true, altKey: true });
   expect(altGr(at)).toBe(true);
   expect(altGr(key({ key: "q", code: "KeyQ", ctrlKey: true, altKey: true }))).toBe(false);
+  // A letter of another layout is that letter (AZERTY's A is where QWERTY's Q is).
+  expect(altGr(key({ key: "a", code: "KeyQ", ctrlKey: true, altKey: true }))).toBe(false);
+  expect(altGr(key({ key: "Z", code: "KeyY", ctrlKey: true, altKey: true, shiftKey: true }))).toBe(
+    false,
+  );
   expect(altGr(key({ key: "[", code: "BracketLeft", ctrlKey: true, altKey: true }))).toBe(false);
   expect(
     altGr(key({ key: "{", code: "BracketLeft", ctrlKey: true, altKey: true, shiftKey: true })),
