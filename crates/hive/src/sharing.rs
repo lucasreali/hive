@@ -615,13 +615,22 @@ mod tests {
         let joined = join(tmp.path(), "alice", &users).await.unwrap();
         listener.accept().await.unwrap();
         drop((joined, listener));
-        // Taken back by a new service: the old socket is replaced.
-        let (_listener, again) = open(&dir, me(), gid).unwrap();
-        assert_ne!(again, id);
-        // Another file at the socket's path is not removed, the folder then stays.
-        close(&dir, id);
-        assert!(dir.join(SOCKET).exists());
+        // Taken back by a new service: the old socket is replaced by one that listens.
+        let (listener, again) = open(&dir, me(), gid).unwrap();
+        let users = fake();
+        let joined = join(tmp.path(), "alice", &users).await.unwrap();
+        listener.accept().await.unwrap();
+        drop(joined);
+        // Another file put at the socket's path (alive with it, so never its inode) is not
+        // removed, and the folder then stays.
+        let other = dir.join("other");
+        std::fs::write(&other, "").unwrap();
+        assert_ne!(id_of(&std::fs::metadata(&other).unwrap()), again);
+        std::fs::rename(&other, dir.join(SOCKET)).unwrap();
         close(&dir, again);
+        assert!(dir.join(SOCKET).exists());
+        std::fs::remove_file(dir.join(SOCKET)).unwrap();
+        close(&dir, id);
         assert!(!dir.exists());
         // Nothing to close: nothing happens.
         close(&dir, again);
