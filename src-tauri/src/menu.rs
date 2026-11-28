@@ -6,6 +6,7 @@
 //! button runs. The native items are AppKit's: Edit's Undo/Redo/Cut/Copy/Paste/Select All are what
 //! lets ⌘C/⌘V reach text fields, the editor and the terminal's paste in WKWebView (17.8).
 
+use hive_protocol::keymap::{Chord, Keymap, Platform, COMMAND_IDS};
 use serde_json::json;
 use tauri::{AppHandle, Manager, Runtime};
 
@@ -203,4 +204,39 @@ pub fn on_menu<R: Runtime>(app: &AppHandle<R>, id: &str) {
             Action::None => {}
         }
     }
+}
+
+/// Hive's own items that are app commands (28.7), each with its command's macOS default (#35):
+/// their accelerators follow the keymap ([`accelerators`]).
+pub const COMMAND_ITEMS: &[(&str, &str)] = &[
+    ("settings", "Cmd+,"),
+    ("toggle-panel", "Shift+Cmd+B"),
+    ("close-tab", "Cmd+W"),
+];
+
+/// The accelerator (Tauri's form) of each item of [`COMMAND_ITEMS`] for the settings'
+/// `keymap`: its command's first chord when the keymap has an entry for it (none when it has
+/// no chord); else its default, unless another command's entry took that chord, so the menu
+/// never steals a key the UI gives to another command.
+pub fn accelerators(keymap: &Keymap) -> Vec<(&'static str, Option<String>)> {
+    let taken = |chord: &str, id: &str| {
+        COMMAND_IDS
+            .iter()
+            .filter(|other| **other != id)
+            .any(|other| {
+                let chords = keymap.chords(other, Platform::Mac).unwrap_or_default();
+                chords.iter().any(|c| c.to_string() == chord)
+            })
+    };
+    let accelerator = |id: &str, default: &str| match keymap.chords(id, Platform::Mac) {
+        Some(chords) => chords.first().map(Chord::accelerator),
+        None if taken(default, id) => None,
+        None => Chord::parse(default, Platform::Mac)
+            .ok()
+            .map(|c| c.accelerator()),
+    };
+    COMMAND_ITEMS
+        .iter()
+        .map(|(id, default)| (*id, accelerator(id, default)))
+        .collect()
 }

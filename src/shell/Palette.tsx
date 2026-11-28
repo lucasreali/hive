@@ -1,9 +1,10 @@
 import { FileTextIcon, GitBranchIcon, type Icon, LightningIcon } from "@phosphor-icons/react";
 import { useEffect, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
+import { shortcutText } from "../keymap";
 import { whoWrote } from "../provenance";
 import { runScript, worktreeScripts } from "../scripts";
-import { commandKeys, currentProject, goToAgent, platformCommands } from "../shortcuts";
+import { COMMANDS, commandHolds, currentProject, goToAgent } from "../shortcuts";
 import {
   type HiveState,
   openModal,
@@ -138,9 +139,11 @@ export function paletteCommands(s: HiveState): PaletteItem[] {
   // As the app menu's item (23.5): only macOS has an app to remove; Windows keeps its own
   // uninstaller.
   if (isMac()) extra.push({ label: "Uninstall Hive…", run: () => openModal("uninstall") });
-  const commands = platformCommands()
-    .filter((c) => c.id !== "palette" && (c.when?.(s) ?? true))
-    .map((c) => ({ label: c.label, keys: commandKeys(c), run: c.run }));
+  const commands = COMMANDS.filter((c) => c.id !== "palette" && commandHolds(c, s)).map((c) => ({
+    label: c.label,
+    keys: shortcutText(c.id) || undefined,
+    run: c.run,
+  }));
   return [...commands, ...extra];
 }
 

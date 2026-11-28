@@ -1,4 +1,5 @@
 import { useRef } from "react";
+import { withKeys } from "../keymap";
 import type { ReviewComment } from "../protocol";
 import { ago } from "../sessions";
 import { CloseIcon } from "../shell/icons";
@@ -6,7 +7,7 @@ import { useKeptScroll, viewKey } from "../shell/panelPlace";
 import { type HiveState, panelWorktree, setOpenFile, useHive } from "../store";
 import { pasteToTerminal, terminal } from "../terminals";
 import { transport } from "../transport";
-import { composing, keyText } from "../window";
+import { composing } from "../window";
 import { reference, showAgentTerminal } from "./reference";
 import { SendButton } from "./SendButton";
 import { terminalIn } from "./target";
@@ -194,7 +195,7 @@ export function CommentsView({ worktree }: { worktree: string }) {
     return (
       <div className="comments">
         <div className="hint">
-          {keyText("No comments. Select lines of a file and press Comment (Ctrl+Shift+M).")}
+          {`No comments. Select lines of a file and press ${withKeys("Comment", "comment")}.`}
         </div>
       </div>
     );
@@ -230,7 +231,7 @@ export function CommentButton({ live = true }: { live?: boolean }) {
     <button
       type="button"
       className="ghost text"
-      title={why ?? keyText("Comment on the selected lines (Ctrl+Shift+M)")}
+      title={why ?? withKeys("Comment on the selected lines", "comment")}
       disabled={why !== null}
       onClick={startComment}
     >

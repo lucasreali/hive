@@ -27,6 +27,7 @@ import {
 } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { stageFiles } from "../git";
+import { withKeys } from "../keymap";
 import type {
   ChangedFile,
   Changes,
@@ -464,7 +465,7 @@ function OpenView({ shown }: { shown: PanelViewEntry }) {
         <button
           type="button"
           className="ghost"
-          title={keyText("Close (Ctrl+Shift+B)")}
+          title={withKeys("Close", "toggle-panel")}
           onClick={() => setRightPanel(null)}
         >
           <CloseIcon />
@@ -1467,7 +1468,7 @@ export function FileView(props: {
             className="ghost"
             aria-label="Show rendered Markdown"
             aria-pressed={rendered}
-            title={keyText(`${rendered ? "Show the text" : "Show rendered"} (Ctrl+Shift+V)`)}
+            title={withKeys(rendered ? "Show the text" : "Show rendered", "toggle-markdown")}
             onClick={() => setRendered(!rendered)}
           >
             <EyeIcon />
@@ -1515,7 +1516,7 @@ export function FileView(props: {
           why={unsendable}
           className="ghost"
           label="Send to agent"
-          title={keyText("Send the selected lines' reference to the agent (Ctrl+Shift+L)")}
+          title={withKeys("Send the selected lines' reference to the agent", "send-reference")}
           onSend={sendReference}
         >
           <TerminalIcon />

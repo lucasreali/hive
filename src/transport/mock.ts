@@ -1,3 +1,4 @@
+import { keymapProblems, platform } from "../keymap";
 import type {
   AgentState,
   Alert,
@@ -1302,6 +1303,12 @@ export function createMockTransport(
   let copied = "";
   // Kept in memory; the real service checks the ranges and saves them.
   let settings: Settings = options.settings ?? DEFAULT_SETTINGS;
+  /** The settings with the keymap's problems, as the service sends them (28.7). */
+  const settingsMessage = (): ServiceMessage => ({
+    type: "settings",
+    settings,
+    problems: keymapProblems(settings.keymap, platform()),
+  });
   // The typed line stands in for the tool call it is doing.
   const states = new Map<string, AgentState>();
   const setState = (id: string, state: AgentState, activity: string | null = null) => {
@@ -1458,7 +1465,7 @@ export function createMockTransport(
     const failure = HANDSHAKE[scenario ?? ""];
     later(failure ?? (mode === "native" ? { ...WELCOME, distro: null } : WELCOME));
     if (failure) return;
-    later({ type: "settings", settings });
+    later(settingsMessage());
     sendSpaces();
     later({ type: "projects", projects });
     if (scenario === "states") {
@@ -1585,7 +1592,7 @@ export function createMockTransport(
       });
     },
     async getSettings() {
-      later({ type: "settings", settings });
+      later(settingsMessage());
     },
     async setSettings(next) {
       // As the service: an account a space uses is not removed (22.5), and an empty default
@@ -1619,7 +1626,7 @@ export function createMockTransport(
       }));
       const claude = { ...next.claude, accounts: kept, default_name: default_name || "Default" };
       settings = { ...next, claude, gh: { config_dirs: dirs } };
-      later({ type: "settings", settings });
+      later(settingsMessage());
       // As the service: the scripts the app has follow the settings (23.4).
       if (scriptsAsked) later(scriptsOfWorktree(scriptsAsked));
     },
@@ -1644,7 +1651,7 @@ export function createMockTransport(
       }
       const account = { name, config_dir, hive_folder: true };
       settings = { ...settings, claude: { ...settings.claude, accounts: [...accounts, account] } };
-      later({ type: "settings", settings });
+      later(settingsMessage());
     },
     async removeAccount(configDir, deleteFolder) {
       const { accounts } = settings.claude;
@@ -1792,7 +1799,7 @@ export function createMockTransport(
       if (settings.projects[id]) {
         const { [id]: _, ...rest } = settings.projects;
         settings = { ...settings, projects: rest };
-        later({ type: "settings", settings });
+        later(settingsMessage());
       }
       for (const p of removed) later({ type: "project_removed", id: p.id });
     },

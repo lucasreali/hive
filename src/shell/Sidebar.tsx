@@ -9,6 +9,7 @@ import {
   useSyncExternalStore,
 } from "react";
 import { useShallow } from "zustand/react/shallow";
+import { withKeys } from "../keymap";
 import type {
   Agent,
   AgentState,
@@ -40,7 +41,6 @@ import {
 } from "../store";
 import { openClaude, showOpenFailure } from "../terminals";
 import { transport } from "../transport";
-import { keyText } from "../window";
 import { HostDown } from "./Hosts";
 import {
   BranchIcon,
@@ -117,7 +117,7 @@ export function Sidebar() {
           <button
             type="button"
             className="ghost"
-            title={keyText("Add project (Ctrl+Shift+O)")}
+            title={withKeys("Add project", "add-project")}
             onClick={() => openModal("add-project")}
           >
             <PlusIcon />

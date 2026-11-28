@@ -85,6 +85,9 @@ fn main() {
             // Links to the remote hosts over ssh, which get the app's Linux builds (26.17).
             #[cfg(target_os = "macos")]
             let hive = hive.with_remote(hive_lib::remote::SSH.into(), app.path().resource_dir()?);
+            // The menu's items that are commands follow the keymap (28.7).
+            #[cfg(target_os = "macos")]
+            let hive = hive.with_menu_keys(menu_keys(app));
             // Asks for notification permission at launch; the tone plays from the app (17.19).
             #[cfg(target_os = "macos")]
             let hive = hive
@@ -486,6 +489,25 @@ fn app_menu(app: &tauri::AppHandle) -> tauri::Result<tauri::menu::Menu<tauri::Wr
         menu.append(&submenu)?;
     }
     Ok(menu)
+}
+
+/// Sets an app menu item's accelerator (28.7), as `hive_lib::menu::accelerators` decides it;
+/// `None` takes its key away.
+#[cfg(target_os = "macos")]
+fn menu_keys(app: &tauri::App) -> impl Fn(&str, Option<&str>) + Send + Sync + 'static {
+    let app = app.handle().clone();
+    move |id, keys| {
+        let menus = app
+            .menu()
+            .and_then(|menu| menu.items().ok())
+            .unwrap_or_default();
+        let item = menus
+            .iter()
+            .find_map(|menu| menu.as_submenu()?.get(id)?.as_menuitem().cloned());
+        if let Some(Err(error)) = item.map(|item| item.set_accelerator(keys)) {
+            eprintln!("hive-app: the menu item {id} keeps its key: {error}");
+        }
+    }
 }
 
 /// The menu bar icon (17.22): shows `hive_lib::tray`'s view, or removes it. Choosing an item

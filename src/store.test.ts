@@ -59,6 +59,24 @@ test("settings replace the defaults; a failure keeps them and says why", () => {
   expect([s.settings, s.settingsError]).toEqual([settings, null]);
 });
 
+test("the keymap's problems are kept and said once each time they change (28.7)", () => {
+  const notices = () => useHive.getState().notices.map((n) => n.text);
+  apply({ type: "settings", settings: DEFAULT_SETTINGS, problems: ["a"] });
+  expect(useHive.getState().settingsProblems).toEqual(["a"]);
+  expect(notices()).toEqual(["The keymap has a problem: see Settings → Keyboard"]);
+  // The same list again says nothing; a new one says it again.
+  apply({ type: "settings", settings: DEFAULT_SETTINGS, problems: ["a"] });
+  apply({ type: "settings", settings: DEFAULT_SETTINGS, problems: ["a", "b"] });
+  expect(notices()).toEqual([
+    "The keymap has a problem: see Settings → Keyboard",
+    "The keymap has 2 problems: see Settings → Keyboard",
+  ]);
+  // None (or an older service, which sends none): nothing to say.
+  apply({ type: "settings", settings: DEFAULT_SETTINGS });
+  expect(useHive.getState().settingsProblems).toEqual([]);
+  expect(notices()).toHaveLength(2);
+});
+
 test("welcome and version_mismatch set the connection", () => {
   apply({ type: "welcome", version: "0.1.0", distro: "Ubuntu" });
   expect(useHive.getState().connection).toEqual({

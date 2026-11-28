@@ -76,7 +76,7 @@ test("welcomes the UI asynchronously", async () => {
   await tick();
   expect(messages).toEqual([
     { type: "welcome", version: "mock", distro: "Ubuntu" },
-    { type: "settings", settings: DEFAULT_SETTINGS },
+    { type: "settings", settings: DEFAULT_SETTINGS, problems: [] },
     { type: "spaces", spaces: [space("default", "Default", [SHOP, API])], current: "default" },
     { type: "projects", projects: MOCK_REPOS.slice(0, 2) },
     {
@@ -119,9 +119,27 @@ test("keeps the settings it is given in memory", async () => {
   await transport.getSettings();
   await tick();
   expect(messages.slice(-2)).toEqual([
-    { type: "settings", settings },
-    { type: "settings", settings },
+    { type: "settings", settings, problems: [] },
+    { type: "settings", settings, problems: [] },
   ]);
+});
+
+test("names the keymap's problems as the service does, keeping the entries (28.7)", async () => {
+  const transport = createMockTransport();
+  const messages: ServiceMessage[] = [];
+  await transport.connect((m) => messages.push(m));
+  const keymap = { palette: "Hyper+P", palete: "Ctrl+J", comment: 3, settings: ["Ctrl+Alt+S"] };
+  await transport.setSettings({ ...DEFAULT_SETTINGS, keymap });
+  await tick();
+  expect(messages.at(-1)).toEqual({
+    type: "settings",
+    settings: { ...DEFAULT_SETTINGS, keymap },
+    problems: [
+      'keymap.palette: "Hyper+P" is not a shortcut: "Hyper" is not a modifier',
+      'keymap: Hive has no command "palete"',
+      'keymap.comment: a shortcut is a text like "Ctrl+Alt+M" or a list of them',
+    ],
+  });
 });
 
 test("makes an account's folder by its name and deletes only its own (22.3)", async () => {
@@ -2021,7 +2039,7 @@ test("a project is removed with its settings, never while a terminal works in it
       message: `in use by fish (${id}): close its terminals first`,
     },
     { type: "spaces", spaces: [space("default", "Default", [API])], current: "default" },
-    { type: "settings", settings: DEFAULT_SETTINGS },
+    { type: "settings", settings: DEFAULT_SETTINGS, problems: [] },
     { type: "project_removed", id: SHOP },
     { type: "spaces", spaces: [space("default", "Default", [])], current: "default" },
     { type: "project_removed", id: API },

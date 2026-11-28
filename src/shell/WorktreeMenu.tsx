@@ -21,6 +21,7 @@ import {
   useState,
 } from "react";
 import { openPush } from "../git";
+import { useShortcut } from "../keymap";
 import type { Worktree } from "../protocol";
 import { runScript, worktreeScripts } from "../scripts";
 import {
@@ -36,7 +37,7 @@ import {
 import { openTerminal, showOpenFailure } from "../terminals";
 import { transport } from "../transport";
 import { openInEditor } from "../viewer/external";
-import { isMac, keyText } from "../window";
+import { isMac } from "../window";
 import { askRemoveProject } from "./ConfirmDialog";
 import { CloseIcon, ICON } from "./icons";
 
@@ -261,6 +262,7 @@ const closeProjectMenu = () => openProjectMenu(null);
 export function ProjectMenu() {
   const menu = useHive((s) => s.projectMenu);
   const project = useHive((s) => s.projects?.[menu?.project ?? ""]);
+  const newKeys = useShortcut("new-worktree");
   if (!menu) return null;
   const dialog = (modal: "new-worktree" | "remove-merged") => () => {
     closeProjectMenu();
@@ -293,7 +295,7 @@ export function ProjectMenu() {
         <>
           <button type="button" role="menuitem" onClick={dialog("new-worktree")}>
             <PlusIcon {...ICON} />
-            New worktree… <kbd>{keyText("Ctrl+Shift+N")}</kbd>
+            New worktree… {newKeys && <kbd>{newKeys}</kbd>}
           </button>
           <button type="button" role="menuitem" onClick={dialog("remove-merged")}>
             <BroomIcon {...ICON} />

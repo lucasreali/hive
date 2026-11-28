@@ -864,7 +864,7 @@ export type Settings = {
 };
 
 /** Mirrors `hive_protocol::keymap::Keymap`: what the file holds, checked by the service. */
-export type Keymap = Record<string, string | string[] | null | unknown>;
+export type Keymap = Record<string, string | string[] | null | unknown> | unknown;
 
 /**
  * Mirrors `hive_protocol::Account`: a Claude account, a name and its `CLAUDE_CONFIG_DIR`.

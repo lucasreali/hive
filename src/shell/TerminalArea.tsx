@@ -20,6 +20,7 @@ import {
   useState,
 } from "react";
 import { useShallow } from "zustand/react/shallow";
+import { useShortcut } from "../keymap";
 import type { ProgressState } from "../protocol";
 import { draggedFrom, useReorder } from "../reorder";
 import {
@@ -71,7 +72,7 @@ import {
   terminalAt,
 } from "../terminals";
 import { isDirty, isFor } from "../viewer/buffer";
-import { isMac, keyText } from "../window";
+import { isMac } from "../window";
 import { HostOverlay } from "./Hosts";
 import {
   AddFolderIcon,
@@ -90,6 +91,7 @@ import { ContextMenu } from "./WorktreeMenu";
 /** Screen 1e: shown once the service said there are no projects. */
 function EmptyState() {
   const mac = isMac();
+  const addKeys = useShortcut("add-project");
   return (
     <div className="empty-state">
       <div className="empty-state-content">
@@ -99,7 +101,8 @@ function EmptyState() {
           <p>Add a project to follow the agents running in its worktrees.</p>
         </div>
         <button type="button" className="primary" onClick={() => openModal("add-project")}>
-          Add project <kbd>{keyText("Ctrl+Shift+O")}</kbd>
+          Add project
+          <Keys keys={addKeys || undefined} />
         </button>
         <div className="empty-state-example">
           <span>A project is a folder{mac ? "" : " inside WSL"}, for example:</span>
@@ -378,11 +381,12 @@ const Keys = ({ keys }: { keys?: string }) =>
 function SplitItem(props: { tab: PaneId; onClose: () => void; keys?: boolean }) {
   const { tab, onClose } = props;
   const split = useHive((s) => !!splitOf(s, tab));
+  const splitKeys = useShortcut("split-terminal");
   return (
     <MenuItem onClose={onClose} action={() => showOpenFailure(splitTerminal(tab))}>
       <SquareSplitHorizontalIcon {...ICON} />
       {split ? "Unsplit" : "Split right"}
-      <Keys keys={props.keys ? keyText("Ctrl+Shift+D") : undefined} />
+      <Keys keys={(props.keys && splitKeys) || undefined} />
     </MenuItem>
   );
 }

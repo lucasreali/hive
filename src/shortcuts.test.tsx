@@ -47,6 +47,7 @@ type Keys = {
   shiftKey?: boolean;
   altKey?: boolean;
   metaKey?: boolean;
+  code?: string;
 };
 const ctrlShift = (key: string): Keys => ({ key, ctrlKey: true, shiftKey: true });
 /** Presses keys with the focus outside any terminal; true when the app took them. */
@@ -616,4 +617,71 @@ test("on macOS ⌃Tab and ⌃⇧Tab show the next and previous tab, wrapping; no
   expect(press({ key: "Tab", ctrlKey: true, metaKey: true })).toBe(false);
   expect(press({ key: "Tab" })).toBe(false);
   expect(shownTab()).toBe("src/a.ts");
+});
+
+/** The user's keymap, as the service sends it. */
+const rebind = (keymap: Record<string, unknown>) =>
+  act(() => useHive.setState((s) => ({ settings: { ...s.settings, keymap } })));
+
+test("a rebound command runs on its new chord, its old one goes back to the terminal", async () => {
+  const write = spyOn(transport, "writeTerminal");
+  app();
+  rebind({ palette: "Ctrl+Alt+K" });
+  expect(press(ctrlShift("P"))).toBe(false);
+  expect(useHive.getState().modal).toBeNull();
+  expect(press({ key: "˚", code: "KeyK", ctrlKey: true, altKey: true })).toBe(true);
+  expect(useHive.getState().modal).toBe("palette");
+  act(() => useHive.setState({ modal: null }));
+  // In a terminal: the new chord is the app's, the old one the shell's.
+  const id = await act(() => openTerminal(shop.worktrees[1].path));
+  const textarea = terminal(id)?.textarea as HTMLTextAreaElement;
+  press({ key: "k", code: "KeyK", keyCode: 75, ctrlKey: true, altKey: true } as Keys, textarea);
+  expect(useHive.getState().modal).toBe("palette");
+  act(() => useHive.setState({ modal: null }));
+  // No shortcut at all: the command stays in the palette only.
+  rebind({ palette: [] });
+  expect(press({ key: "k", code: "KeyK", ctrlKey: true, altKey: true })).toBe(false);
+  write.mockRestore();
+});
+
+test("of two commands on one chord the user's runs, a bad entry keeps the default", () => {
+  app();
+  rebind({ "add-project": "Ctrl+Shift+B", "toggle-panel": "Hyper+B" });
+  press(ctrlShift("B"));
+  expect(useHive.getState()).toMatchObject({ modal: "add-project", rightPanel: "files" });
+  act(() => useHive.setState({ modal: null }));
+  // Both the user's: table order (the side panel comes first).
+  rebind({ "add-project": "Ctrl+Shift+B", "toggle-panel": "Ctrl+Shift+B" });
+  press(ctrlShift("B"));
+  expect(useHive.getState()).toMatchObject({ modal: null, rightPanel: null });
+});
+
+test("a key a field took, or an Alt character typed into it, is the field's", () => {
+  app();
+  rebind({ palette: "Alt+P" });
+  const field = document.createElement("input");
+  document.body.append(field);
+  expect(press({ key: "π", code: "KeyP", altKey: true }, field)).toBe(false);
+  expect(useHive.getState().modal).toBeNull();
+  // A chord with Ctrl in it is the app's even there.
+  expect(press(ctrlShift("T"), field)).toBe(true);
+  act(() => useHive.setState({ modal: null }));
+  // Outside a field the Alt chord is the app's.
+  expect(press({ key: "π", code: "KeyP", altKey: true })).toBe(true);
+  act(() => useHive.setState({ modal: null }));
+  // A key some handler took first is not run again.
+  const taken = (e: Event) => e.preventDefault();
+  field.addEventListener("keydown", taken);
+  press(ctrlShift("T"), field);
+  expect(useHive.getState().modal).toBeNull();
+  field.remove();
+});
+
+test("Ctrl+Shift+/ (⌘/ on macOS) opens Settings on Keyboard", () => {
+  app();
+  press({ key: "?", code: "Slash", ctrlKey: true, shiftKey: true });
+  expect(useHive.getState()).toMatchObject({ modal: "settings", settingsSection: "Keyboard" });
+  expect(screen.getByRole("button", { name: "Keyboard" }).getAttribute("aria-current")).toBe(
+    "page",
+  );
 });

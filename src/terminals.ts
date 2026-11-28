@@ -427,7 +427,7 @@ const MAC_SCROLL_KEYS: Record<string, (term: Terminal) => void> = {
   End: (term) => term.scrollToBottom(),
 };
 
-/** The terminal's own macOS keys, for the settings' Shortcuts section. */
+/** The terminal's own macOS keys, for the settings' Keyboard section. */
 export const MAC_TERMINAL_KEYS: readonly { label: string; keys: string }[] = [
   { label: "Clear the terminal", keys: "⌘K" },
   { label: "Jump to the previous prompt", keys: "⌘↑" },

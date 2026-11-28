@@ -1,4 +1,5 @@
 import { agentHost } from "./hosts";
+import { type Bindable, COMMAND_TABLE, type Context, effective, presses } from "./keymap";
 import type { Agent } from "./protocol";
 import { closeFile } from "./shell/RightPanel";
 import { findInTerminal } from "./shell/TerminalSearch";
@@ -33,11 +34,11 @@ import {
 import { transport } from "./transport";
 import { sendReference } from "./viewer/reference";
 import { startComment } from "./viewer/review";
-import { commandKey, isMac, keyText } from "./window";
 
-// App shortcuts (#35): Ctrl+Shift+letter (Cmd+Shift+letter on macOS), Ctrl+, and F8, taken even with
-// the focus in a terminal; on macOS also its own (D17.2, 17.14): ⌘W, ⌘1–9, ⇧⌘[ / ⇧⌘], ⌘= / ⌘- / ⌘0,
-// ⇧⌘J and ⌘F (17.21); and (18.34, D18.10) ⌘T, ⌘N, ⌃Tab / ⌃⇧Tab. Every other key goes to the
+// App shortcuts (#35): Ctrl+Shift+letter (Cmd+Shift+letter on macOS), Ctrl+, and F8 by default,
+// taken even with the focus in a terminal; on macOS also its own (D17.2, 17.14): ⌘W, ⌘1–9,
+// ⇧⌘[ / ⇧⌘], ⌘= / ⌘- / ⌘0, ⇧⌘J and ⌘F (17.21); and (18.34, D18.10) ⌘T, ⌘N, ⌃Tab / ⌃⇧Tab. The
+// user's keymap (28.7, `src/keymap.ts`) rebinds any of them. Every other key goes to the
 // terminal untouched.
 
 /** The selected project, the project of the selected worktree (or agent), else the current space's first. */
@@ -126,204 +127,65 @@ export function newTerminal(): void {
   else openModal("worktree-picker");
 }
 
-/**
- * An app command: its shortcut (`keys`, written for Windows: Ctrl stands for Cmd on macOS, and
- * Control is the Control key itself, only in macOS' keys), and
- * `macKeys`, a second one on macOS. One with `mac` exists only on macOS; one with `when` only
- * while it holds: their keys are free for the terminal otherwise.
- */
-export type Command = {
-  id: string;
-  label: string;
-  keys: string;
-  macKeys?: string;
-  mac?: true;
-  run: () => void;
-  when?: (s: HiveState) => boolean;
+/** An app command (#35, 6.3): what the keymap knows of it (`Bindable`), and what it does. */
+export type Command = Bindable & { run: () => void };
+
+/** Whether each context holds now. */
+const HOLDS: Record<Context, (s: HiveState) => boolean> = {
+  any: () => true,
+  terminal: terminalShown,
+  markdown: markdownShown,
 };
 
-/** The text of a command's keys, as this platform names them. */
-export const commandKeys = (c: Command) =>
-  isMac() && c.macKeys ? `${keyText(c.macKeys)} or ${keyText(c.keys)}` : keyText(c.keys);
+/** Whether the command `c` may run now, in its context. */
+export const commandHolds = (c: Command, s: HiveState) => HOLDS[c.context](s);
 
-/**
- * Every app command with a shortcut: `shortcut()` runs them, the settings' Shortcuts section
- * lists them, and the command palette (6.3) offers them.
- */
-export const COMMANDS: readonly Command[] = [
-  {
-    id: "palette",
-    label: "Command palette",
-    keys: "Ctrl+Shift+P",
-    run: () => openModal("palette"),
+/** What each command of `COMMAND_TABLE` does, by id. */
+const RUNS: Record<string, () => void> = {
+  palette: () => openModal("palette"),
+  settings: () => openModal("settings"),
+  "keyboard-settings": () => {
+    openModal("settings");
+    useHive.setState({ settingsSection: "Keyboard" });
   },
-  { id: "settings", label: "Open settings", keys: "Ctrl+,", run: () => openModal("settings") },
-  {
-    id: "worktree-picker",
-    label: "New terminal in a worktree",
-    keys: "Ctrl+Shift+T",
-    run: () => openModal("worktree-picker"),
+  "worktree-picker": () => openModal("worktree-picker"),
+  "new-terminal": newTerminal,
+  "new-worktree": () => {
+    const s = useHive.getState();
+    const project = currentProject(s);
+    // No project to add a worktree to: adding a project is the step before. A group (14.1)
+    // has no worktrees.
+    if (s.projects?.[project ?? ""]?.group) return;
+    if (project) openModal("new-worktree", project);
+    else openModal("add-project");
   },
-  {
-    id: "new-terminal",
-    label: "New terminal in this worktree",
-    keys: "Ctrl+T",
-    mac: true,
-    run: newTerminal,
-  },
-  {
-    id: "new-worktree",
-    label: "New worktree",
-    keys: "Ctrl+Shift+N",
-    macKeys: "Ctrl+N",
-    run: () => {
-      const s = useHive.getState();
-      const project = currentProject(s);
-      // No project to add a worktree to: adding a project is the step before. A group (14.1)
-      // has no worktrees.
-      if (s.projects?.[project ?? ""]?.group) return;
-      if (project) openModal("new-worktree", project);
-      else openModal("add-project");
-    },
-  },
-  {
-    id: "split-terminal",
-    label: "Split terminal",
-    keys: "Ctrl+Shift+D",
-    run: () => showOpenFailure(splitTerminal(shownPane(useHive.getState()))),
-  },
-  {
-    id: "toggle-panel",
-    label: "Show or hide the side panel's view",
-    keys: "Ctrl+Shift+B",
-    run: () => setRightPanel(useHive.getState().rightPanel ? null : "files"),
-  },
-  {
-    id: "add-project",
-    label: "Add project",
-    keys: "Ctrl+Shift+O",
-    run: () => openModal("add-project"),
-  },
-  {
-    id: "send-reference",
-    label: "Send the selected lines' reference to the agent",
-    keys: "Ctrl+Shift+L",
-    run: () => sendReference(),
-  },
-  {
-    id: "comment",
-    label: "Comment on the selected lines",
-    keys: "Ctrl+Shift+M",
-    run: startComment,
-  },
-  {
-    // F8 is Play/Pause on a Mac's keyboard unless Fn is held (D17.2).
-    id: "next-pending",
-    label: "Go to the next pending agent",
-    keys: "F8",
-    macKeys: "Ctrl+Shift+J",
-    run: nextPending,
-  },
-  {
-    // 17.21: ⌘F on macOS (D17.2); elsewhere Ctrl+F is the shell's, so #35's Ctrl+Shift+F.
-    id: "find-in-terminal",
-    label: "Search the terminal",
-    keys: "Ctrl+Shift+F",
-    macKeys: "Ctrl+F",
-    when: terminalShown,
-    run: findInTerminal,
-  },
-  {
-    // 11.2: VS Code's key, the terminal's paste everywhere but on a Markdown file's tab.
-    id: "toggle-markdown",
-    label: "Show a Markdown file rendered or as text",
-    keys: "Ctrl+Shift+V",
-    when: markdownShown,
-    run: () => setRendered(!renderedShown(useHive.getState())),
-  },
-  { id: "close-tab", label: "Close the tab", keys: "Ctrl+W", mac: true, run: closeActiveTab },
-  {
-    id: "next-tab",
-    label: "Show the next tab",
-    keys: "Ctrl+Shift+]",
-    macKeys: "Control+Tab",
-    mac: true,
-    run: () => cycleTab(1),
-  },
-  {
-    id: "previous-tab",
-    label: "Show the previous tab",
-    keys: "Ctrl+Shift+[",
-    macKeys: "Control+Shift+Tab",
-    mac: true,
-    run: () => cycleTab(-1),
-  },
-  ...[1, 2, 3, 4, 5, 6, 7, 8, 9].map(
-    (n): Command => ({
-      id: `tab-${n}`,
-      label: `Show tab ${n}`,
-      keys: `Ctrl+${n}`,
-      mac: true,
-      run: () => showBarItem(n - 1),
-    }),
+  "split-terminal": () => showOpenFailure(splitTerminal(shownPane(useHive.getState()))),
+  "toggle-panel": () => setRightPanel(useHive.getState().rightPanel ? null : "files"),
+  "add-project": () => openModal("add-project"),
+  "send-reference": () => sendReference(),
+  comment: startComment,
+  "next-pending": nextPending,
+  "find-in-terminal": findInTerminal,
+  "toggle-markdown": () => setRendered(!renderedShown(useHive.getState())),
+  "close-tab": closeActiveTab,
+  "next-tab": () => cycleTab(1),
+  "previous-tab": () => cycleTab(-1),
+  ...Object.fromEntries(
+    [1, 2, 3, 4, 5, 6, 7, 8, 9].map((n) => [`tab-${n}`, () => showBarItem(n - 1)]),
   ),
-  {
-    id: "font-bigger",
-    label: "Make the terminal font bigger",
-    keys: "Ctrl+=",
-    mac: true,
-    run: () => zoomTerminals(1),
-  },
-  {
-    id: "font-smaller",
-    label: "Make the terminal font smaller",
-    keys: "Ctrl+-",
-    mac: true,
-    run: () => zoomTerminals(-1),
-  },
-  {
-    id: "font-reset",
-    label: "Terminal font at the settings' size",
-    keys: "Ctrl+0",
-    mac: true,
-    run: () => zoomTerminals(0),
-  },
-];
-
-/** The commands this platform has: macOS-only ones (`mac`) only on macOS. */
-export const platformCommands = () => COMMANDS.filter((c) => !c.mac || isMac());
-
-/**
- * Where a key is, for keys whose character Shift or the layout changes (⇧⌘[ types "{" on a US
- * layout): such a key matches by its character or by this physical key.
- */
-const CODES: Record<string, string> = {
-  "[": "BracketLeft",
-  "]": "BracketRight",
-  "=": "Equal",
-  "-": "Minus",
-  ...Object.fromEntries([1, 2, 3, 4, 5, 6, 7, 8, 9, 0].map((n) => [`${n}`, `Digit${n}`])),
+  "font-bigger": () => zoomTerminals(1),
+  "font-smaller": () => zoomTerminals(-1),
+  "font-reset": () => zoomTerminals(0),
 };
 
-/** Whether `event` presses `keys` ("F8", "Ctrl+,", "Control+Tab"), with no other modifier. */
-function presses(keys: string, event: KeyboardEvent): boolean {
-  const parts = keys.split("+");
-  const key = parts.at(-1) as string;
-  const control = parts.includes("Control");
-  const command = parts.includes("Ctrl")
-    ? commandKey(event)
-    : event.ctrlKey === control && !event.metaKey;
-  return (
-    command &&
-    event.shiftKey === parts.includes("Shift") &&
-    !event.altKey &&
-    (event.key.toUpperCase() === key.toUpperCase() || event.code === CODES[key])
-  );
-}
-
-/** Whether `event` presses one of `c`'s keys on this platform. */
-const pressesCommand = (c: Command, event: KeyboardEvent) =>
-  presses(c.keys, event) || (isMac() && !!c.macKeys && presses(c.macKeys, event));
+/**
+ * Every app command (`COMMAND_TABLE`) with its action: `shortcut()` runs them, Settings →
+ * Keyboard lists and rebinds them, and the command palette (6.3) offers them.
+ */
+export const COMMANDS: readonly Command[] = COMMAND_TABLE.map((c) => ({
+  ...c,
+  run: RUNS[c.id] as () => void,
+}));
 
 /**
  * Whether no app command may run now: under the connection block nothing works, and with a
@@ -336,11 +198,34 @@ export function commandsBlocked(s: HiveState): boolean {
   return blocked || (s.modal !== null && document.querySelector("dialog[open]") !== null);
 }
 
-/** What `event` does as an app shortcut, or null when it is not one (or nothing may run). */
+/**
+ * Whether `event` is a field's own: a key its handler already took (CodeMirror's), or one with
+ * Alt but neither Ctrl nor Cmd typed into a text field or the editor (an Option character on
+ * macOS, AltGr on Windows). A terminal's keys are never a field's: its chords are the app's.
+ */
+function fieldsOwn(event: KeyboardEvent): boolean {
+  if (event.defaultPrevented) return true;
+  const target = event.target;
+  const field =
+    target instanceof Element &&
+    target.closest("input, textarea, [contenteditable], .cm-editor") !== null &&
+    target.closest(".xterm") === null;
+  return field && event.altKey && !event.ctrlKey && !event.metaKey;
+}
+
+/**
+ * What `event` does as an app shortcut, or null when it is not one (or nothing may run): the
+ * command one of whose effective chords it presses, in its context; of two, the one the user
+ * bound beats a default, then table order.
+ */
 export function shortcut(event: KeyboardEvent): (() => void) | null {
   const s = useHive.getState();
-  if (commandsBlocked(s)) return null;
-  const command = platformCommands().find((c) => pressesCommand(c, event) && (c.when?.(s) ?? true));
+  if (commandsBlocked(s) || fieldsOwn(event)) return null;
+  const of = effective();
+  const pressed = COMMANDS.filter(
+    (c) => HOLDS[c.context](s) && (of.get(c.id)?.chords ?? []).some((k) => presses(k, event)),
+  );
+  const command = pressed.find((c) => of.get(c.id)?.user) ?? pressed[0];
   return command?.run ?? null;
 }
 

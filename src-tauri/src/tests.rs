@@ -4767,3 +4767,90 @@ async fn a_file_url_without_a_service_or_a_hive_fails() {
     let response = serve_file(app.handle().clone(), "/t".into()).await;
     assert_eq!(&response.body()[..], b"not a file URL");
 }
+
+#[test]
+fn the_menus_command_items_take_their_keys_from_the_keymap() {
+    use hive_protocol::keymap::Keymap;
+    use menu::{accelerators, Item, COMMAND_ITEMS, MENUS};
+    let keys = |keymap: Value| accelerators(&Keymap(keymap));
+    let owned = |list: &[(&'static str, Option<&str>)]| -> Vec<(&'static str, Option<String>)> {
+        list.iter()
+            .map(|(id, k)| (*id, k.map(str::to_owned)))
+            .collect()
+    };
+    let defaults = [
+        ("settings", Some("Super+,")),
+        ("toggle-panel", Some("Shift+Super+B")),
+        ("close-tab", Some("Super+W")),
+    ];
+    assert_eq!(keys(json!({})), owned(&defaults));
+    // A keymap that is not an object, or an entry of the wrong type: the defaults.
+    assert_eq!(keys(Value::Null), owned(&defaults));
+    assert_eq!(keys(json!({"settings": 3})), owned(&defaults));
+    // The command's first valid chord; none when it has none.
+    let changed = json!({"settings": ["Hyper+P", "alt+cmd+,", "Cmd+;"], "close-tab": []});
+    assert_eq!(
+        keys(changed),
+        owned(&[
+            ("settings", Some("Alt+Super+,")),
+            ("toggle-panel", Some("Shift+Super+B")),
+            ("close-tab", None),
+        ])
+    );
+    // A default another command's entry took is the menu's no longer.
+    let taken = json!({"palette": "Shift+Cmd+B", "comment": ["F2", "Cmd+W"]});
+    assert_eq!(
+        keys(taken),
+        owned(&[
+            ("settings", Some("Super+,")),
+            ("toggle-panel", None),
+            ("close-tab", None),
+        ])
+    );
+    // Its own entry with its default keeps it.
+    let own = json!({"toggle-panel": "Shift+Cmd+B", "palette": "Shift+Cmd+B"});
+    assert_eq!(
+        keys(own)[1],
+        ("toggle-panel", Some("Shift+Super+B".to_owned()))
+    );
+    // Each one is a Hive item of the menu, whose built-in key is that default.
+    for (id, default) in COMMAND_ITEMS {
+        let keys = MENUS
+            .iter()
+            .flat_map(|m| m.items)
+            .find_map(|item| match item {
+                Item::Own { id: own, keys, .. } if own == id => Some(*keys),
+                _ => None,
+            });
+        let tauri = default
+            .replace("Shift+Cmd+", "CmdOrCtrl+Shift+")
+            .replace("Cmd+", "CmdOrCtrl+");
+        assert_eq!(keys, Some(Some(tauri.as_str())), "{id}");
+    }
+}
+
+#[tokio::test]
+async fn the_local_services_keymap_sets_the_menus_keys_once_per_change() {
+    let (hive, mut service, mut rx) = welcomed().await;
+    let (tx, set) = std::sync::mpsc::channel();
+    let _hive = hive.with_menu_keys(move |id, keys| {
+        let _ = tx.send((id.to_owned(), keys.map(str::to_owned)));
+    });
+    let settings = |keymap: Value| json!({"type": "settings", "settings": {"keymap": keymap}});
+    let sent = || -> Vec<(String, Option<String>)> { set.try_iter().collect() };
+    let one = |id: &str, keys: Option<&str>| (id.to_owned(), keys.map(str::to_owned));
+    relay(&mut service, &mut rx, 0, settings(json!({}))).await;
+    assert_eq!(
+        sent(),
+        [
+            one("settings", Some("Super+,")),
+            one("toggle-panel", Some("Shift+Super+B")),
+            one("close-tab", Some("Super+W")),
+        ]
+    );
+    relay(&mut service, &mut rx, 0, settings(json!({}))).await;
+    assert_eq!(sent(), []);
+    let changed = json!({"close-tab": [], "palette": "Shift+Cmd+B"});
+    relay(&mut service, &mut rx, 0, settings(changed)).await;
+    assert_eq!(sent(), [one("toggle-panel", None), one("close-tab", None)]);
+}
