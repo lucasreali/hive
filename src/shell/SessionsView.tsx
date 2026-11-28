@@ -367,7 +367,13 @@ function SessionFiles({
               }
             >
               <TreeFileIcon name={name} />
-              <span className="session-file-name">{name}</span>
+              {/* The file's name gives way last, and keeps about 7 characters (28.22). */}
+              <span
+                className="session-file-name"
+                style={{ minWidth: `${Math.min(name.length, 7)}ch` }}
+              >
+                {name}
+              </span>
               <span className="session-file-folder">
                 <span className="session-file-head">{head}</span>
                 <span className="session-file-tail">{tail}</span>
@@ -376,12 +382,10 @@ function SessionFiles({
               <span className="session-meta">
                 {f.worktree !== worktree && (
                   <span className="session-file-worktree">
-                    {worktreeName(projects, f.worktree)}
+                    {`${worktreeName(projects, f.worktree)} · `}
                   </span>
                 )}
-                <span className="session-file-numbers">
-                  {f.worktree === worktree ? fileMeta(f) : ` · ${fileMeta(f)}`}
-                </span>
+                <span className="session-file-numbers">{fileMeta(f)}</span>
               </span>
             </button>
           </li>

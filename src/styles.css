@@ -3944,6 +3944,7 @@ button.result-file:hover,
 .session {
   position: relative;
   border-bottom: 1px solid var(--border-subtle);
+  container: session / inline-size;
 }
 
 /* Placed by the Sessions list's virtualizer (the pull requests list reuses `.session`). */
@@ -4099,6 +4100,18 @@ button.result-file:hover,
   list-style: none;
 }
 
+/* The right panel at its narrowest: the files under the caret, so the name keeps its room. */
+@container session (max-width: 280px) {
+  .session .session-files {
+    padding-left: 12px;
+  }
+
+  /* Only a sliver of it would show: the full path stays in the tooltip. */
+  .session .session-file-folder {
+    display: none;
+  }
+}
+
 .session-files.hint {
   font-size: var(--fs-meta);
 }
@@ -4109,13 +4122,34 @@ button.result-file:hover,
   overflow: hidden;
   display: flex;
   align-items: center;
-  gap: 6px;
   min-width: 0;
   padding: 0 6px;
   border-radius: var(--radius-sm);
   text-align: left;
   white-space: nowrap;
   color: var(--text-3);
+}
+
+/* Spaces as margins, not a gap: a folder that gave way takes no room at all. */
+.session-file > :first-child {
+  margin-right: 6px;
+}
+
+/* Right-aligned; the numbers keep a space from the name even when nothing is between them. */
+.session-file-worktree,
+.session-file-numbers:first-child {
+  margin-left: auto;
+}
+
+.session-file-numbers:first-child {
+  padding-left: 6px;
+}
+
+/* Inside the worktree's name, so it goes with the name when that gives way. */
+.session-file-worktree::before {
+  content: "";
+  display: inline-block;
+  width: 6px;
 }
 
 .session-file:hover {
@@ -4135,12 +4169,20 @@ button.result-file:hover,
   color: var(--text);
 }
 
-/* The folder, cut in the middle: its head gives way, then its last folder is cut at its end. */
+/* The folder, cut in the middle: its head gives way, then its last folder is cut at its end.
+   It gives way after another worktree's name and before the file's name (the shrink factors). */
 .session-file-folder {
-  flex: 1 1 0;
+  flex: 0 10 auto;
   min-width: 0;
+  overflow: hidden;
   display: flex;
   font-size: var(--fs-small);
+}
+
+.session-file-folder::before {
+  content: "";
+  flex: none;
+  width: 6px;
 }
 
 .session-file-head {
@@ -4157,8 +4199,8 @@ button.result-file:hover,
   text-overflow: ellipsis;
 }
 
-/* The numbers stay whole; another worktree's name before them gives way at the narrowest panel. */
-/* Its parts are the row's own flex items: the worktree's name gives way before the file's name. */
+/* The meta's parts are the row's own flex items: another worktree's name gives way first, the
+   numbers never. */
 .session-file .session-meta {
   display: contents;
 }
@@ -4166,6 +4208,7 @@ button.result-file:hover,
 .session-file-worktree {
   flex: 0 100 auto;
   min-width: 0;
+  white-space: pre;
   overflow: hidden;
   text-overflow: ellipsis;
 }
