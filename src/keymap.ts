@@ -148,13 +148,24 @@ export const FIXED: readonly Fixed[] = [
   },
 ];
 
+/** `text` with only its ASCII letters lowercased, as Rust's `to_ascii_lowercase`. */
+const asciiLower = (text: string) => text.replace(/[A-Z]/g, (c) => c.toLowerCase());
+
+/** Rust's `char::is_whitespace` (Unicode's White_Space), which `str::trim` takes away. */
+const SPACE =
+  "[\\t\\n\\v\\f\\r \\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]";
+const TRIM = new RegExp(`^${SPACE}+|${SPACE}+$`, "g");
+
+/** `text` trimmed as Rust's `str::trim` trims it (JavaScript's `trim` also takes U+FEFF). */
+const rustTrim = (text: string) => text.replace(TRIM, "");
+
 /** The key `part` names, as it is written; null when it names none. */
 function keyOf(part: string): string | null {
-  if (/^[a-z0-9]$/i.test(part)) return part.toUpperCase();
+  if (/^[A-Za-z0-9]$/.test(part)) return part.toUpperCase();
   const f = /^[Ff]([1-9][0-9]?)$/.exec(part)?.[1];
   if (f && Number(f) <= 24) return `F${f}`;
   if (Object.hasOwn(PUNCTUATION, part)) return part;
-  return NAMED.find((k) => k.toLowerCase() === part.toLowerCase()) ?? null;
+  return NAMED.find((k) => asciiLower(k) === asciiLower(part)) ?? null;
 }
 
 /** `text` quoted as the service quotes it (cut at `CHORD_LIMIT` characters). */
@@ -187,7 +198,7 @@ const MODIFIER_NAME = { ctrl: "Ctrl", alt: "Alt", shift: "Shift", cmd: "Cmd" };
 
 /** The modifier `part` names (any case, with its aliases), if it names one. */
 function modifierOf(part: string) {
-  const lower = part.toLowerCase();
+  const lower = asciiLower(part);
   return Object.hasOwn(MODIFIERS, lower) ? MODIFIERS[lower] : undefined;
 }
 
@@ -209,7 +220,7 @@ export function parseChord(text: string, on: Platform, id = ""): Parsed {
     return { error: `${quoted} is longer than ${CHORD_LIMIT} bytes` };
   }
   const bad = (why: string) => ({ error: `${quoted} is not a shortcut: ${why}` });
-  const parts = text.split("+").map((p) => p.trim());
+  const parts = text.split("+").map(rustTrim);
   if (parts.some((p) => p === "")) return bad("a key is missing after +");
   const chord: Chord = { ctrl: false, alt: false, shift: false, cmd: false, key: "" };
   const last = parts.pop() as string;
@@ -276,6 +287,10 @@ export function bindings(
         const parsed = parseChord(t, on, c.id);
         return parsed.chord ? [chordString(parsed.chord)] : [];
       });
+      // Every chord bad: the default applies, as for the service and the macOS menu.
+      if (own.length > 0 && valid.length === 0) {
+        return [c.id, { chords: c.defaults[on], user: false }];
+      }
       return [c.id, { chords: [...new Set(valid)], user: true }];
     }),
   );
@@ -298,16 +313,21 @@ export function presses(chord: string, event: KeyboardEvent): boolean {
   return event.code === (code ?? (c.alt ? `Key${c.key}` : undefined));
 }
 
+/** The key a physical key (`event.code`) is on a US layout: a letter, a digit or punctuation. */
+const physicalKey = (code: string): string | undefined =>
+  /^Key([A-Z])$/.exec(code)?.[1] ??
+  /^Digit([0-9])$/.exec(code)?.[1] ??
+  Object.keys(PUNCTUATION).find((k) => PUNCTUATION[k] === code);
+
 /**
- * The chord a key press makes (the recorder): its modifiers, and the key by its physical place
- * for letters, digits and punctuation (Option+P is `Alt+P`, not π; ⇧[ is `Shift+[`), else by
- * name. Null for a lone modifier or a key the keymap has no name for.
+ * The chord a key press makes (the recorder): its modifiers, and the key: a letter as the
+ * layout types it (`event.key`, AZERTY's A is `A`, as `presses` matches it), else by its
+ * physical place (Option+P is `Alt+P`, not π; ⇧[ is `Shift+[`), else by name. Null for a lone
+ * modifier or a key the keymap has no name for.
  */
 export function chordOf(event: KeyboardEvent): string | null {
-  const physical =
-    /^Key([A-Z])$/.exec(event.code)?.[1] ??
-    /^Digit([0-9])$/.exec(event.code)?.[1] ??
-    Object.keys(PUNCTUATION).find((k) => PUNCTUATION[k] === event.code);
+  const letter = /^[A-Za-z]$/.test(event.key) ? event.key.toUpperCase() : undefined;
+  const physical = letter ?? physicalKey(event.code);
   const named = Object.keys(EVENT_KEYS).find((k) => EVENT_KEYS[k] === event.key);
   const fn = /^F[0-9]+$/.test(event.key) ? keyOf(event.key) : null;
   const key = physical ?? named ?? fn;
@@ -319,6 +339,21 @@ export function chordOf(event: KeyboardEvent): string | null {
     cmd: event.metaKey,
     key,
   });
+}
+
+/**
+ * Whether `event` types a character with AltGr (Windows, where AltGr is Ctrl+Alt): `@` on a
+ * German Q, `€` on E. Such a key is the field's or the terminal's, never a shortcut: a printable
+ * key that is not the one its physical key names (Ctrl+Alt+K types k). Not `AltGraph`: Windows
+ * may report it for a plain Ctrl+Alt too.
+ */
+export function altGr(event: KeyboardEvent): boolean {
+  if (isMac() || !event.ctrlKey || !event.altKey || event.metaKey) return false;
+  if ([...event.key].length !== 1) return false;
+  const key = event.key.toUpperCase();
+  const physical = physicalKey(event.code);
+  if (Object.values(EVENT_KEYS).includes(event.key)) return false;
+  return physical === undefined || (key !== physical && SHIFTED[key] !== physical);
 }
 
 /** Each key's symbol on macOS. */
@@ -587,6 +622,11 @@ export function shortcutText(id: string): string {
 export function withKeys(text: string, id: string): string {
   const keys = shortcutText(id);
   return keys ? `${text} (${keys})` : text;
+}
+
+/** Shows the calling component again when the keymap changes (its `withKeys` texts). */
+export function useKeymap(): void {
+  useHive((s) => s.settings.keymap);
 }
 
 /** `shortcutText` in a component, shown again when the keymap changes. */

@@ -2,6 +2,7 @@ import { expect, test } from "bun:test";
 import samples from "../crates/hive-protocol/tests/chords.json";
 import { asMac } from "../test/mac";
 import {
+  altGr,
   type Bindable,
   bindings,
   COMMAND_IDS,
@@ -54,7 +55,7 @@ test("the fixed keys and the command ids are the service's", async () => {
   expect(fixed).toEqual([...FIXED]);
   const list = /pub const COMMAND_IDS: &\[&str\] = &\[([^\]]*)\];/.exec(rust)?.[1] ?? "";
   const ids = [...list.matchAll(/"([^"]+)"/g)].map((m) => m[1]);
-  expect(ids).toEqual([...COMMAND_IDS].sort());
+  expect(ids).toEqual([...COMMAND_IDS]);
   expect(COMMANDS.map((c) => c.id)).toEqual([...COMMAND_IDS]);
 });
 
@@ -121,6 +122,12 @@ test("each command's chords are the user's valid ones, else its defaults", () =>
   for (const odd of [null, "x", [1], 3]) expect(of(odd).get("a")?.user).toBe(false);
   expect(entries({ a: 1 })).toEqual({ a: 1 });
   expect(bindings({}, [A], "mac").get("a")?.chords).toEqual([]);
+  // Every chord bad: the default, as the service and the menu read it.
+  expect(of({ a: ["Hyper+K", "Ctrl+Shift+C"] }).get("a")).toEqual({
+    chords: ["Ctrl+Shift+A"],
+    user: false,
+  });
+  expect(of({ a: "M" }).get("a")?.user).toBe(false);
 });
 
 const key = (init: KeyboardEventInit) => new KeyboardEvent("keydown", init);
@@ -152,6 +159,41 @@ test("a chord is pressed with exactly its modifiers and its key", () => {
   expect(presses("Ctrl+Up", key({ key: "ArrowDown", ctrlKey: true }))).toBe(false);
   expect(presses("F8", key({ key: "F8" }))).toBe(true);
   expect(presses("F8", key({ key: "F9" }))).toBe(false);
+});
+
+test("a letter is recorded as the layout types it, as it is matched (AZERTY)", () => {
+  // AZERTY's A is where QWERTY's Q is.
+  const a = key({ key: "a", code: "KeyQ", ctrlKey: true });
+  expect(chordOf(a)).toBe("Ctrl+A");
+  expect(presses("Ctrl+A", a)).toBe(true);
+  expect(presses("Ctrl+Q", a)).toBe(false);
+  // Option's character is no letter: the physical key, matched by it with Alt.
+  const option = key({ key: "æ", code: "KeyQ", altKey: true });
+  expect(chordOf(option)).toBe("Alt+Q");
+  expect(presses("Alt+Q", option)).toBe(true);
+});
+
+test("AltGr (Ctrl+Alt on Windows) typing a character is told from Ctrl+Alt+key", () => {
+  const at = key({ key: "@", code: "KeyQ", ctrlKey: true, altKey: true });
+  expect(altGr(at)).toBe(true);
+  expect(altGr(key({ key: "q", code: "KeyQ", ctrlKey: true, altKey: true }))).toBe(false);
+  expect(altGr(key({ key: "[", code: "BracketLeft", ctrlKey: true, altKey: true }))).toBe(false);
+  expect(
+    altGr(key({ key: "{", code: "BracketLeft", ctrlKey: true, altKey: true, shiftKey: true })),
+  ).toBe(false);
+  expect(altGr(key({ key: "€", code: "KeyE", ctrlKey: true, altKey: true }))).toBe(true);
+  expect(altGr(key({ key: "€", code: "", ctrlKey: true, altKey: true }))).toBe(true);
+  expect(altGr(key({ key: "F5", code: "F5", ctrlKey: true, altKey: true }))).toBe(false);
+  expect(altGr(key({ key: " ", code: "Space", ctrlKey: true, altKey: true }))).toBe(false);
+  // Not without both, nor with Cmd.
+  expect(altGr(key({ key: "@", code: "KeyQ", altKey: true }))).toBe(false);
+  expect(altGr(key({ key: "@", code: "KeyQ", ctrlKey: true }))).toBe(false);
+  expect(altGr(key({ key: "@", code: "KeyQ", ctrlKey: true, altKey: true, metaKey: true }))).toBe(
+    false,
+  );
+  // macOS has no AltGr.
+  asMac();
+  expect(altGr(at)).toBe(false);
 });
 
 test("a key press is recorded by its physical key, a lone modifier is nothing yet", () => {

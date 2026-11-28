@@ -1,5 +1,5 @@
 import { agentHost } from "./hosts";
-import { type Bindable, COMMAND_TABLE, type Context, effective, presses } from "./keymap";
+import { altGr, type Bindable, COMMAND_TABLE, type Context, effective, presses } from "./keymap";
 import type { Agent } from "./protocol";
 import { closeFile } from "./shell/RightPanel";
 import { findInTerminal } from "./shell/TerminalSearch";
@@ -220,7 +220,7 @@ function fieldsOwn(event: KeyboardEvent): boolean {
  */
 export function shortcut(event: KeyboardEvent): (() => void) | null {
   const s = useHive.getState();
-  if (commandsBlocked(s) || fieldsOwn(event)) return null;
+  if (commandsBlocked(s) || fieldsOwn(event) || altGr(event)) return null;
   const of = effective();
   const pressed = COMMANDS.filter(
     (c) => HOLDS[c.context](s) && (of.get(c.id)?.chords ?? []).some((k) => presses(k, event)),

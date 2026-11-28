@@ -629,7 +629,7 @@ test("a rebound command runs on its new chord, its old one goes back to the term
   rebind({ palette: "Ctrl+Alt+K" });
   expect(press(ctrlShift("P"))).toBe(false);
   expect(useHive.getState().modal).toBeNull();
-  expect(press({ key: "˚", code: "KeyK", ctrlKey: true, altKey: true })).toBe(true);
+  expect(press({ key: "k", code: "KeyK", ctrlKey: true, altKey: true })).toBe(true);
   expect(useHive.getState().modal).toBe("palette");
   act(() => useHive.setState({ modal: null }));
   // In a terminal: the new chord is the app's, the old one the shell's.
@@ -684,4 +684,22 @@ test("Ctrl+Shift+/ (⌘/ on macOS) opens Settings on Keyboard", () => {
   expect(screen.getByRole("button", { name: "Keyboard" }).getAttribute("aria-current")).toBe(
     "page",
   );
+});
+
+test("on Windows an AltGr character (Ctrl+Alt) is the field's or the terminal's, never a shortcut", async () => {
+  const write = spyOn(transport, "writeTerminal");
+  app();
+  rebind({ palette: "Ctrl+Alt+Q" });
+  // German AltGr+Q types @: not Ctrl+Alt+Q.
+  expect(press({ key: "@", code: "KeyQ", ctrlKey: true, altKey: true })).toBe(false);
+  expect(useHive.getState().modal).toBeNull();
+  // Ctrl+Alt+Q itself still is.
+  expect(press({ key: "q", code: "KeyQ", ctrlKey: true, altKey: true })).toBe(true);
+  act(() => useHive.setState({ modal: null }));
+  // In a terminal, the AltGr character reaches it.
+  const id = await act(() => openTerminal(shop.worktrees[1].path));
+  const textarea = terminal(id)?.textarea as HTMLTextAreaElement;
+  press({ key: "@", code: "KeyQ", keyCode: 81, ctrlKey: true, altKey: true } as Keys, textarea);
+  expect(useHive.getState().modal).toBeNull();
+  write.mockRestore();
 });
