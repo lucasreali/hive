@@ -765,6 +765,11 @@ impl Agent {
         agent.state = AgentState::Working;
         agent
     }
+
+    /// How many background commands it lists, for other modules' tests.
+    pub fn background_count(&self) -> usize {
+        self.background.listed().len()
+    }
 }
 
 #[cfg(test)]

@@ -290,9 +290,6 @@ impl State {
             {
                 self.to_app(agent.channel, &message).await;
             }
-            if let Some(message) = agent.expire(id, now) {
-                self.to_app(agent.channel, &message).await;
-            }
             // While it may be interrupted, its transcript is read every tick for the interrupt.
             if agent.busy() {
                 agent.usage.due = true;
@@ -315,7 +312,18 @@ impl State {
                 self.to_app(agent.channel, &message).await;
             }
         }
+        self.expire_background(&mut agents, now).await;
         self.power_changed(&agents);
+    }
+
+    /// Drops the background commands that ended 10 s or more before `now` (28.8), sending each
+    /// agent's new state.
+    async fn expire_background(&self, agents: &mut HashMap<String, Agent>, now: Instant) {
+        for (id, agent) in agents.iter_mut() {
+            if let Some(message) = agent.expire(id, now) {
+                self.to_app(agent.channel, &message).await;
+            }
+        }
     }
 }
 
@@ -415,22 +423,23 @@ mod tests {
         let mut agent = Agent::new(1, start, 0);
         agent.apply("s", &launch, 1, start, &|_| None);
         agent.apply("s", &stop, 2, start, &|_| None);
-        let listed = |agent: &Agent| {
-            let message = agent.message("s");
-            matches!(message, Control::AgentState { ref background, .. } if background.len() == 1)
-        };
-        assert!(listed(&agent));
+        assert_eq!(agent.background_count(), 1);
         state.agents.lock().await.insert("s".into(), agent);
-        let quiet = HashMap::new();
+        // On the same tick, a working agent whose terminal went quiet waits for you.
+        state
+            .agents
+            .lock()
+            .await
+            .insert("w".into(), Agent::working(2, start));
+        let quiet = HashMap::from([(2, start)]);
         state.tick_agents(&quiet, start).await;
-        assert!(listed(&state.agents.lock().await["s"]));
+        assert_eq!(state.agents.lock().await["s"].background_count(), 1);
         state
             .tick_agents(&quiet, start + crate::background::SHOWN_ENDED)
             .await;
-        let left = state.agents.lock().await["s"].message("s");
-        assert!(
-            matches!(left, Control::AgentState { ref background, .. } if background.is_empty())
-        );
+        let agents = state.agents.lock().await;
+        assert_eq!(agents["s"].background_count(), 0);
+        assert!(!agents["w"].works());
     }
 
     #[tokio::test(flavor = "multi_thread")]
