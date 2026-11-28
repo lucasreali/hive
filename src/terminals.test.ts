@@ -1284,6 +1284,136 @@ test("a key taken after an accent is never lost or reordered, however fast the n
   write.mockRestore();
 });
 
+/**
+ * Holds `letter` down on macOS' WebKit until its accent menu is up (press and hold), as a
+ * WKWebView sends it (traced in one, 29.20): its keydown, its repeats as composing keydowns (229,
+ * the menu takes them), its keyup. Then `pick` picks from the menu. Each native event in its own
+ * task.
+ */
+async function holdKey(
+  term: Terminal,
+  letter: string,
+  pick: (area: HTMLTextAreaElement) => unknown,
+) {
+  const area = term.textarea as HTMLTextAreaElement;
+  const code = letter.toUpperCase().charCodeAt(0);
+  const shiftKey = letter !== letter.toLowerCase();
+  // xterm types a capital on its keypress.
+  if (!key(area, "keydown", letter, code, { shiftKey }).defaultPrevented) {
+    key(area, "keypress", letter, code, { shiftKey, charCode: code });
+  }
+  await settle();
+  for (let i = 0; i < 3; i++) {
+    key(area, "keydown", letter, 229);
+    await settle();
+  }
+  key(area, "keyup", letter, code);
+  await settle();
+  await pick(area);
+  await settle();
+  await settle();
+}
+
+/** Dispatches a key event with `keyCode` (and `extra` fields) on `area`. */
+function key(area: HTMLElement, type: string, key: string, keyCode: number, extra: object = {}) {
+  const event = new KeyboardEvent(type, { key, bubbles: true, cancelable: true });
+  for (const [name, value] of Object.entries({ keyCode, which: keyCode, ...extra })) {
+    Object.defineProperty(event, name, { value });
+  }
+  area.dispatchEvent(event);
+  return event;
+}
+
+/** Dispatches an input or composition event with `data` (happy-dom keeps neither's). */
+function textEvent(area: HTMLElement, event: Event, data: string | null) {
+  Object.defineProperty(event, "data", { value: data });
+  area.dispatchEvent(event);
+}
+
+/** The menu's pick by its number key (`digit`): the letter comes as a plain input, a task later. */
+const byNumber = (digit: string, letter: string) => async (area: HTMLTextAreaElement) => {
+  key(area, "keydown", digit, 229);
+  await settle();
+  area.value += letter;
+  const input = new InputEvent("input", { inputType: "insertText", bubbles: true, composed: true });
+  textEvent(area, input, letter);
+  key(area, "keyup", digit, digit.charCodeAt(0));
+};
+
+/** The menu's pick by the arrows then Return: a composition of each letter shown, committed. */
+const byArrows = (shown: string[]) => (area: HTMLTextAreaElement) => {
+  const before = area.value;
+  const composition = (type: string, data: string) =>
+    textEvent(area, new CompositionEvent(type, { bubbles: true }), data);
+  composition("compositionstart", "");
+  for (const letter of shown) {
+    composition("compositionupdate", letter);
+    area.value = before + letter;
+    key(area, "keydown", "ArrowRight", 229, { isComposing: true });
+  }
+  composition("compositionend", shown.at(-1) ?? "");
+  key(area, "keydown", "Enter", 229);
+};
+
+test("on macOS a letter picked from the press-and-hold menu replaces the held one, once (29.20)", async () => {
+  const write = spyOn(transport, "writeTerminal");
+  const { id, term } = await open();
+  showTerminal(id);
+  asMac();
+  const sent = () => write.mock.calls.map(([, data]) => data).join("");
+  // Picked by its number: the held a was sent, a Backspace erases it, then á.
+  await holdKey(term, "a", byNumber("2", "á"));
+  expect(sent()).toBe("a\x7fá");
+  write.mockClear();
+  // Picked with the arrows and Return: ã once, after the Backspace.
+  await holdKey(term, "a", byArrows(["à", "á", "ã"]));
+  expect(sent()).toBe("a\x7fã");
+  write.mockClear();
+  // Shift held: Ã.
+  await holdKey(term, "A", byNumber("6", "Ã"));
+  expect(sent()).toBe("A\x7fÃ");
+  write.mockRestore();
+});
+
+test("only the press-and-hold menu's pick replaces a letter; any other key closes it (29.20)", async () => {
+  const write = spyOn(transport, "writeTerminal");
+  const { id, term } = await open();
+  showTerminal(id);
+  asMac();
+  const sent = () => write.mock.calls.map(([, data]) => data).join("");
+  const area = term.textarea as HTMLTextAreaElement;
+  // Another letter closes the menu and types; a later input is no pick.
+  await holdKey(term, "a", (area) => key(area, "keydown", "b", 66));
+  await byNumber("2", "x")(area);
+  await settle();
+  expect(sent()).not.toContain("\x7f");
+  write.mockClear();
+  // A dead key while the menu is up closes it: its composition is its own (ã), no Backspace.
+  await holdKey(term, "a", byArrows(["˜", "ã"]));
+  expect(sent()).toBe("aã");
+  write.mockClear();
+  // Escape closes it: nothing replaced; the next letter types as it is.
+  await holdKey(term, "a", (area) => key(area, "keydown", "Escape", 229));
+  key(area, "keydown", "o", 79);
+  await byNumber("2", "x")(area);
+  await settle();
+  expect(sent()).not.toContain("\x7f");
+  write.mockClear();
+  // A letter typed twice, a symbol held: never a pick.
+  key(area, "keydown", "a", 65);
+  key(area, "keyup", "a", 65);
+  key(area, "keydown", "a", 229);
+  key(area, "keydown", "1", 49);
+  await holdKey(term, "1", byNumber("2", "x"));
+  expect(sent()).not.toContain("\x7f");
+  write.mockClear();
+  // Off macOS there is no such menu: xterm's own handling.
+  Object.defineProperty(navigator, "userAgent", { value: "Linux", configurable: true });
+  await holdKey(term, "a", byNumber("2", "á"));
+  expect(sent()).toBe("a");
+  write.mockRestore();
+});
+
 test("screen reader mode follows the setting, on new terminals and live on open ones", async () => {
   const { term } = await open();
   expect(term.options.screenReaderMode).toBe(false);

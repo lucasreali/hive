@@ -157,3 +157,89 @@ test("each key typed reaches the PTY once: text, accents, a composition; after a
   await expect.poll(() => sent(page, second)).toBe(TYPED);
   expect(await sent(page, first)).toBe(before + TYPED);
 });
+
+/**
+ * Holds `letter` until macOS' accent menu is up, as a WKWebView sends it (traced in one, 29.20):
+ * its keydown (and keypress unless taken), its repeats as composing keydowns (229), its keyup;
+ * then picks `picked` by a number key (a plain input, a task after its keydown) or, with
+ * `arrows`, by the arrows and Return (a composition of each letter shown). Each native event in
+ * its own task.
+ */
+function holdKey(page: Page, letter: string, picked: string, arrows: string[] = []) {
+  return page.evaluate(
+    async ({ letter, picked, arrows }) => {
+      const area = document.activeElement as HTMLTextAreaElement;
+      const tick = () => new Promise((resolve) => setTimeout(resolve, 0));
+      const key = (type: string, key: string, keyCode: number, extra: object = {}) => {
+        const event = new KeyboardEvent(type, { key, bubbles: true, cancelable: true });
+        for (const [name, value] of Object.entries({ keyCode, which: keyCode, ...extra })) {
+          Object.defineProperty(event, name, { value });
+        }
+        area.dispatchEvent(event);
+        return event;
+      };
+      const composition = (type: string, data: string) =>
+        area.dispatchEvent(new CompositionEvent(type, { data, bubbles: true }));
+      const code = letter.toUpperCase().charCodeAt(0);
+      if (!key("keydown", letter, code).defaultPrevented) {
+        key("keypress", letter, code, { charCode: letter.charCodeAt(0) });
+      }
+      await tick();
+      for (let i = 0; i < 3; i++) {
+        key("keydown", letter, 229);
+        await tick();
+      }
+      key("keyup", letter, code);
+      await tick();
+      if (!arrows.length) {
+        key("keydown", "2", 229);
+        await tick();
+        area.value += picked;
+        area.dispatchEvent(
+          new InputEvent("input", {
+            inputType: "insertText",
+            data: picked,
+            bubbles: true,
+            composed: true,
+          }),
+        );
+        key("keyup", "2", 50);
+      } else {
+        const before = area.value;
+        composition("compositionstart", "");
+        for (const shown of arrows) {
+          composition("compositionupdate", shown);
+          area.value = before + shown;
+          key("keydown", "ArrowRight", 229, { isComposing: true });
+          await tick();
+        }
+        composition("compositionend", picked);
+        key("keydown", "Enter", 229);
+      }
+      await tick();
+      await tick();
+    },
+    { letter, picked, arrows },
+  );
+}
+
+test("a letter picked from macOS' press-and-hold menu replaces the held one in the PTY (29.20)", async ({
+  page,
+}) => {
+  await page.goto("/");
+  await page
+    .getByRole("navigation", { name: "Projects" })
+    .getByRole("button", { name: "fix-login" })
+    .click();
+  await page.getByTitle("New terminal or file").click();
+  await page.getByRole("menuitem", { name: "Terminal" }).click();
+  await expect(page.locator(".terminal-pane:not([hidden]) .xterm-helper-textarea")).toBeFocused();
+  const id = await focused(page);
+
+  await page.keyboard.type("n");
+  // Picked by its number, then with the arrows and Return: a Backspace erases the held a.
+  await holdKey(page, "a", "ã");
+  await page.keyboard.type("o ");
+  await holdKey(page, "e", "é", ["è", "é"]);
+  await expect.poll(() => sent(page, id)).toBe("na\x7fão e\x7fé");
+});

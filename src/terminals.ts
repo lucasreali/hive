@@ -363,16 +363,31 @@ async function startTerminal(
   const search = new SearchAddon();
   term.loadAddon(search);
   const accent = new AccentKey(term);
+  const held = new HeldKey(term);
   term.onData((typed) => {
     const s = useHive.getState();
-    const data = accent.through(typed);
+    const data = held.through(accent.through(typed));
     // A remote's terminal takes no input while its link is down (26.18): its overlay says so.
     if (!s.terminals[id]?.exited && !linkDown(s, host)) void transport.writeTerminal(id, data);
   });
   term.onResize(({ cols, rows }) => void transport.resizeTerminal(id, cols, rows));
-  term.attachCustomKeyEventHandler((event) => keys(term, marks, accent, event));
+  term.attachCustomKeyEventHandler((event) => {
+    held.key(event);
+    return keys(term, marks, accent, event);
+  });
   const el = document.createElement("div");
-  el.addEventListener("compositionend", (event) => accent.ended(event.data), { capture: true });
+  // Before xterm's own listeners, on its textarea inside the pane.
+  el.addEventListener("compositionstart", () => held.started(), { capture: true });
+  el.addEventListener("compositionupdate", (event) => held.updated(event.data), { capture: true });
+  el.addEventListener(
+    "compositionend",
+    (event) => {
+      accent.ended(event.data);
+      held.ended(event.data);
+    },
+    { capture: true },
+  );
+  el.addEventListener("input", (event) => held.input(event as InputEvent), { capture: true });
   el.className = "terminal-pane";
   el.dataset.terminal = String(id);
   el.hidden = true;
@@ -570,6 +585,81 @@ class AccentKey {
     return true;
   }
 }
+
+/**
+ * Press and hold on macOS (29.20): a letter held down shows macOS' accent menu, and the letter
+ * picked there replaces the held one. xterm sent the held letter at its keydown; the pick came
+ * either as an input xterm never sent (by its number, as WebKit sends it while that key is down)
+ * or as a composition xterm sent after the letter (by the arrows and Return). Hive sends a
+ * Backspace (DEL, what xterm's Backspace sends) then the letter picked, once, as Terminal.app
+ * erases the held letter.
+ */
+class HeldKey {
+  /** The letter of the last keydown that typed one, while that key is down. */
+  private down = "";
+  /** That letter once a repeat of it went to the menu (a composing keydown): the menu is up. */
+  private held = "";
+  /** Whether the composition going on is the menu's (the arrows'), not a dead key's. */
+  private menu = false;
+  /** The letter the menu's composition committed, which xterm sends next. */
+  private picked = "";
+
+  constructor(private readonly term: Terminal) {}
+
+  /** Every key event xterm gets: any other key typed closes the menu. */
+  key(event: KeyboardEvent): void {
+    if (event.type === "keyup" && event.key === this.down) this.down = "";
+    if (event.type !== "keydown") return;
+    if (event.keyCode === COMPOSING) {
+      if (this.down && event.key === this.down) this.held = this.down;
+      return;
+    }
+    this.held = "";
+    this.down = isMac() && /^\p{L}$/u.test(event.key) ? event.key : "";
+  }
+
+  /** A composition starts: the menu's when it is up. */
+  started(): void {
+    this.menu = this.held !== "";
+  }
+
+  /** A composition shows `data`: a dead key's accent is not the menu's (it closed it). */
+  updated(data: string): void {
+    if (!this.menu || !accentText(data)) return;
+    this.menu = false;
+    this.held = "";
+  }
+
+  /** A composition ended with `data`: the menu's pick, when it was the menu's. */
+  ended(data: string): void {
+    if (!this.menu) return;
+    this.menu = false;
+    this.held = "";
+    this.picked = data;
+  }
+
+  /** An input: the pick by its number while the menu is up, taken and sent after a DEL. */
+  input(event: InputEvent): void {
+    const data = event.data;
+    if (!this.held || event.inputType !== "insertText" || event.isComposing || !data) return;
+    this.held = "";
+    // xterm never sends it, nor finds it in its field later.
+    event.stopImmediatePropagation();
+    const area = event.target as HTMLTextAreaElement;
+    if (area.value.endsWith(data)) area.value = area.value.slice(0, -data.length);
+    this.term.input(`\x7f${data}`);
+  }
+
+  /** What goes to the PTY for `data` xterm sends: the menu's pick after a DEL. */
+  through(data: string): string {
+    if (!this.picked || !data.startsWith(this.picked)) return data;
+    this.picked = "";
+    return `\x7f${data}`;
+  }
+}
+
+/** The keyCode of a keydown the input method takes (a composition's, the accent menu's). */
+const COMPOSING = 229;
 
 /** At most that many keys wait for their accents (`AccentKey`); far more than a task takes. */
 const MAX_WAITING = 64;
