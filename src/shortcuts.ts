@@ -125,10 +125,14 @@ export function cycleTab(step: 1 | -1): void {
  */
 export function closeActiveTab(): void {
   const s = useHive.getState();
+  const file = s.fileShown && s.openFile && fileVisible(s) ? s.openFile : null;
+  const terminal = s.fileShown ? null : s.activeTab;
+  // Nothing would close: no toast either.
+  if (!file && terminal === null) return;
   const tab = shownTab(s);
   if (tab && closeRefused(tab)) return;
-  if (s.fileShown && s.openFile && fileVisible(s)) closeFile(s.openFile);
-  else if (!s.fileShown && s.activeTab !== null) closeTerminal(s.activeTab);
+  if (file) closeFile(file);
+  else if (terminal !== null) closeTerminal(terminal);
 }
 
 /** Pins the tab shown (the focused pane's in a pair), or unpins it (29.2). */

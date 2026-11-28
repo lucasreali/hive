@@ -12,6 +12,7 @@ import {
   hostView,
   initialState,
   keepFile,
+  moveTab,
   type OpenFile,
   removeTab,
   select,
@@ -23,7 +24,7 @@ import {
   togglePin,
   useHive,
 } from "./store";
-import { dropFile, fileKey, isPinned, pinsFollowed, shownTab } from "./tabs";
+import { barItems, dropFile, fileKey, isPinned, pinsFollowed, shownTab } from "./tabs";
 import { closeTerminal } from "./terminals";
 import { MOCK_REPOS } from "./transport/mock";
 import { type EditBuffer, startEdit, toText } from "./viewer/buffer";
@@ -93,7 +94,15 @@ test("a terminal's pin follows its sessions: one starting in it, and `claude` ex
   detected(7, "s1");
   expect(s().pinnedTabs).toEqual(["tab:7", "session:s1"]);
   apply({ type: "agent_removed", channel: 7, id: "s1" });
+  // Its ended session is no longer a pin: the chat stays pinned by its channel for the run.
+  expect(s().pinnedTabs).toEqual(["tab:7"]);
   expect(isPinned(s(), tabOf(7))).toBe(true);
+  // A session replacing another in the terminal (`/clear`: one removed, the next detected)
+  // takes over its pin.
+  detected(7, "s3");
+  apply({ type: "agent_removed", channel: 7, id: "s3" });
+  detected(7, "s4");
+  expect(s().pinnedTabs).toEqual(["tab:7", "session:s4"]);
   // A chat pinned by its session alone (resumed after a restart) gains its channel.
   addTab(8, W);
   useHive.setState({ pinnedTabs: [...s().pinnedTabs, "session:s2"] });
@@ -101,11 +110,22 @@ test("a terminal's pin follows its sessions: one starting in it, and `claude` ex
   expect(s().pinnedTabs).toContain("tab:8");
   apply({ type: "agent_removed", channel: 8, id: "s2" });
   expect(isPinned(s(), tabOf(8))).toBe(true);
+  // Unpinned and closed after its `claude` ended, nothing of it stays, saved or not.
+  togglePin(tabOf(8));
+  removeTab(8);
+  expect(s().pinnedTabs).toEqual(["tab:7", "session:s4"]);
+  expect(savedHostPlaces()[""]?.pins).toEqual(["session:s4"]);
   // Nothing missing: the same list.
   expect(pinsFollowed(s())).toBe(s().pinnedTabs);
   const before = s();
   followPins({ ...before, notices: [] }, before);
   expect(s()).toBe(before);
+  // Full, no pin pushes another out: the missing key is left out and the list settles.
+  const full = Array.from({ length: 499 }, (_, i) => `session:x${i}`);
+  useHive.setState({ pinnedTabs: [...full, "tab:7"] });
+  apply({ type: "agent_detected", channel: 7, id: "s5", project: shop.id, worktree: W, cwd: W });
+  expect(s().pinnedTabs).toEqual([...full, "tab:7"]);
+  expect(pinsFollowed(s())).toBe(s().pinnedTabs);
 });
 
 test("pinning a preview file keeps it: it is no longer replaced (11.1)", () => {
@@ -138,16 +158,25 @@ test("⌘W and the palette's Close leave a pinned tab open with a toast; unpinne
   closeActiveTab();
   expect(s().openFiles.map((f) => f.path)).toEqual(["a.ts"]);
   expect(toasts().at(-1)).toBe("a.ts is pinned. Unpin it to close it.");
+  // A file shown of another place: nothing would close, so no toast either.
+  addTab(3, W);
+  togglePin(tabOf(3));
+  useHive.setState({ fileShown: true, openFile: file("a.ts"), selection: api.id });
+  const count = toasts().length;
+  closeActiveTab();
+  expect(toasts()).toHaveLength(count);
+  expect(s().tabs.map((t) => t.id)).toEqual([3]);
 });
 
 test("the palette pins and unpins the tab shown, the focused pane's in a pair", () => {
   const label = () =>
     paletteCommands(s()).find((c) => c.label === "Pin the tab" || c.label === "Unpin the tab");
-  // Nothing shown: nothing to pin.
+  // Nothing shown: nothing to pin, and the palette does not offer it.
   pinShownTab();
   expect(s().pinnedTabs).toEqual([]);
-  expect(label()?.label).toBe("Pin the tab");
+  expect(label()).toBeUndefined();
   addTab(1, W);
+  expect(label()?.label).toBe("Pin the tab");
   addTab(2, W);
   setSplit({ left: 1, right: 2 }, 1);
   expect(shownTab(s())).toEqual(tabOf(1));
@@ -190,6 +219,8 @@ test("pins of files and chats come back after a restart; a plain terminal's and 
   addTab(1, W);
   detected(1, "s1");
   togglePin(tabOf(1));
+  // The chat dragged before b.ts (8.21), so the order holds its session.
+  moveTab("session:s1", fileKey(file("b.ts")), false);
   addTab(2, W);
   togglePin(tabOf(2));
   expect(savedHostPlaces()[""]?.pins).toEqual([fileKey(file("a.ts")), "session:s1"]);
@@ -200,6 +231,8 @@ test("pins of files and chats come back after a restart; a plain terminal's and 
   addTab(9, W);
   detected(9, "s1");
   expect(isPinned(s(), tabOf(9))).toBe(true);
+  const bar = barItems(s()).map((t) => ("path" in t ? t.path : t.id));
+  expect(bar).toEqual(["a.ts", 9, "b.ts"]);
   // A file not reopened is pinned no longer.
   const places = { ...NO_HOST_PLACES, files: [file("b.ts")], pins: [fileKey(file("a.ts"))] };
   expect(startHosts({ "": places }).pinnedTabs).toEqual([]);

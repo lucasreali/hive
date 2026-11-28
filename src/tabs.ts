@@ -368,15 +368,32 @@ export function withPin(s: HiveState, item: BarItem): Partial<HiveState> {
  * The pins with every key of a pinned terminal of the host shown (29.2): a chat resumed after a
  * restart, pinned by its session, gains its channel, so the pin stays once `claude` exits; a
  * terminal pinned before a session started in it gains the session, so the pin is kept between
- * runs. The same list when nothing is missing.
+ * runs. The same list when nothing is missing; a key that would not fit under `ORDER_LIMIT` is
+ * left out, so no pin is ever pushed out by another and the list settles.
  */
 export function pinsFollowed(s: HiveState): string[] {
   let pins = s.pinnedTabs;
   for (const tab of s.tabs.filter((t) => onShownHost(s, t))) {
     const keys = keysOf(s, tab);
-    if (keys.some((k) => pins.includes(k))) pins = keys.reduce(withKey, pins);
+    const missing = keys.filter((k) => !pins.includes(k));
+    const fits = pins.length + missing.length <= ORDER_LIMIT;
+    if (missing.length > 0 && fits && keys.some((k) => pins.includes(k))) {
+      pins = [...pins, ...missing];
+    }
   }
   return pins;
+}
+
+/**
+ * The pins once session `id` has left terminal `channel` (29.2, design §7: its agent removed, as on
+ * `/clear` before the next session starts): its key goes, so an unpin later leaves nothing behind, and a
+ * pinned chat stays pinned by its channel for the rest of the run.
+ */
+export function sessionLeft(pins: string[], id: string, channel: number): string[] {
+  const key = `session:${id}`;
+  if (!pins.includes(key)) return pins;
+  const rest = pins.filter((k) => k !== key);
+  return rest.includes(`tab:${channel}`) ? rest : [...rest, `tab:${channel}`];
 }
 
 /** The tab of the bar shown now, the focused pane's in a pair; none when nothing shows. */

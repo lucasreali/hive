@@ -54,8 +54,12 @@ for (const theme of ["one-dark", "one-light"]) {
     await chat();
     await open("README.md");
     await open("package.json");
-    const order = await tabs.allTextContents();
-    const chatTab = tabs.first();
+    // The chat dragged between the files (8.21), so the order holds its session for a reload.
+    const item = (name: string) => bar.locator(".tab", { hasText: name });
+    await item("fix-login").dragTo(item("package.json"), { targetPosition: { x: 2, y: 10 } });
+    const chatTab = item("fix-login").getByRole("tab");
+    const order = ["README.md", /fix-login$/, "package.json"];
+    await expect(tabs).toHaveText(order);
 
     // Pin the chat from its menu: a pin in its ×'s place, which does nothing when clicked.
     await chatTab.click({ button: "right" });
@@ -111,6 +115,8 @@ for (const theme of ["one-dark", "one-light"]) {
     );
     await chat();
     await expect(pinned).toHaveCount(2);
+    // Both in their places.
+    await expect(tabs).toHaveText(order);
     await page.screenshot({ path: `target/e2e/pinned-tabs-reload-${theme}.png` });
 
     // Unpinned, it closes.

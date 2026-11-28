@@ -39,6 +39,7 @@ import {
   kept,
   opened,
   patchEdits,
+  sessionLeft,
   splitOf,
   tabsPlace,
 } from "./tabs";
@@ -248,7 +249,9 @@ function reduce(s: HiveState, m: HostMessage): Partial<HiveState> {
       // A selected agent (the inbox, the palette) that ends, e.g. on `/clear` (20.3), leaves the
       // place it showed selected, so its terminal stays shown.
       const selection = s.selection === m.id ? tabsPlace(s) : s.selection;
-      return { agents, agentStates, agentTitles, agentUsage, pendingSeen, selection };
+      // A pinned chat stays pinned by its channel for the run, not by its ended session (29.2).
+      const pinnedTabs = sessionLeft(s.pinnedTabs, m.id, m.channel);
+      return { agents, agentStates, agentTitles, agentUsage, pendingSeen, selection, pinnedTabs };
     }
     case "agent_title":
       return { agentTitles: { ...s.agentTitles, [m.id]: m.title } };
