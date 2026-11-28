@@ -4807,11 +4807,24 @@ fn the_menus_command_items_take_their_keys_from_the_keymap() {
             ("close-tab", None),
         ])
     );
-    // Its own entry with its default keeps it.
-    let own = json!({"toggle-panel": "Shift+Cmd+B", "palette": "Shift+Cmd+B"});
+    // Two entries on one chord: the command first in the table runs, as in the UI.
+    let shared = json!({"toggle-panel": "Shift+Cmd+B", "palette": "Shift+Cmd+B"});
+    assert_eq!(keys(shared)[1], ("toggle-panel", None));
+    let shared = json!({"toggle-panel": ["Shift+Cmd+B", "Cmd+J"], "comment": "Shift+Cmd+B"});
     assert_eq!(
-        keys(own)[1],
+        keys(shared)[1],
         ("toggle-panel", Some("Shift+Super+B".to_owned()))
+    );
+    // The first chord it wins is the one shown.
+    let shared = json!({"toggle-panel": ["Shift+Cmd+B", "Cmd+J"], "palette": "Shift+Cmd+B"});
+    assert_eq!(
+        keys(shared)[1],
+        ("toggle-panel", Some("Super+J".to_owned()))
+    );
+    // An entry whose every chord is bad keeps the default.
+    assert_eq!(
+        keys(json!({"close-tab": ["Hyper+W"]}))[2],
+        ("close-tab", Some("Super+W".to_owned()))
     );
     // Each one is a Hive item of the menu, whose built-in key is that default.
     for (id, default) in COMMAND_ITEMS {
@@ -4829,19 +4842,77 @@ fn the_menus_command_items_take_their_keys_from_the_keymap() {
     }
 }
 
+/// A menu that keeps the posted jobs until the test runs them, and can fail either step.
+#[derive(Default)]
+struct FakeMenuState {
+    jobs: Mutex<Vec<Box<dyn FnOnce() + Send>>>,
+    set: Mutex<Vec<(String, Option<String>)>>,
+    fail_post: std::sync::atomic::AtomicBool,
+    fail_set: std::sync::atomic::AtomicBool,
+}
+
+struct FakeMenu(Arc<FakeMenuState>);
+
+impl menu::MenuKeys for FakeMenu {
+    fn post(&self, job: Box<dyn FnOnce() + Send>) -> Result<(), String> {
+        if self.0.fail_post.load(std::sync::atomic::Ordering::SeqCst) {
+            return Err("no main thread".into());
+        }
+        self.0.jobs.lock().unwrap().push(job);
+        Ok(())
+    }
+
+    fn submenus(&self) -> Result<Vec<Box<dyn menu::Submenu>>, String> {
+        let menus = [
+            &["about"][..],
+            &["settings"],
+            &["toggle-panel", "close-tab"],
+        ];
+        let state = &self.0;
+        Ok(menus
+            .iter()
+            .map(|items| Box::new(FakeSubmenu(items, Arc::clone(state))) as _)
+            .collect())
+    }
+}
+
+struct FakeSubmenu(&'static [&'static str], Arc<FakeMenuState>);
+
+impl menu::Submenu for FakeSubmenu {
+    fn set(&self, id: &str, keys: Option<&str>) -> Option<Result<(), String>> {
+        if !self.0.contains(&id) {
+            return None;
+        }
+        if self.1.fail_set.load(std::sync::atomic::Ordering::SeqCst) {
+            return Some(Err("refused".into()));
+        }
+        let set = (id.to_owned(), keys.map(str::to_owned));
+        self.1.set.lock().unwrap().push(set);
+        Some(Ok(()))
+    }
+}
+
 #[tokio::test]
-async fn the_local_services_keymap_sets_the_menus_keys_once_per_change() {
+async fn the_local_services_keymap_posts_the_menus_keys_once_and_retries_a_failed_one() {
     let (hive, mut service, mut rx) = welcomed().await;
-    let (tx, set) = std::sync::mpsc::channel();
-    let _hive = hive.with_menu_keys(move |id, keys| {
-        let _ = tx.send((id.to_owned(), keys.map(str::to_owned)));
-    });
+    let state = Arc::new(FakeMenuState::default());
+    let hive = hive.with_menu_keys(FakeMenu(Arc::clone(&state)));
     let settings = |keymap: Value| json!({"type": "settings", "settings": {"keymap": keymap}});
-    let sent = || -> Vec<(String, Option<String>)> { set.try_iter().collect() };
+    // The jobs run as the main thread would, later, with the link free.
+    let run = |hive: &Hive| -> Vec<(String, Option<String>)> {
+        let jobs: Vec<_> = state.jobs.lock().unwrap().drain(..).collect();
+        for job in jobs {
+            assert!(hive.link.try_lock().is_ok(), "the link is free");
+            job();
+        }
+        state.set.lock().unwrap().drain(..).collect()
+    };
     let one = |id: &str, keys: Option<&str>| (id.to_owned(), keys.map(str::to_owned));
     relay(&mut service, &mut rx, 0, settings(json!({}))).await;
+    // Only posted: nothing set while the reader held the link.
+    assert_eq!(state.set.lock().unwrap().len(), 0);
     assert_eq!(
-        sent(),
+        run(&hive),
         [
             one("settings", Some("Super+,")),
             one("toggle-panel", Some("Shift+Super+B")),
@@ -4849,8 +4920,68 @@ async fn the_local_services_keymap_sets_the_menus_keys_once_per_change() {
         ]
     );
     relay(&mut service, &mut rx, 0, settings(json!({}))).await;
-    assert_eq!(sent(), []);
-    let changed = json!({"close-tab": [], "palette": "Shift+Cmd+B"});
-    relay(&mut service, &mut rx, 0, settings(changed)).await;
-    assert_eq!(sent(), [one("toggle-panel", None), one("close-tab", None)]);
+    assert_eq!(run(&hive), []);
+    // A set that fails is sent again with the next settings, until it holds.
+    state
+        .fail_set
+        .store(true, std::sync::atomic::Ordering::SeqCst);
+    let closed = json!({"close-tab": []});
+    relay(&mut service, &mut rx, 0, settings(closed.clone())).await;
+    assert_eq!(run(&hive), []);
+    state
+        .fail_set
+        .store(false, std::sync::atomic::Ordering::SeqCst);
+    relay(&mut service, &mut rx, 0, settings(closed.clone())).await;
+    assert_eq!(run(&hive), [one("close-tab", None)]);
+    relay(&mut service, &mut rx, 0, settings(closed)).await;
+    assert_eq!(run(&hive), []);
+    // So with a post that fails.
+    state
+        .fail_post
+        .store(true, std::sync::atomic::Ordering::SeqCst);
+    let taken = json!({"palette": "Shift+Cmd+B"});
+    relay(&mut service, &mut rx, 0, settings(taken.clone())).await;
+    assert_eq!(state.jobs.lock().unwrap().len(), 0);
+    state
+        .fail_post
+        .store(false, std::sync::atomic::Ordering::SeqCst);
+    relay(&mut service, &mut rx, 0, settings(taken)).await;
+    assert_eq!(
+        run(&hive),
+        [one("toggle-panel", None), one("close-tab", Some("Super+W"))]
+    );
+}
+
+#[test]
+fn an_item_is_found_in_whichever_submenu_holds_it_and_a_missing_one_said() {
+    struct NoMenu;
+    impl menu::MenuKeys for NoMenu {
+        fn post(&self, _: Box<dyn FnOnce() + Send>) -> Result<(), String> {
+            Ok(())
+        }
+        fn submenus(&self) -> Result<Vec<Box<dyn menu::Submenu>>, String> {
+            Err("the app has no menu".into())
+        }
+    }
+    let state = Arc::new(FakeMenuState::default());
+    let fake = FakeMenu(Arc::clone(&state));
+    assert_eq!(menu::set_key(&fake, "close-tab", Some("Super+W")), Ok(()));
+    assert_eq!(menu::set_key(&fake, "settings", None), Ok(()));
+    let set = state.set.lock().unwrap().clone();
+    assert_eq!(
+        set,
+        [
+            ("close-tab".to_owned(), Some("Super+W".to_owned())),
+            ("settings".to_owned(), None)
+        ]
+    );
+    assert_eq!(
+        menu::set_key(&fake, "quit", None),
+        Err("the menu has no item quit".into())
+    );
+    assert_eq!(
+        menu::set_key(&NoMenu, "settings", None),
+        Err("the app has no menu".into())
+    );
+    assert_eq!(menu::MenuKeys::post(&NoMenu, Box::new(|| {})), Ok(()));
 }

@@ -840,9 +840,6 @@ const MAX_KEPT_CHANNEL: u32 = 1 << 20;
 /// The longest `cwd`, `worktree` or `account` of a kept terminal, in bytes: a path's.
 const MAX_KEPT_TEXT: usize = 4096;
 
-/// Sets one app menu item's accelerator (`Hive::with_menu_keys`).
-type MenuKeys = dyn Fn(&str, Option<&str>) + Send + Sync;
-
 #[derive(Default)]
 struct Link {
     /// Control messages to the UI.
@@ -879,9 +876,10 @@ struct Link {
     remotes: Option<Arc<remote::Remotes>>,
     /// Sets the accelerator of an app menu item that is a command (28.7, `menu::accelerators`);
     /// given by `main.rs` on macOS (`with_menu_keys`), on the local link only.
-    menu_keys: Option<Arc<MenuKeys>>,
-    /// The accelerators last set: a `settings` that changes none sets nothing.
-    accelerators: Vec<(&'static str, Option<String>)>,
+    menu_keys: Option<Arc<dyn menu::MenuKeys>>,
+    /// The accelerators set: a `settings` that changes none sets nothing, a failed one is
+    /// sent again with the next.
+    accelerators: menu::Applied,
     /// Reads the service until the connection ends; it owns the bridge process.
     reader: Option<JoinHandle<()>>,
     /// The newer release `check_update` found and downloaded, for `install_update` or the
@@ -978,13 +976,13 @@ impl Link {
                     remotes.sync(settings.unwrap_or_default(), self.ui.as_ref());
                 }
                 // Its keymap gives the menu's items that are commands their keys (28.7).
-                if let Some(set) = &self.menu_keys {
+                // Only posted: the link is held here (`menu::MenuKeys`).
+                if let Some(keys) = &self.menu_keys {
                     let keymap = Keymap(message["settings"]["keymap"].clone());
                     let wanted = menu::accelerators(&keymap);
-                    for (id, keys) in wanted.iter().filter(|w| !self.accelerators.contains(w)) {
-                        set(id, keys.as_deref());
+                    for (id, accelerator) in menu::changed(&self.accelerators, wanted) {
+                        menu::apply(keys, &self.accelerators, id, accelerator);
                     }
-                    self.accelerators = wanted;
                 }
             }
             _ => {}
@@ -1644,10 +1642,10 @@ impl Hive {
         self
     }
 
-    /// Sets the app menu's accelerators from the local service's keymap (28.7): `set` gets an
-    /// item's id and its accelerator (none: no key), for each one that changed.
-    pub fn with_menu_keys(self, set: impl Fn(&str, Option<&str>) + Send + Sync + 'static) -> Self {
-        self.link().menu_keys = Some(Arc::new(set));
+    /// Sets the app menu's accelerators from the local service's keymap (28.7), each one that
+    /// changed, through `keys` (`menu::AppMenu` in the app).
+    pub fn with_menu_keys(self, keys: impl menu::MenuKeys + 'static) -> Self {
+        self.link().menu_keys = Some(Arc::new(keys));
         self
     }
 

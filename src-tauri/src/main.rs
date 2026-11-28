@@ -87,7 +87,7 @@ fn main() {
             let hive = hive.with_remote(hive_lib::remote::SSH.into(), app.path().resource_dir()?);
             // The menu's items that are commands follow the keymap (28.7).
             #[cfg(target_os = "macos")]
-            let hive = hive.with_menu_keys(menu_keys(app));
+            let hive = hive.with_menu_keys(AppMenu(app.handle().clone()));
             // Asks for notification permission at launch; the tone plays from the app (17.19).
             #[cfg(target_os = "macos")]
             let hive = hive
@@ -491,31 +491,34 @@ fn app_menu(app: &tauri::AppHandle) -> tauri::Result<tauri::menu::Menu<tauri::Wr
     Ok(menu)
 }
 
-/// Sets an app menu item's accelerator (28.7), as `hive_lib::menu::accelerators` decides it;
-/// `None` takes its key away.
+/// The app menu's accelerators (28.7): Tauri's side of `hive_lib::menu::MenuKeys`.
 #[cfg(target_os = "macos")]
-fn menu_keys(app: &tauri::App) -> impl Fn(&str, Option<&str>) + Send + Sync + 'static {
-    let app = app.handle().clone();
-    move |id, keys| {
-        // Called by the reader while it holds the link: the menu's calls wait for the main
-        // thread, which may be waiting for the link (a command, a menu click). So the work is
-        // posted to the main thread, never waited for.
-        let (handle, id, keys) = (app.clone(), id.to_owned(), keys.map(str::to_owned));
-        let posted = app.run_on_main_thread(move || {
-            let menus = handle
-                .menu()
-                .and_then(|menu| menu.items().ok())
-                .unwrap_or_default();
-            let item = menus
-                .iter()
-                .find_map(|menu| menu.as_submenu()?.get(&id)?.as_menuitem().cloned());
-            if let Some(Err(error)) = item.map(|item| item.set_accelerator(keys.as_deref())) {
-                eprintln!("hive-app: the menu item {id} keeps its key: {error}");
-            }
-        });
-        if let Err(error) = posted {
-            eprintln!("hive-app: the menu's keys are not set: {error}");
-        }
+struct AppMenu(tauri::AppHandle);
+
+#[cfg(target_os = "macos")]
+impl hive_lib::menu::MenuKeys for AppMenu {
+    fn post(&self, job: Box<dyn FnOnce() + Send>) -> Result<(), String> {
+        self.0.run_on_main_thread(job).map_err(|e| e.to_string())
+    }
+
+    fn submenus(&self) -> Result<Vec<Box<dyn hive_lib::menu::Submenu>>, String> {
+        let menu = self.0.menu().ok_or("the app has no menu")?;
+        let items = menu.items().map_err(|e| e.to_string())?;
+        let submenus = items
+            .into_iter()
+            .filter_map(|item| item.as_submenu().cloned());
+        Ok(submenus.map(|s| Box::new(AppSubmenu(s)) as _).collect())
+    }
+}
+
+#[cfg(target_os = "macos")]
+struct AppSubmenu(tauri::menu::Submenu<tauri::Wry>);
+
+#[cfg(target_os = "macos")]
+impl hive_lib::menu::Submenu for AppSubmenu {
+    fn set(&self, id: &str, keys: Option<&str>) -> Option<Result<(), String>> {
+        let item = self.0.get(id)?.as_menuitem().cloned()?;
+        Some(item.set_accelerator(keys).map_err(|e| e.to_string()))
     }
 }
 
