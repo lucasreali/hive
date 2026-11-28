@@ -1,5 +1,5 @@
 import { ArrowLeftIcon, PlayIcon } from "@phosphor-icons/react";
-import { useEffect, useState } from "react";
+import { useEffect } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { openRunWorkflow } from "../git";
 import type { Project, Worktree } from "../protocol";
@@ -24,6 +24,7 @@ import { transport } from "../transport";
 import { Select } from "../ui/Select";
 import { ExternalIcon, RefreshIcon } from "./icons";
 import { openLink } from "./Markdown";
+import { useKept, viewKey } from "./panelPlace";
 
 /** A run's, job's or step's state as one mark, as the pull requests' checks show it. */
 const MARK: Record<CheckState, string> = { passing: "✓", failing: "✗", running: "●", skipped: "–" };
@@ -44,11 +45,16 @@ const since = (iso: string) => {
  * The Actions view (9.32) of the right panel, for the shown worktree's project: its latest
  * workflow runs on one branch (the worktree's first) or all, or one run's jobs. The list is
  * asked for when the view shows and every `PULLS_INTERVAL_MS` while it does; the service never
- * asks GitHub more often. Remount it per worktree (`key`) to start on that worktree's branch.
+ * asks GitHub more often. Each worktree starts on its branch, then keeps the filter it was left on.
  */
 export function RunsView({ project, worktree }: { project: Project; worktree: Worktree }) {
   const open = useHive((s) => (s.openRun?.project === project.id ? s.openRun : null));
-  const [branch, setBranch] = useState(worktree.branch);
+  // Its branch filter is this worktree's own, kept for this run while the view closes (28.27).
+  const host = useHive((s) => s.host);
+  const [branch, setBranch] = useKept(
+    viewKey("actions-branch", host, worktree.path),
+    worktree.branch,
+  );
   const ask = () => void transport.listRuns(project.id, branch, false);
   useRefresh(ask, PULLS_INTERVAL_MS, true, [project.id, branch]);
   return open ? (

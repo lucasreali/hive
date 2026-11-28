@@ -15,6 +15,7 @@ import {
   spaceProjects,
   treeAgents,
   useHive,
+  withCollapsed,
 } from "../store";
 import { showOpenFailure } from "../terminals";
 import { transport } from "../transport";
@@ -169,7 +170,7 @@ export function places(s: HiveState): PaletteItem[] {
         // A group's repository opens its group too (14.1).
         const group = project.parent ?? "";
         useHive.setState((s) => ({
-          collapsed: { ...s.collapsed, [group]: false, [project.id]: false },
+          collapsed: withCollapsed(s.collapsed, { [group]: false, [project.id]: false }),
         }));
         select(w.id);
       },

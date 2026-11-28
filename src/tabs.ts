@@ -325,15 +325,16 @@ export function withShown(s: HiveState): HiveState["tabHistory"] {
 }
 
 /**
- * Of `items`, the one worktree `place` showed last (28.19), by its history of shown tabs; none
- * when it showed none of them.
+ * Of `items`, the one worktree `place` showed last (28.19), by its history of shown tabs (this
+ * run's, or `history`); none when it showed none of them.
  */
 export function lastShown<T extends BarItem>(
   s: HiveState,
   place: string,
   items: T[],
+  history = s.tabHistory,
 ): T | undefined {
-  const list = s.tabHistory[placeKey(s, place)] ?? [];
+  const list = history[placeKey(s, place)] ?? [];
   for (let i = list.length - 1; i >= 0; i--) {
     const item = items.find((t) => keysOf(s, t).includes(list[i] as string));
     if (item) return item;

@@ -66,6 +66,7 @@ import {
   showPanelView,
   tableShown,
   useHive,
+  withCollapsed,
   within,
 } from "../store";
 import { dropFile, fileTabState, paneState } from "../tabs";
@@ -99,7 +100,7 @@ import {
 } from "./icons";
 import { Markdown } from "./Markdown";
 import { PullsView } from "./PullsView";
-import { keepViewPlace, useKeptScroll, viewKey, viewPlace } from "./panelPlace";
+import { keepViewPlace, useKept, useKeptScroll, viewKey, viewPlace } from "./panelPlace";
 import { RunsView } from "./RunsView";
 import { ResizeHandle } from "./resize";
 import { ScriptsView } from "./ScriptsView";
@@ -539,11 +540,13 @@ type SearchMode = "names" | "contents";
 /**
  * Files: every file of the shown worktree, with the changes' statuses. Typing in "Find files"
  * lists the files whose path holds the text ("Names"), or the lines holding it, searched by
- * the service ("Contents"); a line opens its file there.
+ * the service ("Contents"); a line opens its file there. The query and the mode are each
+ * worktree's own, kept for this run while the view closes (28.27).
  */
 export function FilesView({ worktree }: { worktree: string }) {
-  const [query, setQuery] = useState("");
-  const [mode, setMode] = useState<SearchMode>("names");
+  const host = useHive((s) => s.host);
+  const [query, setQuery] = useKept(viewKey("files-query", host, worktree), "");
+  const [mode, setMode] = useKept<SearchMode>(viewKey("files-mode", host, worktree), "names");
   const q = query.trim();
   const tab = (value: SearchMode, label: string) => (
     <button type="button" aria-pressed={mode === value} onClick={() => setMode(value)}>
@@ -939,7 +942,9 @@ function FileTree({ worktree, changedOnly }: { worktree: string; changedOnly: bo
   // The Diff tab opens a file as its diff; the Files tab as editable text (#31).
   const pick = (row: FileRow) =>
     row.kind === "folder"
-      ? useHive.setState((s) => ({ collapsed: { ...s.collapsed, [row.key]: row.open } }))
+      ? useHive.setState((s) => ({
+          collapsed: withCollapsed(s.collapsed, { [row.key]: row.open }),
+        }))
       : leaveFile({ worktree, path: row.key }, !changedOnly);
   // The Diff tree's boxes stage a file or unstage it (27.6): what is left to commit only.
   const stageable = (row: FileRow | undefined) =>
@@ -1256,7 +1261,9 @@ function useFileDrag(worktree: string, rows: FileRow[]) {
   const setOpen = (folders: string[], open: boolean) => {
     if (folders.length === 0) return;
     const keys = folders.map((f) => [`files:${worktree}/${f}`, !open]);
-    useHive.setState((s) => ({ collapsed: { ...s.collapsed, ...Object.fromEntries(keys) } }));
+    useHive.setState((s) => ({
+      collapsed: withCollapsed(s.collapsed, Object.fromEntries(keys)),
+    }));
   };
   // Closes the folders the drag opened, except those holding `folder`.
   const closeOutside = (folder: string | null) => {

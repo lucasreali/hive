@@ -6,6 +6,8 @@ import {
   ask,
   currentSpace,
   onRemote,
+  resumeAtLaunch,
+  resumeFailed,
   showNotice,
   spaceAccount,
   useHive,
@@ -122,13 +124,17 @@ export async function resume(
 
 /**
  * The sessions that ran in Hive's terminals when the app last closed: each is resumed in a new
- * terminal in its folder, as its terminal's Claude account, one after the other.
+ * terminal in its folder, as its terminal's Claude account, one after the other; none takes the
+ * focus (28.27): the worktree's history picks the tab shown.
  */
 export async function restore(sessions: OpenSession[]): Promise<void> {
+  // The launch restore lasts until each is named (28.27).
+  resumeAtLaunch(sessions.map((x) => x.id));
   for (const { id, cwd, config_dir } of sessions) {
     try {
-      await openClaude(cwd, resumeArgs(id), { config_dir });
+      await openClaude(cwd, resumeArgs(id), { config_dir }, undefined, false);
     } catch (error) {
+      resumeFailed(id);
       showNotice("error", `Cannot resume the session in ${cwd}: ${error}`);
     }
   }

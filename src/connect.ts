@@ -7,6 +7,7 @@ import { apply } from "./reduce";
 import { onMoved, openLocated, restore } from "./sessions";
 import { requestQuit } from "./shell/CloseAppDialog";
 import { onUninstalled } from "./shell/UninstallDialog";
+import { reattachDone, reattachStarted } from "./store";
 import { dropFiles, reattachTerminal, redrawTerminal, showOpenFailure } from "./terminals";
 import { transport } from "./transport";
 import { openTarget } from "./viewer/external";
@@ -37,7 +38,11 @@ export function onMessage(received: HostMessage): void {
   if (message.type === "menu") runMenuItem(message.item);
   if (message.type === "files_dropped") dropFiles(message.text, message.x, message.y);
   if (message.type === "terminal_kept") {
-    showOpenFailure(reattachTerminal(message.channel, message.cwd, message.host));
+    // The launch restore ends once its kept terminals are reattached (28.27).
+    reattachStarted();
+    showOpenFailure(
+      reattachTerminal(message.channel, message.cwd, message.host).finally(reattachDone),
+    );
   }
   if (message.type === "terminal_reattached") redrawTerminal(message.channel);
 }

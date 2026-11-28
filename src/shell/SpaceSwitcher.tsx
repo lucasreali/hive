@@ -15,14 +15,18 @@ import {
 import { transport } from "../transport";
 import { HostDot, hostName, hostStatus, linkText, MANY_HOSTS, matches } from "./Hosts";
 import { CheckIcon } from "./icons";
+import { useKept } from "./panelPlace";
 import { SearchField } from "./SearchField";
 
 // The space switcher (6.14; hosts 26.18; many hosts 27.8), at the top of the sidebar: its
 // trigger names the space and, for a remote's, its host ("Default · gpu-box"); its list has a
 // section per host, this Mac first, each with its link's dot. With many hosts a filter comes on
 // top and the shown host's section first, the others collapsed to their header until opened or
-// matched. One "New space…" (its dialog asks where) and "Edit space…" end it.
+// matched (the hosts opened stay open for this run). One "New space…" (its dialog asks where) and
+// "Edit space…" end it.
 
+/** No host opened yet. */
+const NONE: string[] = [];
 /** The tallest the list gets before it scrolls. */
 const LIST_MAX = 420;
 
@@ -126,7 +130,8 @@ export function SpaceSwitcher() {
   );
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
-  const [opened, setOpened] = useState<string[]>([]);
+  // The hosts opened stay open the next time it opens, for this run (28.27).
+  const [opened, setOpened] = useKept<string[]>("space-switcher-hosts", NONE);
   const [active, setActive] = useState(0);
   const trigger = useRef<HTMLButtonElement>(null);
   const list = useRef<HTMLDivElement>(null);

@@ -19,6 +19,9 @@ run only.
 
 ## Not built: the human picks
 
+The human delegated the pick (2026-11-27): 28.27 built rows 1–13 and 15–17 as proposed (see
+its Defaults ledger row); rows 14, 18, 19 and 20 stay as they are.
+
 | # | Place | What is lost today | When | Proposal |
 |---|---|---|---|---|
 | 1 | Sidebar selection at launch | nothing is selected after a restart (every tab shows) | restart | select the place the current space was left on (`spacePlaces` kept in `localStorage`) |
