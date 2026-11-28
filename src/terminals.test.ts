@@ -1077,8 +1077,17 @@ test("on macOS the Option keys the setting makes Meta send Esc + the key, the ot
  * composition, committed before the keydown of the next key. That keydown is the composing one
  * (229) when the two combine (´a → á); else it is the dead key's own code with both characters
  * as its key ("'t"), and the next key's text comes as its keypress and input, unless taken.
+ * `then` runs right after that keydown, in its task (a next key typed before xterm sends the
+ * accent).
  */
-async function deadKey(term: Terminal, accent: string, code: number, next: string, combined = "") {
+async function deadKey(
+  term: Terminal,
+  accent: string,
+  code: number,
+  next: string,
+  combined = "",
+  then = () => {},
+) {
   const area = term.textarea as HTMLTextAreaElement;
   // happy-dom keeps neither a composition's nor an input's data: set on each event.
   const send = (event: Event, data: string | null) => {
@@ -1119,6 +1128,7 @@ async function deadKey(term: Terminal, accent: string, code: number, next: strin
       input("insertText", next);
     }
   }
+  then();
   await settle();
   key("keyup", next, next.toUpperCase().charCodeAt(0));
   await settle();
@@ -1139,6 +1149,49 @@ test("a dead key then a key it does not combine with types each once, on macOS (
   // ´ then a combine: á, once.
   await deadKey(term, "'", 222, "a", "á");
   expect(sent().join("")).toBe(`'t"x˜/á`);
+  write.mockClear();
+  // A next key typed before xterm sent the accent comes after the taken one: never "'ht".
+  const h = () => press(term, "h", { ctrlKey: false, shiftKey: false, keyCode: 72 });
+  await deadKey(term, "'", 222, "t", "", h);
+  expect(sent()).toEqual(["'", "t", "h"]);
+  write.mockRestore();
+});
+
+test("only a dead key's shape is taken: a letter's commit, a composing key, off macOS are xterm's (29.7)", async () => {
+  const write = spyOn(transport, "writeTerminal");
+  const { id, term } = await open();
+  showTerminal(id);
+  asMac();
+  const sent = () => write.mock.calls.map(([, data]) => data);
+  const area = term.textarea as HTMLTextAreaElement;
+  const commit = async (text: string) => {
+    for (const type of ["compositionstart", "compositionend"]) {
+      const event = new CompositionEvent(type, { bubbles: true });
+      Object.defineProperty(event, "data", { value: type === "compositionend" ? text : "" });
+      if (type === "compositionend") area.value += text;
+      area.dispatchEvent(event);
+    }
+    await settle();
+  };
+  const none = { ctrlKey: false, shiftKey: false };
+  // An IME or press-and-hold commits a letter: Shift and Enter after it stay xterm's.
+  await commit("S");
+  expect(press(term, "Shift", { ...none, keyCode: 16 }).defaultPrevented).toBe(false);
+  await commit("E");
+  press(term, "Enter", { ...none, keyCode: 13 });
+  expect(sent()).toEqual(["S", "E", "\r"]);
+  write.mockClear();
+  // A composing keydown that starts with the accent, or one with Cmd: never taken.
+  await commit("'");
+  expect(press(term, "'t", { ...none, keyCode: 229 }).defaultPrevented).toBe(false);
+  await commit("'");
+  expect(press(term, "'t", { ...none, metaKey: true, keyCode: 222 }).defaultPrevented).toBe(false);
+  expect(sent()).not.toContain("t");
+  write.mockClear();
+  // Off macOS xterm keeps its own handling.
+  Object.defineProperty(navigator, "userAgent", { value: "Linux", configurable: true });
+  await deadKey(term, "'", 222, "t");
+  expect(sent()).not.toContain("t");
   write.mockRestore();
 });
 
