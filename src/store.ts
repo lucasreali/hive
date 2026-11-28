@@ -1679,8 +1679,10 @@ export const toggleCollapsed = (id: string) =>
   useHive.setState((s) => ({ collapsed: withCollapsed(s.collapsed, { [id]: !s.collapsed[id] }) }));
 
 /** Whether tree node `key` is `value` by default: a folder collapsed, anything else open. */
-const byDefault = (key: string, value: boolean) =>
-  value === (key.startsWith("files:") || key.startsWith("changes:"));
+// A declaration, not a const: the launch reads it (`startHosts`) before this line runs.
+function byDefault(key: string, value: boolean): boolean {
+  return value === (key.startsWith("files:") || key.startsWith("changes:"));
+}
 
 /**
  * `collapsed` with `changes` (28.27): each node changed moves last, so the least recently
