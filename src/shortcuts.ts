@@ -36,6 +36,7 @@ import {
 import { transport } from "./transport";
 import { sendReference } from "./viewer/reference";
 import { startComment } from "./viewer/review";
+import { composing } from "./window";
 
 // App shortcuts (#35): Ctrl+Shift+letter (Cmd+Shift+letter on macOS), Ctrl+, and F8 by default,
 // taken even with the focus in a terminal; on macOS also its own (D17.2, 17.14): ⌘W, ⌘1–9,
@@ -223,7 +224,10 @@ function fieldsOwn(event: KeyboardEvent): boolean {
  */
 export function shortcut(event: KeyboardEvent): (() => void) | null {
   const s = useHive.getState();
-  if (commandsBlocked(s) || fieldsOwn(event) || altGr(event)) return null;
+  // A key of a composition (an IME, a dead key: ´ ~ ^, Option+E) is never a shortcut, even
+  // one whose physical key an Alt chord names: it is the field's or the terminal's.
+  const dead = composing(event) || event.key === "Dead";
+  if (dead || commandsBlocked(s) || fieldsOwn(event) || altGr(event)) return null;
   const of = effective();
   const pressed = COMMANDS.filter(
     (c) => HOLDS[c.context](s) && (of.get(c.id)?.chords ?? []).some((k) => presses(k, event)),

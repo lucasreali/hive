@@ -710,3 +710,19 @@ test("on AZERTY a recorded Ctrl+Alt+letter runs: its letter is the one the layou
   expect(press({ key: "a", code: "KeyQ", ctrlKey: true, altKey: true })).toBe(true);
   expect(useHive.getState().modal).toBe("palette");
 });
+
+test("a dead key or a composing key is never a shortcut, even on an Alt chord's physical key", () => {
+  app();
+  rebind({ palette: "Alt+E", comment: "Ctrl+Alt+M" });
+  // Option+E on macOS (´ on a pt-BR layout) starts a composition: key "Dead".
+  expect(press({ key: "Dead", code: "KeyE", altKey: true })).toBe(false);
+  expect(useHive.getState().modal).toBeNull();
+  // An IME's keys while it composes, and WebKit's keyCode 229.
+  const composingKey = { key: "e", code: "KeyE", altKey: true, isComposing: true };
+  expect(press(composingKey as Keys)).toBe(false);
+  expect(press({ key: "e", code: "KeyE", altKey: true, keyCode: 229 } as Keys)).toBe(false);
+  expect(useHive.getState().modal).toBeNull();
+  // The same chord, not composing, runs.
+  expect(press({ key: "e", code: "KeyE", altKey: true })).toBe(true);
+  expect(useHive.getState().modal).toBe("palette");
+});
