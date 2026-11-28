@@ -28,7 +28,7 @@ The most urgent state wins: a subagent waiting for permission puts its agent in 
 
 **Notifications.** A short tone when an agent enters a pending state, and an OS notification when an agent finishes its turn. Interrupting an agent yourself never alerts. No notification (and no pending count) when Hive has focus and that agent's terminal is the one you are looking at.
 
-**Embedded terminals.** xterm.js tabs, grouped per worktree: the tab bar shows the selected worktree's terminals. A tab running Claude shows the agent's state and the session name Claude gave it. Any number of terminals; only visible ones use WebGL.
+**Embedded terminals.** xterm.js tabs, grouped per worktree: the tab bar shows the selected worktree's terminals. A tab running Claude shows the agent's state and the session name Claude gave it. Any number of terminals; only visible ones use WebGL. Pin a tab (its right-click menu, or **Pin the tab** in the command palette) so it is not closed by accident: a pin replaces its ×, and ⌘W, the palette and its menu leave it open until you unpin it. Pinned chats and files stay pinned after a restart.
 
 **Worktrees.** Create one from any local or remote branch. Hive follows Claude Code's convention (`.claude/worktrees/<name>/`, branch `worktree-<name>`, the same as `claude -w <name>`) and copies the files listed in `.worktreeinclude`. The new worktree can open a terminal with `claude` already started. Worktrees created by `claude -w` or by subagents in Hive's terminals go through Hive too, and disappear from the sidebar when Claude removes them. Right-click a worktree to rename it, delete it, open a terminal there, copy its path or open its folder.
 
