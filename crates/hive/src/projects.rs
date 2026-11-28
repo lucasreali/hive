@@ -983,6 +983,8 @@ fn group(path: &str, error: Option<String>, folder: bool) -> Project {
         group: true,
         folder,
         parent: None,
+        jj: false,
+        trunk: None,
     }
 }
 
@@ -991,6 +993,14 @@ fn project(path: &str) -> Project {
     let (worktrees, error) = match worktree::list(root) {
         Ok(list) => (worktrees(root, list), None),
         Err(err) => (Vec::new(), Some(err.to_string())),
+    };
+    let main = worktrees.iter().find(|w| w.main);
+    let main = main.map(|m| (Path::new(&m.path), m.branch.is_none()));
+    let jj = main.is_some_and(|(dir, _)| jj_colocated(dir));
+    let trunk = match main {
+        // A git that fails leaves it with no base, as any detached main worktree.
+        Some((dir, true)) if jj => worktree::trunk(dir).ok().flatten(),
+        _ => None,
     };
     Project {
         id: path.to_owned(),
@@ -1001,7 +1011,16 @@ fn project(path: &str) -> Project {
         group: false,
         folder: false,
         parent: None,
+        jj,
+        trunk,
     }
+}
+
+/// Whether the main worktree at `dir` is a colocated Jujutsu repository's (28.26): a `.jj`
+/// folder (not a link) beside its `.git`. jj itself is never run.
+fn jj_colocated(dir: &Path) -> bool {
+    let meta = dir.join(".jj").symlink_metadata();
+    meta.is_ok_and(|m| m.is_dir())
 }
 
 /// Describes `git worktree list` for the sidebar, skipping bare entries and worktrees whose
@@ -1146,6 +1165,8 @@ mod tests {
             group: false,
             folder: false,
             parent: None,
+            jj: false,
+            trunk: None,
         }];
         let proc = tempfile::tempdir().unwrap();
         let held = |folder: &str| {
@@ -1238,6 +1259,58 @@ mod tests {
         assert_eq!(got, ["/r", "/r/x"]);
     }
 
+    #[test]
+    fn a_colocated_jj_repository_is_compared_with_its_trunk() {
+        use crate::health::tests::{commit, run};
+        let tmp = tempfile::tempdir().unwrap();
+        let root = canonical(tmp.path()).unwrap().join("r");
+        std::fs::create_dir(&root).unwrap();
+        run(&root, &["init", "-q", "-b", "main"]);
+        commit(&root, "a");
+        for name in ["master", "trunk"] {
+            run(&root, &["branch", name]);
+        }
+        let id = root.display().to_string();
+        let got = || {
+            let project = project(&id);
+            (project.jj, project.trunk)
+        };
+        // On a branch, with no `.jj`: as any repository.
+        assert_eq!(got(), (false, None));
+        // Detached, as jj keeps it, but no `.jj`: no base.
+        run(&root, &["switch", "-q", "--detach"]);
+        assert_eq!(got(), (false, None));
+        // jj's: the first of main, master, trunk, by exact name.
+        let jj = root.join(".jj");
+        std::fs::create_dir(&jj).unwrap();
+        assert_eq!(got(), (true, Some("main".into())));
+        run(&root, &["branch", "-q", "-D", "main"]);
+        run(&root, &["branch", "main/x"]);
+        assert_eq!(got(), (true, Some("master".into())));
+        run(&root, &["branch", "-q", "-D", "master"]);
+        assert_eq!(got(), (true, Some("trunk".into())));
+        run(&root, &["branch", "-q", "-D", "trunk"]);
+        assert_eq!(got(), (true, None));
+        // On a branch the main worktree's own is the base: no trunk.
+        run(&root, &["branch", "trunk"]);
+        run(&root, &["switch", "-q", "main/x"]);
+        assert_eq!(got(), (true, None));
+        // A `.jj` that is a file, or a link to a folder, is not jj's.
+        run(&root, &["switch", "-q", "--detach"]);
+        std::fs::remove_dir(&jj).unwrap();
+        std::fs::write(&jj, "").unwrap();
+        assert_eq!(got(), (false, None));
+        #[cfg(unix)]
+        {
+            std::fs::remove_file(&jj).unwrap();
+            std::os::unix::fs::symlink(tmp.path(), &jj).unwrap();
+            assert_eq!(got(), (false, None));
+        }
+        // A repository whose worktrees cannot be listed has no main worktree to look at.
+        let gone = project(&tmp.path().join("gone").display().to_string());
+        assert_eq!((gone.jj, gone.trunk), (false, None));
+    }
+
     #[cfg(unix)]
     #[test]
     fn an_agent_is_placed_in_the_deepest_worktree_containing_its_cwd() {
@@ -1267,6 +1340,8 @@ mod tests {
             group: false,
             folder: false,
             parent: None,
+            jj: false,
+            trunk: None,
         };
         let (r, a, r2) = (
             at_link("r"),

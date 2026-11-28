@@ -158,7 +158,9 @@
         "error": null,
         "group": false,
         "folder": false,
-        "parent": "/g"
+        "parent": "/g",
+        "jj": true,
+        "trunk": "main"
       }
     ]
   },
@@ -191,7 +193,9 @@
       "error": null,
       "group": false,
       "folder": false,
-      "parent": "/g"
+      "parent": "/g",
+      "jj": true,
+      "trunk": "main"
     }
   },
   {
@@ -229,7 +233,9 @@
       "error": null,
       "group": false,
       "folder": false,
-      "parent": "/g"
+      "parent": "/g",
+      "jj": true,
+      "trunk": "main"
     },
     "path": "/r"
   },
@@ -496,7 +502,9 @@
       "error": null,
       "group": false,
       "folder": false,
-      "parent": "/g"
+      "parent": "/g",
+      "jj": true,
+      "trunk": "main"
     },
     "path": "/r/.claude/worktrees/x",
     "notes": []
@@ -536,7 +544,9 @@
       "error": null,
       "group": false,
       "folder": false,
-      "parent": "/g"
+      "parent": "/g",
+      "jj": true,
+      "trunk": "main"
     },
     "path": "/r/.claude/worktrees/x"
   },
@@ -574,7 +584,9 @@
       "error": null,
       "group": false,
       "folder": false,
-      "parent": "/g"
+      "parent": "/g",
+      "jj": true,
+      "trunk": "main"
     },
     "from": "/r/.claude/worktrees/x",
     "path": "/r/.claude/worktrees/y"
@@ -634,7 +646,9 @@
       "error": null,
       "group": false,
       "folder": false,
-      "parent": "/g"
+      "parent": "/g",
+      "jj": true,
+      "trunk": "main"
     },
     "path": "/r/.claude/worktrees/review-x",
     "commits": 1,
