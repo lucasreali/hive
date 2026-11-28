@@ -516,9 +516,7 @@ mod tests {
             );
         }
         for refused in ["F0", "F25", "F01", "F", "Fx", "Ctrl+F1F"] {
-            let Err(problem) = parse(refused, Windows) else {
-                panic!("{refused}")
-            };
+            let problem = parse(refused, Windows).unwrap_err();
             assert!(problem.contains("not a key") || problem.contains("from the terminal"));
         }
         // The letter F alone is a letter, needing a modifier.
@@ -695,14 +693,9 @@ mod tests {
     #[test]
     fn command_ids_are_sorted_and_unique() {
         assert!(COMMAND_IDS.windows(2).all(|w| w[0] < w[1]));
-        assert_eq!(
-            CURRENT,
-            if cfg!(target_os = "macos") {
-                Mac
-            } else {
-                Windows
-            }
-        );
+        assert_eq!(CURRENT == Mac, cfg!(target_os = "macos"));
+        // `FIXED`'s entries are made at compile time; so is this one at run time.
+        assert_eq!(fixed(Mac, "Cmd+C", "w", Some("x")).except, Some("x"));
     }
 
     #[test]

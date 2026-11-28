@@ -42,7 +42,7 @@ test("the shared samples parse as the service parses them", () => {
 test("the fixed keys and the command ids are the service's", async () => {
   const rust = await Bun.file(RUST).text();
   const fixed = [
-    ...rust.matchAll(
+    ...(rust.split("pub const FIXED")[1]?.split("\n];")[0] ?? "").matchAll(
       /fixed\(\s*(Mac|Windows),\s*"([^"]+)",\s*"([^"]+)",\s*(None|Some\("([^"]+)"\)),?\s*\)/g,
     ),
   ].map(([, on, chord, what, , except]) => ({

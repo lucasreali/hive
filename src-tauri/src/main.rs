@@ -497,15 +497,24 @@ fn app_menu(app: &tauri::AppHandle) -> tauri::Result<tauri::menu::Menu<tauri::Wr
 fn menu_keys(app: &tauri::App) -> impl Fn(&str, Option<&str>) + Send + Sync + 'static {
     let app = app.handle().clone();
     move |id, keys| {
-        let menus = app
-            .menu()
-            .and_then(|menu| menu.items().ok())
-            .unwrap_or_default();
-        let item = menus
-            .iter()
-            .find_map(|menu| menu.as_submenu()?.get(id)?.as_menuitem().cloned());
-        if let Some(Err(error)) = item.map(|item| item.set_accelerator(keys)) {
-            eprintln!("hive-app: the menu item {id} keeps its key: {error}");
+        // Called by the reader while it holds the link: the menu's calls wait for the main
+        // thread, which may be waiting for the link (a command, a menu click). So the work is
+        // posted to the main thread, never waited for.
+        let (handle, id, keys) = (app.clone(), id.to_owned(), keys.map(str::to_owned));
+        let posted = app.run_on_main_thread(move || {
+            let menus = handle
+                .menu()
+                .and_then(|menu| menu.items().ok())
+                .unwrap_or_default();
+            let item = menus
+                .iter()
+                .find_map(|menu| menu.as_submenu()?.get(&id)?.as_menuitem().cloned());
+            if let Some(Err(error)) = item.map(|item| item.set_accelerator(keys.as_deref())) {
+                eprintln!("hive-app: the menu item {id} keeps its key: {error}");
+            }
+        });
+        if let Err(error) = posted {
+            eprintln!("hive-app: the menu's keys are not set: {error}");
         }
     }
 }

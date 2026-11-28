@@ -733,24 +733,28 @@ mod tests {
         let keymap =
             serde_json::json!({"comment": 3, "palette": "Ctrl+Shift+K", "palete": "Ctrl+J"});
         assert_eq!(settings.keymap.0, keymap);
-        let Control::Settings { problems, .. } = message(settings) else {
-            panic!("not the settings")
-        };
         assert_eq!(
-            problems,
-            [
-                r#"keymap.comment: a shortcut is a text like "Ctrl+Alt+M" or a list of them (got a number)"#,
-                r#"keymap: Hive has no command "palete""#,
-            ]
+            message(settings.clone()),
+            Control::Settings {
+                settings,
+                problems: vec![
+                r#"keymap.comment: a shortcut is a text like "Ctrl+Alt+M" or a list of them (got a number)"#.into(),
+                r#"keymap: Hive has no command "palete""#.into(),
+                ]
+            }
         );
         // Even a keymap of the wrong type.
         std::fs::write(&file, r#"{"agents":{"silence_secs":9},"keymap":[1]}"#).unwrap();
         let (settings, warning) = Store::load(file).get();
         assert_eq!((settings.agents.silence_secs, warning), (9, None));
-        let Control::Settings { problems, .. } = message(settings) else {
-            panic!("not the settings")
-        };
-        assert_eq!(problems.len(), 1);
+        let problem = "keymap: it is a list holding something other than texts where command ids and their shortcuts were expected";
+        assert_eq!(
+            message(settings.clone()),
+            Control::Settings {
+                settings,
+                problems: vec![problem.into()]
+            }
+        );
         assert_eq!(
             message(Settings::default()),
             Control::Settings {
