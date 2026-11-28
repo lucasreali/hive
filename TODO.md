@@ -734,7 +734,7 @@ Today: a read-only diff against HEAD or the branch's fork point (9.11), live cha
 |---|---|---|
 | 28 | The usage fix, skills, performance baselines, interface details, worktrees and tooling, and the designs the later stages need, and the interface fixes (28.17–28.21) | 108 |
 | 29 | Pinned tabs, and working together over SSH | 106 (89 reserved) |
-| 30 | IDE features in the editor, themes from a file, the plugin design | 92 (34 reserved) |
+| 30 | IDE features in the editor, themes from a file, the plugin design | 93 (34 reserved) |
 | 31 | Plugins, and the tooling audit | 95 (89 reserved) |
 | 32 | The full review of Hive's code (audits and approved refactors) | 103 (55 reserved) |
 | 33 | The design pass and a visual identity: every detail of UI and UX, on weekends with Fable, then Hive 1.0.0 | 165 (133 reserved) |
@@ -866,7 +866,7 @@ Reported by the human from v0.33.0 onward (Stage 28 was closed by then).
   Tests: a bun or Rust test that fails before the fix for the cause found (e.g. one `input` per key across attach/reattach/split/restore; a composed `ã` sent once), plus an e2e on the mock typing plain text, dead-key accents and a composition into a terminal, then after a reattach and in a split, asserting each character reaches the PTY once (the mock records the input), Chromium and WebKit. If the cause cannot be reproduced, add logging of input sent per terminal (counts, never the text) and ask the human for a recording of when it happens. `security-reviewer` if the service changes.
 ## Stage 30 — IDE features in the editor, themes from a file
 
-≈ 92 points, 34 of them reserved for the IDE features 28.15 approves. Today: CodeMirror 6 with `@codemirror/language-data` colours the file tabs, the diff and fenced Markdown blocks; find and replace in a file (23.10); search across the worktree; no knowledge of symbols, references or definitions (#6).
+≈ 93 points, 34 of them reserved for the IDE features 28.15 approves. Today: CodeMirror 6 with `@codemirror/language-data` colours the file tabs, the diff and fenced Markdown blocks; find and replace in a file (23.10); search across the worktree; no knowledge of symbols, references or definitions (#6).
 
 Today: two built-in themes, One Dark and One Light (#23), chosen in Settings (6.1); the settings file (#47) holds font and size; colours and spacing are CSS variables in `src/styles.css`.
 
@@ -885,6 +885,7 @@ Today: two built-in themes, One Dark and One Light (#23), chosen in Settings (6.
   - **A stable API for 1.0:** versioning, what breaks a plugin, how a plugin is tested.
   - **Decisions it changes** (#14, #37, others), marked "changes #N".
   - **The plan:** tasks written as 31.2… in Stage 31 only after the human approves, including at least two example plugins built on the API (e.g. a language's highlighting and an integration) to prove it; `docs/hive.md` updated by the human.
+- [ ] **30.9 A done task in a loose list recedes too.** · 1 pt `main` — The human, 2026-11-28 (screenshot of `TODO.md`'s preview, v0.33.0), "not so relevant": in the Markdown preview a ticked task's text recedes (`--text-3`) only in a tight list item; in a loose one (a blank line inside the item, e.g. 28.16 with its sub-list and "Deliver …" paragraph) it keeps the normal colour. Cause: `.markdown .task-list-item:has(> input:checked)` (`src/styles.css`) needs the checkbox as the item's direct child, and a loose item puts it inside a `<p>`. Widen the rule (e.g. `:has(> input:checked, > p:first-child > input:checked)`). Tests: bun or e2e on a tight and a loose ticked item, both receding, an unticked one not, in both themes.
 
   Deliver `docs/spike/plugins.md`. ⏸ Checkpoint.
 
