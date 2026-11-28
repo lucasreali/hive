@@ -33,7 +33,7 @@ import {
   tabWorktree,
 } from "./tabs";
 import { transport } from "./transport";
-import { commandKey, isMac } from "./window";
+import { commandKey, composing, isMac } from "./window";
 
 // xterm.js lives here, outside React (#30): one Terminal per terminal id, fed straight from
 // the transport. React renders the host element and says which tab is shown; output never
@@ -362,14 +362,17 @@ async function startTerminal(
   term.loadAddon(fit);
   const search = new SearchAddon();
   term.loadAddon(search);
-  term.onData((data) => {
+  const accent = new AccentKey(term);
+  term.onData((typed) => {
     const s = useHive.getState();
+    const data = accent.through(typed);
     // A remote's terminal takes no input while its link is down (26.18): its overlay says so.
     if (!s.terminals[id]?.exited && !linkDown(s, host)) void transport.writeTerminal(id, data);
   });
   term.onResize(({ cols, rows }) => void transport.resizeTerminal(id, cols, rows));
-  term.attachCustomKeyEventHandler((event) => keys(term, marks, event));
+  term.attachCustomKeyEventHandler((event) => keys(term, marks, accent, event));
   const el = document.createElement("div");
+  el.addEventListener("compositionend", (event) => accent.ended(event.data), { capture: true });
   el.className = "terminal-pane";
   el.dataset.terminal = String(id);
   el.hidden = true;
@@ -483,6 +486,84 @@ function macKey(term: Terminal, marks: Marks, event: KeyboardEvent): boolean {
   return true;
 }
 
+/**
+ * A dead key then a key it does not combine with, on macOS (29.7: ´ then t on a Brazilian
+ * layout, the apostrophe of "don't"; " then x; ~ then /). WebKit commits the accent's
+ * composition first, which xterm sends, then gives the next key a keydown with the dead key's
+ * own code and both characters as its key ("'t"). Left to xterm, that keydown sent the accent
+ * again and its key was lost ("''"). It is taken here and only its own character is sent: at
+ * once when xterm already sent the accent, else inside xterm's data right after the accent,
+ * whatever comes first or with it (a next key, more accents xterm sends in one piece).
+ */
+class AccentKey {
+  /** The text of the composition that ended last, until the next keydown. */
+  private text = "";
+  /** The accents xterm has not sent yet, oldest first, each with the key taken after it. */
+  private readonly waiting: { accent: string; rest: string }[] = [];
+
+  constructor(private readonly term: Terminal) {}
+
+  /** A composition ended with `data`, which xterm sends next: an accent waits for it. */
+  ended(data: string): void {
+    this.text = data;
+    if (accentText(data)) this.waiting.push({ accent: data, rest: "" });
+  }
+
+  /**
+   * What goes to the PTY for `data` xterm sends: each waiting accent it starts with, followed
+   * by the key taken after it. Anything else (a key Hive sends itself, a focus report) passes
+   * as it is, and the accents keep waiting.
+   */
+  through(data: string): string {
+    let out = "";
+    let left = data;
+    while (this.waiting[0] && left.startsWith(this.waiting[0].accent)) {
+      const { accent, rest } = this.waiting.shift() as { accent: string; rest: string };
+      out += accent + rest;
+      left = left.slice(accent.length);
+    }
+    return out + left;
+  }
+
+  /**
+   * Takes the keydown of that shape only: after an accent (`accentText`), a key of the accent
+   * and exactly one more code point, neither composing nor with Cmd or Ctrl. True when taken.
+   */
+  keydown(event: KeyboardEvent): boolean {
+    if (event.type !== "keydown") return false;
+    const text = this.text;
+    this.text = "";
+    const [first, next, ...more] = [...event.key];
+    const plain = !composing(event) && !event.metaKey && !event.ctrlKey;
+    if (!isMac() || !accentText(text) || !plain || first !== text || !next || more.length) {
+      return false;
+    }
+    event.preventDefault();
+    const last = this.waiting.at(-1);
+    // Its accent is the last one waiting, or xterm sent it already.
+    if (!last) return this.send(next);
+    last.rest = next;
+    // Never lost: one xterm never sent as it was (its data did not start with it) goes out on
+    // a later task, after xterm's own send of the composition, which was asked for first.
+    setTimeout(() => this.flush(), 0);
+    return true;
+  }
+
+  /** Sends what is still waiting, in order (`keydown`). */
+  private flush(): void {
+    const rests = this.waiting.splice(0).map(({ rest }) => rest);
+    if (rests.join("")) this.term.input(rests.join(""));
+  }
+
+  private send(next: string): true {
+    this.term.input(next);
+    return true;
+  }
+}
+
+/** Whether a composition's text is an accent: one code point, not a letter (an IME's are). */
+const accentText = (text: string) => [...text].length === 1 && !/\p{L}/u.test(text);
+
 /** The Option keys held down (`AltLeft`, `AltRight`), for `optionMeta`. */
 const optionsDown = new Set<string>();
 
@@ -544,8 +625,12 @@ function optionMeta(term: Terminal, event: KeyboardEvent): boolean {
  * interrupt with nothing selected, 18.2) and Cmd+V, and Ctrl+C stays the shell's, plus macOS'
  * own keys (`macKey`). Every other key is the shell's.
  */
-function keys(term: Terminal, marks: Marks, event: KeyboardEvent): boolean {
-  const done = intercept(event) || macKey(term, marks, event) || macScroll(term, event);
+function keys(term: Terminal, marks: Marks, accent: AccentKey, event: KeyboardEvent): boolean {
+  const done =
+    accent.keydown(event) ||
+    intercept(event) ||
+    macKey(term, marks, event) ||
+    macScroll(term, event);
   if (done || optionMeta(term, event)) return false;
   const chord = commandKey(event) && event.shiftKey !== isMac() && !event.altKey;
   const clipboard = CLIPBOARD_KEYS.get(event.key.toUpperCase());
