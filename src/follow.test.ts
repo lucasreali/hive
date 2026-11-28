@@ -15,7 +15,7 @@ import {
   editOpenTable,
   type HiveState,
   initialState,
-  pinFile,
+  keepFile,
   select,
   setDiffBase,
   setEdit,
@@ -157,7 +157,7 @@ test("asks for the open file when it opens, its worktree changes, or the service
   const openFile = mock(async (_worktree: string, _path: string, _base: DiffBase) => {});
   const stop = followOpenFile({ openFile } as unknown as Transport);
   setOpenFile({ worktree: "/w", path: "a.ts" });
-  pinFile({ worktree: "/w", path: "a.ts" }); // Its tab stays when b.ts opens (11.1).
+  keepFile({ worktree: "/w", path: "a.ts" }); // Its tab stays when b.ts opens (11.1).
   expect(openFile).not.toHaveBeenCalled(); // Not connected yet.
 
   welcome();
@@ -285,7 +285,7 @@ test("tells the service the terminal in view, the window focus and visibility, o
 test("asks for the open table file's table while it shows as one", () => {
   const openTable = mock(async (_worktree: string, _path: string) => {});
   setOpenFile({ worktree: "/w", path: "a.csv" });
-  pinFile({ worktree: "/w", path: "a.csv" });
+  keepFile({ worktree: "/w", path: "a.csv" });
   const stop = followOpenTable({ openTable } as unknown as Transport);
   expect(openTable).not.toHaveBeenCalled(); // Not connected yet.
   welcome();
@@ -343,7 +343,7 @@ function editedTable() {
   const fake = { openTable, editTable };
   const transport = fake as unknown as Transport;
   setOpenFile(CSV);
-  pinFile(CSV);
+  keepFile(CSV);
   fileAnswer("a\n");
   const stops = [followOpenTable(transport), followTableEdits(transport)];
   const stop = () => {

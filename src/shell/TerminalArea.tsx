@@ -5,6 +5,8 @@ import {
   CopyIcon,
   EraserIcon,
   FilePlusIcon,
+  PushPinIcon,
+  PushPinSlashIcon,
   SquareSplitHorizontalIcon,
   TerminalWindowIcon,
   XIcon,
@@ -26,22 +28,24 @@ import { draggedFrom, useReorder } from "../reorder";
 import {
   accountLine,
   activateTab,
+  closeRefused,
   dropOnPane,
   endRestore,
   type FileTab as FileTabData,
   type HiveState,
+  keepFile,
   moveTab,
   muted,
   openFileDialog,
   openModal,
   type PaneId,
-  pinFile,
   replacePane,
   selectedPlace,
   setOpenFile,
   swapSides,
   type Tab,
   terminalShown,
+  togglePin,
   useHive,
   useTerminal,
 } from "../store";
@@ -51,8 +55,11 @@ import {
   barKey,
   droppable,
   fileKey,
+  fileName,
   fileTabState,
   inBarOrder,
+  isPinned,
+  itemLabel,
   itemWorktree,
   paneFile,
   paneIdOf,
@@ -61,6 +68,7 @@ import {
   shownTerminals,
   splitOf,
   visibleTabs,
+  worktreeAt,
 } from "../tabs";
 import {
   closeTerminal,
@@ -114,30 +122,6 @@ function EmptyState() {
   );
 }
 
-/** The worktree at `path` and its project, as the service reports them. */
-function find(s: HiveState, path: string) {
-  for (const project of Object.values(s.projects ?? {})) {
-    const worktree = project.worktrees.find((w) => w.id === path);
-    if (worktree) return { worktree, project };
-  }
-  return null;
-}
-
-/** What a terminal's tab is called: its agent's session name, else its worktree's name. */
-function tabLabel(s: HiveState, tab: Tab): string {
-  const agent = Object.values(s.agents).find((a) => a.terminal === tab.id)?.id;
-  return (agent && s.agentTitles[agent]) || (find(s, tab.cwd)?.worktree.name ?? tab.cwd);
-}
-
-/** A file's name, as its tab shows it. */
-const fileName = (path: string) => path.slice(path.lastIndexOf("/") + 1);
-
-/** What a tab of the bar is called. */
-function itemLabel(s: HiveState, item: BarItem): string {
-  if ("path" in item) return fileName(item.path);
-  return tabLabel(s, item);
-}
-
 /**
  * Pane `id`'s pair as its tab shows it (20.5): its side, its partner's label, and whether the pair
  * is shown; null outside every pair.
@@ -163,7 +147,9 @@ type Drag = ReturnType<ReturnType<typeof useReorder>>;
 /**
  * A tab of the bar: its label shows it, its × closes it, dragging it moves it. Terminals and
  * files share it. With unsaved edits the × shows a dot instead, as in other editors, and
- * turns back into the × on hover or keyboard focus, where it is about to be used.
+ * turns back into the × on hover or keyboard focus, where it is about to be used. A pinned tab
+ * (29.2) has a pin in the ×'s place, which does nothing (its unsaved edits' dot, when it has
+ * them), and says "Pinned" after its label.
  */
 function TabItem(props: {
   drag: Drag;
@@ -176,14 +162,18 @@ function TabItem(props: {
   title: string;
   onShow: () => void;
   /** A double click on the label (a file's: keeps its preview tab, 11.1). */
-  onPin?: () => void;
+  onKeep?: () => void;
   /** Read by screen readers after the label (e.g. "Preview"). */
   description?: string;
   close: string;
   onClose: () => void;
   dirty?: boolean;
+  pinned?: boolean;
   children: ReactNode;
 }) {
+  const { pinned, dirty } = props;
+  const notes = [props.description, pinned && "Pinned", pinned && dirty && "Unsaved changes"];
+  const description = notes.filter(Boolean).join(". ") || undefined;
   return (
     <div
       {...props.drag}
@@ -191,31 +181,38 @@ function TabItem(props: {
       data-active={props.active}
       data-pair={props.pair}
       data-split={props.split}
-      title={props.title}
+      data-pinned={pinned || undefined}
+      title={pinned ? `${props.title}\nPinned` : props.title}
     >
       <button
         type="button"
         role="tab"
         aria-selected={props.active}
         className="tab-label"
-        aria-description={props.description}
+        aria-description={description}
         onClick={props.onShow}
-        onDoubleClick={props.onPin}
+        onDoubleClick={props.onKeep}
         onContextMenu={props.onMenu}
       >
         {props.children}
       </button>
-      <button
-        type="button"
-        className="tab-close"
-        data-dirty={props.dirty || undefined}
-        title={props.dirty ? `${props.close} (unsaved changes)` : props.close}
-        aria-label={props.dirty ? `${props.close} (unsaved changes)` : props.close}
-        onClick={props.onClose}
-      >
-        {props.dirty && <span className="dirty" aria-hidden="true" />}
-        <CloseIcon />
-      </button>
+      {pinned ? (
+        <span className="tab-pin" aria-hidden="true">
+          {dirty ? <span className="dirty" /> : <PushPinIcon size={12} />}
+        </span>
+      ) : (
+        <button
+          type="button"
+          className="tab-close"
+          data-dirty={props.dirty || undefined}
+          title={props.dirty ? `${props.close} (unsaved changes)` : props.close}
+          aria-label={props.dirty ? `${props.close} (unsaved changes)` : props.close}
+          onClick={props.onClose}
+        >
+          {props.dirty && <span className="dirty" aria-hidden="true" />}
+          <CloseIcon />
+        </button>
+      )}
     </div>
   );
 }
@@ -229,7 +226,7 @@ function TerminalTab(props: { tab: Tab; onMenu: (menu: TabMenu) => void; drag: D
   const active = useHive((s) => s.activeTab === tab.id && terminalShown(s));
   const pair = usePair(tab.id);
   const state = useTerminal(tab.id);
-  const name = useHive((s) => find(s, tab.cwd)?.worktree.name ?? tab.cwd);
+  const name = useHive((s) => worktreeAt(s, tab.cwd)?.worktree.name ?? tab.cwd);
   const agent = useHive((s) => Object.values(s.agents).find((a) => a.terminal === tab.id)?.id);
   const agentState = useHive((s) => (agent ? (s.agentStates[agent]?.state ?? "idle") : null));
   const seen = useHive((s) => muted(agent ? s.agentStates[agent] : null));
@@ -238,10 +235,12 @@ function TerminalTab(props: { tab: Tab; onMenu: (menu: TabMenu) => void; drag: D
   const paired = pair ? `Split with ${pair.partner}` : undefined;
   const account = useHive((s) => accountLine(s, tab.id));
   const tip = [title, tab.cwd, account].filter(Boolean).join("\n");
+  const pinned = useHive((s) => isPinned(s, tab));
   return (
     <TabItem
       drag={props.drag}
       active={active}
+      pinned={pinned}
       pair={pair?.side}
       split={pair && !active ? (pair.shown ? "view" : "paired") : undefined}
       description={paired}
@@ -312,6 +311,7 @@ function FileTab(props: { file: FileTabData; onMenu: (menu: TabMenu) => void; dr
     return !!edit && isDirty(edit);
   });
   const name = fileName(file.path);
+  const pinned = useHive((s) => isPinned(s, file));
   const preview = !!file.preview;
   const paired = pair ? `Split with ${pair.partner}` : undefined;
   const tip = preview ? `${file.path}\nPreview: opening another file replaces it` : file.path;
@@ -319,6 +319,7 @@ function FileTab(props: { file: FileTabData; onMenu: (menu: TabMenu) => void; dr
     <TabItem
       drag={drag}
       active={active}
+      pinned={pinned}
       pair={pair?.side}
       split={pair && !active ? (pair.shown ? "view" : "paired") : undefined}
       onMenu={(event) => {
@@ -327,7 +328,7 @@ function FileTab(props: { file: FileTabData; onMenu: (menu: TabMenu) => void; dr
       }}
       title={paired ? `${tip}\n${paired}` : tip}
       onShow={() => setOpenFile(file)}
-      onPin={() => pinFile(file)}
+      onKeep={() => keepFile(file)}
       description={[preview ? "Preview" : "", paired ?? ""].filter(Boolean).join(". ") || undefined}
       close={`Close file ${name}`}
       onClose={() => closeFile(file)}
@@ -493,18 +494,53 @@ function AccountNote({ tab }: { tab: number }) {
   );
 }
 
-/** A terminal tab's context menu (right click): split it, rearrange its pair, or close it. */
+/**
+ * A tab menu's last items: "Pin tab" or "Unpin tab" (29.2), then its Close (`label`), disabled
+ * with "Unpin to close" beside it while the tab is pinned.
+ */
+function PinAndClose(props: {
+  item: BarItem;
+  label: string;
+  close: () => void;
+  onClose: () => void;
+}) {
+  const { item, onClose } = props;
+  const pinned = useHive((s) => isPinned(s, item));
+  return (
+    <>
+      <MenuItem onClose={onClose} action={() => togglePin(item)}>
+        {pinned ? <PushPinSlashIcon {...ICON} /> : <PushPinIcon {...ICON} />}
+        {pinned ? "Unpin tab" : "Pin tab"}
+      </MenuItem>
+      <MenuItem
+        onClose={onClose}
+        action={() => closeRefused(item) || props.close()}
+        disabled={pinned}
+      >
+        <XIcon {...ICON} />
+        {props.label}
+        {pinned && <span className="menu-item-note">Unpin to close</span>}
+      </MenuItem>
+    </>
+  );
+}
+
+/** A terminal tab's context menu (right click): split it, rearrange its pair, pin or close it. */
 function TerminalTabMenu(props: { tab: number; at: TabMenu; onClose: () => void }) {
   const { tab, at, onClose } = props;
+  const item = useHive((s) => s.tabs.find((t) => t.id === tab));
+  if (!item) return null;
   return (
     <ContextMenu at={at} label="Terminal" onClose={onClose}>
       <AccountNote tab={tab} />
       <SplitItem tab={tab} onClose={onClose} />
       <PairItems tab={tab} onClose={onClose} />
-      <MenuItem onClose={onClose} action={() => closeTerminal(tab)}>
-        <XIcon {...ICON} />
-        Close terminal
-      </MenuItem>
+      <PinAndClose
+        item={item}
+        label="Close terminal"
+        close={() => closeTerminal(tab)}
+        onClose={onClose}
+      />
     </ContextMenu>
   );
 }
@@ -517,10 +553,7 @@ function FileTabMenu({ at, onClose }: { at: TabMenu; onClose: () => void }) {
     <ContextMenu at={at} label="File" onClose={onClose}>
       <SplitItem tab={at.tab} onClose={onClose} />
       <PairItems tab={at.tab} onClose={onClose} />
-      <MenuItem onClose={onClose} action={() => closeFile(file)}>
-        <XIcon {...ICON} />
-        Close file
-      </MenuItem>
+      <PinAndClose item={file} label="Close file" close={() => closeFile(file)} onClose={onClose} />
     </ContextMenu>
   );
 }
@@ -659,7 +692,7 @@ const leftShare = (s: HiveState) => (shownSplit(s) ? s.splitPercent / 100 : 0.5)
 
 /** A worktree without terminals yet: its tab bar is empty. */
 function NoTerminals({ worktree }: { worktree: string }) {
-  const name = useHive((s) => find(s, worktree)?.worktree.name ?? worktree);
+  const name = useHive((s) => worktreeAt(s, worktree)?.worktree.name ?? worktree);
   return (
     <div className="empty-state">
       <div className="empty-state-content centered">

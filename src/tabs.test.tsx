@@ -18,9 +18,9 @@ import {
   dropOnPane,
   type HiveState,
   initialState,
+  keepFile,
   moveTab,
   type OpenFile,
-  pinFile,
   removeTab,
   renderedShown,
   replacePane,
@@ -61,7 +61,7 @@ const file = (path: string, worktree = W) => ({ worktree, path });
 /** Opens `f` and keeps its tab (a double click, 11.1), so the next file gets a tab of its own. */
 const keepOpen = (f: OpenFile, editing?: boolean, line?: number) => {
   setOpenFile(f, editing, line);
-  pinFile(f);
+  keepFile(f);
 };
 
 beforeEach(() => {
@@ -143,10 +143,10 @@ test("a file opens in the preview tab, which the next file replaces in place (11
   activateTab({ id: 2, cwd: W });
   setOpenFile(file("b.ts"));
   expect([bar(), preview(), s().fileShown]).toEqual([[1, "b.ts", 2], ["b.ts"], true]);
-  // Pinned, it stays; the next file is the preview, last. At most one preview.
-  pinFile(file("b.ts"));
+  // Kept, it stays; the next file is the preview, last. At most one preview.
+  keepFile(file("b.ts"));
   const kept = s().openFiles;
-  pinFile(file("b.ts"));
+  keepFile(file("b.ts"));
   expect(s().openFiles).toBe(kept); // Already kept: nothing changes.
   setOpenFile(file("c.ts"));
   setOpenFile(file("d.ts"));

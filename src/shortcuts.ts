@@ -5,6 +5,7 @@ import { closeFile } from "./shell/RightPanel";
 import { findInTerminal } from "./shell/TerminalSearch";
 import {
   activateTab,
+  closeRefused,
   endRestore,
   type HiveState,
   leaveSpace,
@@ -21,10 +22,11 @@ import {
   spaceOf,
   spaceProjects,
   terminalShown,
+  togglePin,
   useHive,
   withCollapsed,
 } from "./store";
-import { barItems, fileVisible, shownPane } from "./tabs";
+import { barItems, fileVisible, shownPane, shownTab } from "./tabs";
 import {
   closeTerminal,
   interceptKeys,
@@ -117,11 +119,26 @@ export function cycleTab(step: 1 | -1): void {
   if (count > 0) showBarItem((shownItem(s) + step + count) % count);
 }
 
-/** ⌘W: closes the tab shown, as its × does (a file with unsaved edits asks first). */
+/**
+ * ⌘W: closes the tab shown, as its × does (a file with unsaved edits asks first); a pinned one
+ * stays, with a toast (29.2).
+ */
 export function closeActiveTab(): void {
   const s = useHive.getState();
-  if (s.fileShown && s.openFile && fileVisible(s)) closeFile(s.openFile);
-  else if (!s.fileShown && s.activeTab !== null) closeTerminal(s.activeTab);
+  const file = s.fileShown && s.openFile && fileVisible(s) ? s.openFile : null;
+  const terminal = s.fileShown ? null : s.activeTab;
+  // Nothing would close: no toast either.
+  if (!file && terminal === null) return;
+  const tab = shownTab(s);
+  if (tab && closeRefused(tab)) return;
+  if (file) closeFile(file);
+  else if (terminal !== null) closeTerminal(terminal);
+}
+
+/** Pins the tab shown (the focused pane's in a pair), or unpins it (29.2). */
+export function pinShownTab(): void {
+  const tab = shownTab(useHive.getState());
+  if (tab) togglePin(tab);
 }
 
 /** ⌘T: a terminal in the selected worktree, as the "+" menu's Terminal; with none, the picker. */
@@ -172,6 +189,7 @@ const RUNS: Record<string, () => void> = {
   "find-in-terminal": findInTerminal,
   "toggle-markdown": () => setRendered(!renderedShown(useHive.getState())),
   "close-tab": closeActiveTab,
+  "pin-tab": pinShownTab,
   "next-tab": () => cycleTab(1),
   "previous-tab": () => cycleTab(-1),
   ...Object.fromEntries(

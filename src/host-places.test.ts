@@ -22,8 +22,8 @@ import {
   hostStart,
   hostView,
   initialState,
+  keepFile,
   type OpenFile,
-  pinFile,
   placesOf,
   restoredHost,
   saveHosts,
@@ -49,7 +49,7 @@ const s = () => useHive.getState();
 const file = (path: string, worktree = W): OpenFile => ({ worktree, path });
 const open = (f: OpenFile) => {
   setOpenFile(f);
-  pinFile(f);
+  keepFile(f);
 };
 /** A restart: the store as a new run starts it from what the last run saved. */
 function restart() {
@@ -288,6 +288,7 @@ test("saved host places unreadable are none; each list is capped; a failing stor
         "/d": { commit: { id: "c" } },
       },
       collapsed: { p: true, q: false },
+      pins: [],
     },
   });
   const range = (n: number) => Array.from({ length: n }, (_, i) => i);
@@ -296,6 +297,7 @@ test("saved host places unreadable are none; each list is capped; a failing stor
     pairs: range(PAIRS_LIMIT + 1).map((i) => [`file:${i}`, `session:${i}`]),
     diffBases: Object.fromEntries(range(BASES_LIMIT + 1).map((i) => [`/${i}`, "head"])),
     collapsed: Object.fromEntries(range(COLLAPSED_LIMIT + 1).map((i) => [`${i}`, true])),
+    pins: [],
   };
   const hosts = Object.fromEntries(range(HOSTS_LIMIT + 1).map((i) => [`h${i}`, big]));
   saveHostPlaces(hosts);

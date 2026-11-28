@@ -623,11 +623,11 @@ test("a paired tab's menu replaces its pane with another tab of the worktree, or
       .map((i) => i.textContent);
   // A tab in no pair has neither item.
   fireEvent.contextMenu(bar().getAllByRole("tab")[4] as HTMLElement);
-  expect(items()).toEqual(["Split right", "Close terminal"]);
+  expect(items()).toEqual(["Split right", "Pin tab", "Close terminal"]);
   fireEvent.keyDown(menu(), { key: "Escape" });
 
   fireEvent.contextMenu(bar().getAllByRole("tab")[3] as HTMLElement);
-  expect(items()).toEqual(["Unsplit", "Replace with", "Swap sides", "Close terminal"]);
+  expect(items()).toEqual(["Unsplit", "Replace with", "Swap sides", "Pin tab", "Close terminal"]);
   const replace = within(menu()).getByRole("menuitem", { name: "Replace with" });
   expect(replace.getAttribute("aria-expanded")).toBe("false");
   fireEvent.keyDown(replace, { key: "ArrowDown" });

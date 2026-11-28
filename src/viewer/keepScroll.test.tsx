@@ -8,8 +8,8 @@ import {
   activateTab,
   addTab,
   initialState,
+  keepFile,
   type OpenFile,
-  pinFile,
   select,
   setEditing,
   setOpenFile,
@@ -60,7 +60,7 @@ const answer = (path: string, content = LONG) =>
 /** Opens `path` in a tab of its own (a double click, 11.1), with the service's answer. */
 function open(path: string, editing = true) {
   setOpenFile(file(path), editing);
-  pinFile(file(path));
+  keepFile(file(path));
   answer(path);
 }
 

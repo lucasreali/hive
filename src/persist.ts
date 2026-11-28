@@ -297,7 +297,8 @@ export function saveSpacePlaces(places: HiveState["spacePlaces"]): void {
  * Where each host's tabs and trees were left (28.27, rows 4, 5, 6, 9 and 10 of
  * `docs/review/last-place.md`), remembered between runs by `hostKey` ("" for this Mac): its open
  * files (without their edits), its pairs of files and chats by their bar keys, each worktree's
- * diff base, and the trees' collapsed projects and worktrees and open folders.
+ * diff base, the trees' collapsed projects and worktrees and open folders, and its pinned tabs
+ * (29.2) by their bar keys.
  */
 const HOST_PLACES_STORAGE = "hive.hostPlaces";
 /** How many hosts are remembered. */
@@ -325,8 +326,16 @@ export type HostPlaces = {
   pairs: [string, string][];
   diffBases: HiveState["diffBases"];
   collapsed: HiveState["collapsed"];
+  /** The pinned tabs (29.2): files' and chats' bar keys (a plain terminal's is one run's). */
+  pins: string[];
 };
-export const NO_HOST_PLACES: HostPlaces = { files: [], pairs: [], diffBases: {}, collapsed: {} };
+export const NO_HOST_PLACES: HostPlaces = {
+  files: [],
+  pairs: [],
+  diffBases: {},
+  collapsed: {},
+  pins: [],
+};
 
 const isObject = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value);
@@ -342,7 +351,7 @@ function savedFile(value: unknown): SavedFile[] {
   return [file];
 }
 
-/** A pair's key: a file's or a chat's (a plain terminal's channel is one run's). */
+/** A pair's or a pin's key: a file's or a chat's (a plain terminal's channel is one run's). */
 const pairKey = (key: unknown): key is string =>
   typeof key === "string" && (key.startsWith("file:") || key.startsWith("session:"));
 
@@ -377,6 +386,7 @@ function hostPlaces(value: unknown): HostPlaces {
     pairs: pairs.slice(-PAIRS_LIMIT),
     diffBases: Object.fromEntries(bases.slice(-BASES_LIMIT)),
     collapsed: Object.fromEntries(collapsed.slice(-COLLAPSED_LIMIT)),
+    pins: [...new Set(list(value.pins).filter(pairKey))].slice(-ORDER_LIMIT),
   };
 }
 

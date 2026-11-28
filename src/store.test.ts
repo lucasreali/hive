@@ -10,13 +10,13 @@ import {
   DEFAULT_SETTINGS,
   dismissNotice,
   initialState,
+  keepFile,
   NOTICE_LIMIT,
   openFileDialog,
   openFileMenu,
   openModal,
   paneAttention,
   panelWorktree,
-  pinFile,
   removeTab,
   select,
   setEdit,
@@ -645,7 +645,7 @@ test("a folder's rename or move carries the open files under it and its folders'
     { worktree: "/x", path: "src/a.ts" },
   ]) {
     setOpenFile(f);
-    pinFile(f);
+    keepFile(f);
   }
   useHive.setState({
     collapsed: {

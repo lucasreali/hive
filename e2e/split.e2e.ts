@@ -156,10 +156,10 @@ test("split pairs (20.5): two in a worktree, seen in the bar, rearranged by drag
 const openFile = (page: Page, path: string) =>
   page.evaluate(async (path) => {
     const url = "/src/store.ts";
-    const { pinFile, setOpenFile, useHive } = await import(/* @vite-ignore */ url);
+    const { keepFile, setOpenFile, useHive } = await import(/* @vite-ignore */ url);
     const file = { worktree: useHive.getState().selection, path };
     setOpenFile(file, true);
-    pinFile(file);
+    keepFile(file);
   }, path);
 
 /** What the terminal area shows, left to right: terminals by id, files by path, from the store. */

@@ -17,6 +17,7 @@ import {
   useHive,
   withCollapsed,
 } from "../store";
+import { isPinned, shownTab } from "../tabs";
 import { showOpenFailure } from "../terminals";
 import { transport } from "../transport";
 import { cursorAsk } from "../viewer/lineAuthor";
@@ -140,8 +141,12 @@ export function paletteCommands(s: HiveState): PaletteItem[] {
   // As the app menu's item (23.5): only macOS has an app to remove; Windows keeps its own
   // uninstaller.
   if (isMac()) extra.push({ label: "Uninstall Hive…", run: () => openModal("uninstall") });
-  const commands = COMMANDS.filter((c) => c.id !== "palette" && commandHolds(c, s)).map((c) => ({
-    label: c.label,
+  // "Pin the tab" says what it does to the tab shown, and shows only with one (29.2).
+  const tab = shownTab(s);
+  const pin = tab && isPinned(s, tab) ? "Unpin the tab" : "Pin the tab";
+  const offered = (id: string) => id !== "palette" && (id !== "pin-tab" || !!tab);
+  const commands = COMMANDS.filter((c) => offered(c.id) && commandHolds(c, s)).map((c) => ({
+    label: c.id === "pin-tab" ? pin : c.label,
     keys: shortcutText(c.id) || undefined,
     run: c.run,
   }));

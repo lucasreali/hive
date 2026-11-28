@@ -9,8 +9,8 @@ import {
   followPlaces,
   type HiveState,
   initialState,
+  keepFile,
   type OpenFile,
-  pinFile,
   removeTab,
   select,
   setOpenFile,
@@ -34,7 +34,7 @@ const file = (path: string, worktree = W): OpenFile => ({ worktree, path });
 /** Opens `f` in a tab of its own (kept, 11.1). */
 const open = (f: OpenFile) => {
   setOpenFile(f);
-  pinFile(f);
+  keepFile(f);
 };
 /** The shown tab: a terminal by its id, a file by its path. */
 const shown = () => {
