@@ -449,7 +449,7 @@ test("a background command's end is an inbox item; only a failure has a tone and
   const inbox = [...useHive.getState().inbox].reverse();
   const items = inbox.map((i) => ("terminal" in i ? [i.terminal, i.failed, i.text, i.host] : i));
   expect(items).toEqual([
-    [7, false, "Background command finished: Build", undefined],
+    [7, false, "Background command ended: Build", undefined],
     [7, false, "Background command finished: make build", undefined],
     [7, false, "Background command stopped: Build", undefined],
     [7, true, "Background command failed (exit 3): Build", undefined],
@@ -481,9 +481,11 @@ test("a background command's text names it by its description, else its line, el
   useHive.setState({ tabs: [{ id: 7, cwd: "/home/u/api" }] });
   const s = useHive.getState();
   const title = (fields: Partial<Ended>) => backgroundText(s, ended(fields)).title;
-  expect(title({ description: null, command: "" })).toBe("Background command finished");
+  // No result known (it left Claude Code's list) reads neutral; a known success finished.
+  expect(title({ description: null, command: "" })).toBe("Background command ended");
+  expect(title({ status: "completed" })).toBe("Background command finished: Build");
   expect(title({ kind: "monitor", description: null, command: "tail -f log" })).toBe(
-    "Monitor finished: tail -f log",
+    "Monitor ended: tail -f log",
   );
   expect(title({ alert: "failed", exit: 0 })).toBe("Background command failed: Build");
   expect(title({ alert: "failed", exit: -1 })).toBe("Background command failed (exit -1): Build");

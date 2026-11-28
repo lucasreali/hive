@@ -695,6 +695,7 @@ test("an agent's background commands are quiet lines after its subagents until t
     command("mon", { kind: "monitor", command: "", description: null }),
     command("ok", { ended: ended("completed", 0, "quiet") }),
     command("stop", { ended: ended("stopped", null, "quiet") }),
+    command("left", { ended: ended("unknown", null, "quiet") }),
     command("bad", { ended: ended("completed", 3, "failed") }),
     command("err", { ended: ended("failed", null, "failed") }),
   ]);
@@ -714,6 +715,7 @@ test("an agent's background commands are quiet lines after its subagents until t
     [null, "Monitor", "2m", "", false, false],
     [null, "ok --watch", "done", "ok --watch", true, false],
     [null, "stop --watch", "stopped", "stop --watch", true, false],
+    [null, "left --watch", "ended", "left --watch", true, false],
     [null, "bad --watch", "exit 3", "bad --watch", true, true],
     [null, "err --watch", "failed", "err --watch", true, true],
   ]);

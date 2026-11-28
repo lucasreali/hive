@@ -2151,7 +2151,6 @@ button.chevron:hover {
   margin-top: 1px;
 }
 
-/* A subagent line's icon is smaller than an agent's. */
 /* An agent's background command (28.8); ended, for the 10 s it stays: struck, red when it failed. */
 .background-icon {
   flex: none;
@@ -2165,6 +2164,7 @@ button.chevron:hover {
   color: var(--state-error);
 }
 
+/* A subagent line's icon is smaller than an agent's. */
 .subagent-line .state-icon {
   width: 11px;
   height: 11px;

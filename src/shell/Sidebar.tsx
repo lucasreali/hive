@@ -612,8 +612,13 @@ function BackgroundLine({
   );
 }
 
-/** A background command's result on its line: "done", "stopped", "failed" or "exit 3". */
+/**
+ * A background command's result on its line: "done" (a known success), "stopped", "ended" (no
+ * result known), "failed" or "exit 3".
+ */
 function endedText(ended: NonNullable<BackgroundCommand["ended"]>): string {
   if (ended.alert === "failed") return ended.exit ? `exit ${ended.exit}` : "failed";
-  return ended.status === "stopped" ? "stopped" : "done";
+  return { completed: "done", failed: "failed", stopped: "stopped", unknown: "ended" }[
+    ended.status
+  ];
 }

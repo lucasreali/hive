@@ -1,5 +1,5 @@
 import { agentHost, spaceLabel } from "./hosts";
-import type { AgentState, HostMessage, ServiceMessage } from "./protocol";
+import type { AgentState, BackgroundStatus, HostMessage, ServiceMessage } from "./protocol";
 import { goToAgent } from "./shortcuts";
 import {
   activateTab,
@@ -185,6 +185,14 @@ function backgroundFinished(
   void transport.showNotification(shown.title, shown.body, shown.agent);
 }
 
+/** How a background command that did not fail ended, in its alert (28.8). */
+const NEUTRAL_END: Record<BackgroundStatus, string> = {
+  completed: "finished",
+  failed: "failed",
+  stopped: "stopped",
+  unknown: "ended",
+};
+
 /**
  * A background command's alert text (28.8): "Background command failed (exit 3): Build" (its
  * description, else its command line), body "<terminal> · after 12s".
@@ -192,8 +200,8 @@ function backgroundFinished(
 export function backgroundText(s: HiveState, m: BackgroundFinished): AlertText {
   const what = m.kind === "monitor" ? "Monitor" : "Background command";
   const code = m.exit !== null && m.exit !== 0 ? ` (exit ${m.exit})` : "";
-  const how =
-    m.alert === "failed" ? `failed${code}` : m.status === "stopped" ? "stopped" : "finished";
+  // Only a known success says it finished; an end Claude Code gave no result for is neutral.
+  const how = m.alert === "failed" ? `failed${code}` : NEUTRAL_END[m.status];
   const named = m.description || m.command;
   const title = named ? `${what} ${how}: ${named}` : `${what} ${how}`;
   const body = `${terminalName(s, m.channel)} · after ${duration(m.secs)}`;
