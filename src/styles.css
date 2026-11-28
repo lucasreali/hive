@@ -4103,7 +4103,11 @@ button.result-file:hover,
 /* The right panel at its narrowest: the files under the caret, so the name keeps its room. */
 @container session (max-width: 280px) {
   .session .session-files {
-    padding-left: 12px;
+    padding: 0 6px 8px 8px;
+  }
+
+  .session .session-file {
+    padding: 0 4px;
   }
 
   /* Only a sliver of it would show: the full path stays in the tooltip. */
