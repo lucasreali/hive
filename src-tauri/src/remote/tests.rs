@@ -587,6 +587,7 @@ impl Service {
             version: VERSION.into(),
             distro: None,
             warning: None,
+            you: None,
         };
         self.send(0, welcome).await;
         assert_eq!(self.control().await, (0, Control::ListProjects));

@@ -37,8 +37,15 @@ enum Command {
         remote: bool,
         /// End the running service first (SIGTERM to the lockfile's holder) and start a new one:
         /// the app restarts a remote service of another version (26.17).
-        #[arg(long)]
+        #[cfg_attr(unix, arg(long, conflicts_with = "join"))]
+        #[cfg_attr(windows, arg(long))]
         replace: bool,
+        /// Join the Hive of the user OWNER on this host (29.12): connect to their shared socket
+        /// instead, never starting a service. Fails with `hive-join-down` on stderr when their
+        /// Hive is not running or not shared, `hive-join: <why>` when joining is refused.
+        #[cfg(unix)]
+        #[arg(long, value_name = "OWNER")]
+        join: Option<String>,
     },
     /// Forward one Claude Code hook call (JSON on stdin) to the service. Always exits 0.
     Hook {
@@ -137,8 +144,6 @@ pub fn run() -> ExitCode {
             // Before anything starts a shell. macOS terminals already run the login shell.
             #[cfg(target_os = "linux")]
             crate::terminal::set_remote(remote);
-            #[cfg(not(target_os = "linux"))]
-            let _ = remote;
             // A terminal's shell is forked (`setsid` and its PTY before `exec`). macOS's fork
             // runs libnotify's child handler, which aborts the child (SIGTRAP, "os_once_t is
             // corrupt") when another thread was setting libnotify up at that moment: set it up
@@ -149,9 +154,25 @@ pub fn run() -> ExitCode {
             unsafe {
                 notify_is_valid_token(0);
             }
-            block_on(crate::daemon::run(&paths))
+            block_on(crate::daemon::run(&paths, remote))
         }
-        Command::Bridge { remote, replace } => std::env::current_exe()
+        #[cfg(unix)]
+        Command::Bridge {
+            join: Some(owner), ..
+        } => {
+            let root = crate::sharing::root(|key| std::env::var_os(key));
+            let users = crate::sharing::System;
+            let joined = block_on(async { Ok(crate::bridge::join(&root, &owner, &users).await) });
+            // A line of its own, for the app (`classify` in `src-tauri/src/remote.rs`).
+            if let Ok(Err(failure)) = joined {
+                eprintln!("{}", failure.line());
+                return ExitCode::FAILURE;
+            }
+            joined.map(drop)
+        }
+        Command::Bridge {
+            remote, replace, ..
+        } => std::env::current_exe()
             .and_then(|hive| block_on(crate::bridge::run(&paths, &hive, remote, replace))),
         Command::Hook { event, record } => {
             // Whatever happens, the agent must not see a failing hook.

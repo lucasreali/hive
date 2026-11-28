@@ -111,6 +111,8 @@ sort! {
         | SetSettings
         | CreateAccount
         | RemoveAccount
+        | GetSharing
+        | SetSharing
         | OpenSettingsFile
         | GetDiagnostics
         | GetShared
@@ -215,6 +217,8 @@ sort! {
         | EditorTarget
         | Settings
         | SettingsFailed
+        | Sharing
+        | SharingFailed
         | Diagnostics
         | Shared
         | UninstallList
@@ -267,6 +271,7 @@ fn samples() -> Vec<Control> {
             version: s("0.4.0"),
             distro: Some(s("Ubuntu")),
             warning: Some(s("cannot move Hive's files into /h/.hive")),
+            you: None,
         },
         VersionMismatch {
             protocol: 1,
@@ -887,6 +892,29 @@ fn samples() -> Vec<Control> {
             problems: vec![m()],
         },
         SettingsFailed { message: m() },
+        Sharing {
+            sharing: hive_protocol::Sharing {
+                on: true,
+                group: s("team"),
+                spaces: vec![s("work")],
+                people: vec![Person {
+                    login: s("bob"),
+                    display: s("Bob"),
+                    git_name: s("Bob B"),
+                    git_email: s("bob@example.com"),
+                    role: ShareRole::Collaborator,
+                }],
+            },
+            owner: s("alice"),
+            groups: vec![s("team")],
+            spaces: vec![SpaceChoice {
+                id: s("work"),
+                name: s("Work"),
+            }],
+            unavailable: Some(m()),
+            error: Some(m()),
+        },
+        SharingFailed { message: m() },
         Diagnostics {
             settings_file: s("/h/.hive/settings.json"),
             wrapper: s("/h/.hive/bin/claude"),

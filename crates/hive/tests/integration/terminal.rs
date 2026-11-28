@@ -265,6 +265,7 @@ async fn invalid_open_requests_are_answered_with_errors() {
             version: "x".into(),
             distro: None,
             warning: None,
+            you: None,
         },
     )
     .await;

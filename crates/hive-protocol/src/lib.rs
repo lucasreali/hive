@@ -184,6 +184,11 @@ pub enum Control {
         distro: Option<String>,
         #[serde(default)]
         warning: Option<String>,
+        /// Who the service takes a teammate for (29.12): only on a connection through its
+        /// shared socket, where the kernel named the peer ([`Guest`]); absent on the owner's
+        /// own socket, and from an older service.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        you: Option<Guest>,
     },
     /// Handshake refused; the connection is closed after this message. `terminals` (26.17):
     /// how many terminals the service runs, which restarting it would end; optional, so
@@ -1457,6 +1462,32 @@ pub enum Control {
     SettingsFailed {
         message: String,
     },
+    /// App → service (29.12): Settings → Sharing of a remote Linux service. Answered by
+    /// `Sharing`.
+    GetSharing,
+    /// App → service (29.12): checks and saves the whole Sharing settings, then opens, changes or
+    /// closes the shared socket to match. Answered by `Sharing`, or by `SharingFailed` with
+    /// nothing saved.
+    SetSharing {
+        sharing: Sharing,
+    },
+    /// Settings → Sharing of this service (29.12), in answer to `GetSharing` and to a saved
+    /// `SetSharing`: the settings, the owner's login name (what a teammate joins with), the
+    /// owner's Unix groups (the ones a socket may be shared to), the spaces, and `unavailable`
+    /// (why this service cannot be shared: a local one, or not Linux) or `error` (why sharing
+    /// is on but its socket could not be opened, e.g. a planted folder), each null when none.
+    Sharing {
+        sharing: Sharing,
+        owner: String,
+        groups: Vec<String>,
+        spaces: Vec<SpaceChoice>,
+        unavailable: Option<String>,
+        error: Option<String>,
+    },
+    /// The Sharing settings were not saved (29.12): why, shown as is.
+    SharingFailed {
+        message: String,
+    },
     /// App → service: open the settings file in the user's editor, first writing the settings
     /// in use when there is no file yet. Answered by `EditorTarget` with an empty `worktree`
     /// and `path`.
@@ -1599,11 +1630,119 @@ pub struct Settings {
 #[serde(default)]
 pub struct RemoteSettings {
     /// Each an alias of the user's `~/.ssh/config` ([`check_host`]), in order, at most
-    /// [`HOST_LIMIT`].
+    /// [`HOST_LIMIT`] with `joined`.
     pub hosts: Vec<String>,
     /// How long a remote service keeps its terminals after the link drops (Q3), 1 to 10080
     /// minutes (7 days).
     pub keep_minutes: u32,
+    /// Someone else's Hive the user joins (29.12, "Join someone's Hive"), in order.
+    pub joined: Vec<JoinedHost>,
+}
+
+/// Someone else's Hive on a host (29.12): the user's own ssh alias of that host (their own
+/// login there) and the login name of the Hive's owner. The link runs the user's own
+/// `hive bridge --join <owner>` there.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct JoinedHost {
+    pub alias: String,
+    pub owner: String,
+}
+
+impl JoinedHost {
+    /// How the app names its link and its host: `<owner>@<alias>`.
+    pub fn name(&self) -> String {
+        format!("{}@{}", self.owner, self.alias)
+    }
+}
+
+/// Settings → Sharing of a remote Linux service (29.12, `docs/spike/multiplayer.md` §3): kept
+/// by that service (`sharing.json` in its Hive folder), never by the app. Off by default.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Sharing {
+    /// Whether the shared socket is open.
+    pub on: bool,
+    /// The Unix group that may reach the shared socket: one of the owner's own groups.
+    pub group: String,
+    /// The ids of the spaces teammates see.
+    pub spaces: Vec<String>,
+    /// The people who may join, at most [`PEOPLE_LIMIT`]; anyone else is refused.
+    pub people: Vec<Person>,
+}
+
+/// A teammate on the Sharing list (29.12).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Person {
+    /// Their login name on the host ([`check_login`]), the name the kernel gives their
+    /// connection.
+    pub login: String,
+    /// How Hive shows them, at most [`DISPLAY_LIMIT`] characters; empty: their login.
+    #[serde(default)]
+    pub display: String,
+    /// The git author name of their terminals (29.15); empty: the owner's.
+    #[serde(default)]
+    pub git_name: String,
+    /// The git author e-mail of their terminals (29.15); empty: the owner's.
+    #[serde(default)]
+    pub git_email: String,
+    pub role: ShareRole,
+}
+
+/// What a teammate may do (29.12, spike §3's role table).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ShareRole {
+    /// Sees the shared spaces, comments; never runs anything.
+    Viewer,
+    /// Also types in terminals they drive, opens terminals, edits files and commits, as the
+    /// owner.
+    Collaborator,
+}
+
+/// Who a connection through the shared socket is (29.12): the Sharing list's person the
+/// kernel's peer credentials name.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Guest {
+    /// Their login name.
+    pub name: String,
+    /// Their display name ([`Person::display`], else the login).
+    pub display: String,
+    pub role: ShareRole,
+}
+
+/// A space Settings → Sharing may share: its id and name.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SpaceChoice {
+    pub id: String,
+    pub name: String,
+}
+
+/// The most people on a Sharing list.
+pub const PEOPLE_LIMIT: usize = 32;
+/// The longest login name, in bytes (`useradd`'s own limit).
+pub const LOGIN_LIMIT: usize = 32;
+/// The longest display name, in characters (spike §8).
+pub const DISPLAY_LIMIT: usize = 40;
+
+/// A Unix login name Hive takes (29.12): `^[a-z_][a-z0-9_-]{0,31}$`, the portable form
+/// `useradd` accepts. Nothing else ever reaches a command line or a path: it is the owner's
+/// name in `hive bridge --join <owner>`.
+pub fn check_login(name: &str) -> Result<(), String> {
+    let first = |c: char| c.is_ascii_lowercase() || c == '_';
+    let rest = |c: char| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_' || c == '-';
+    let mut chars = name.chars();
+    let valid = chars.next().is_some_and(first) && chars.all(rest);
+    if name.is_empty() {
+        Err("A login name must not be empty".to_owned())
+    } else if name.len() > LOGIN_LIMIT {
+        Err(format!("A login name is at most {LOGIN_LIMIT} characters"))
+    } else if !valid {
+        Err(format!(
+            "The login name {name:?} may hold only a-z, 0-9, _ and -, and starts with a letter or _"
+        ))
+    } else {
+        Ok(())
+    }
 }
 
 /// The default keep time of a remote's terminals (Q3: 24 h).
@@ -1618,6 +1757,7 @@ impl Default for RemoteSettings {
         Self {
             hosts: Vec::new(),
             keep_minutes: KEEP_MINUTES,
+            joined: Vec::new(),
         }
     }
 }
@@ -3253,6 +3393,78 @@ mod tests {
         let remote: RemoteSettings = serde_json::from_str(r#"{"hosts":["gpu-box"]}"#).unwrap();
         assert_eq!(remote.hosts, ["gpu-box"]);
         assert_eq!(remote.keep_minutes, KEEP_MINUTES);
+        // A file from before 29.12 joins nobody's Hive.
+        assert_eq!(remote.joined, []);
+    }
+
+    #[test]
+    fn a_joined_hive_is_named_by_its_owner_at_the_alias() {
+        let joined = JoinedHost {
+            alias: "gpu-box".into(),
+            owner: "alice".into(),
+        };
+        assert_eq!(joined.name(), "alice@gpu-box");
+        let json = r#"{"joined":[{"alias":"gpu-box","owner":"alice"}]}"#;
+        let remote: RemoteSettings = serde_json::from_str(json).unwrap();
+        assert_eq!(remote.joined, [joined]);
+    }
+
+    #[test]
+    fn a_login_name_is_the_portable_unix_form() {
+        for ok in [
+            "alice",
+            "_svc",
+            "a",
+            "bob-2",
+            "x_y",
+            &"a".repeat(LOGIN_LIMIT),
+        ] {
+            assert_eq!(check_login(ok), Ok(()), "{ok}");
+        }
+        assert_eq!(
+            check_login(""),
+            Err("A login name must not be empty".into())
+        );
+        assert_eq!(
+            check_login(&"a".repeat(LOGIN_LIMIT + 1)),
+            Err("A login name is at most 32 characters".into())
+        );
+        for bad in [
+            "Alice", "1bob", "-x", "a b", "a;b", "a/b", "é", "a.b", "a'b", "a$b",
+        ] {
+            let error = format!(
+                "The login name {bad:?} may hold only a-z, 0-9, _ and -, and starts with a letter or _"
+            );
+            assert_eq!(check_login(bad), Err(error), "{bad}");
+        }
+    }
+
+    #[test]
+    fn sharing_is_off_until_set_and_a_person_needs_only_a_login_and_a_role() {
+        let sharing: Sharing = serde_json::from_str("{}").unwrap();
+        assert_eq!(sharing, Sharing::default());
+        assert!(!sharing.on);
+        let json = r#"{"on":true,"people":[{"login":"bob","role":"viewer"}]}"#;
+        let sharing: Sharing = serde_json::from_str(json).unwrap();
+        let bob = Person {
+            login: "bob".into(),
+            display: String::new(),
+            git_name: String::new(),
+            git_email: String::new(),
+            role: ShareRole::Viewer,
+        };
+        assert_eq!(sharing.people, [bob]);
+        let role: ShareRole = serde_json::from_str(r#""collaborator""#).unwrap();
+        assert_eq!(role, ShareRole::Collaborator);
+        // A welcome names a teammate only when it is one.
+        let welcome = Control::Welcome {
+            version: "1".into(),
+            distro: None,
+            warning: None,
+            you: None,
+        };
+        let text = serde_json::to_string(&welcome).unwrap();
+        assert!(!text.contains("you"), "{text}");
     }
 
     #[test]
@@ -3366,6 +3578,7 @@ mod tests {
             version: "0.1.0".into(),
             distro: None,
             warning: None,
+            you: None,
         };
         assert_eq!(frame.to_control().unwrap(), welcome);
     }
@@ -4815,7 +5028,7 @@ mod tests {
         };
         assert_eq!(
             &Frame::control(0, &settings).payload[..],
-            br#"{"type":"settings","settings":{"terminal":{"font_family":"\"Hive Mono\", \"Symbols Nerd Font\", monospace","font_size":13,"scrollback":5000,"cursor_style":"block","cursor_blink":false,"copy_on_select":false,"option_as_meta":"off","screen_reader":false,"shell":"default"},"appearance":{"theme":"one-dark","diff_colors":"standard"},"notifications":{"volume":100,"bounce":true,"menu_bar":true,"command_secs":10},"agents":{"silence_secs":5,"confirm_close":true,"keep_awake":true},"worktrees":{"default_base":null},"projects":{},"claude":{"accounts":[],"default_name":"Default","share_sessions":false},"gh":{"config_dirs":[]},"remote":{"hosts":[],"keep_minutes":1440},"keymap":{}},"problems":["p"]}"#
+            br#"{"type":"settings","settings":{"terminal":{"font_family":"\"Hive Mono\", \"Symbols Nerd Font\", monospace","font_size":13,"scrollback":5000,"cursor_style":"block","cursor_blink":false,"copy_on_select":false,"option_as_meta":"off","screen_reader":false,"shell":"default"},"appearance":{"theme":"one-dark","diff_colors":"standard"},"notifications":{"volume":100,"bounce":true,"menu_bar":true,"command_secs":10},"agents":{"silence_secs":5,"confirm_close":true,"keep_awake":true},"worktrees":{"default_base":null},"projects":{},"claude":{"accounts":[],"default_name":"Default","share_sessions":false},"gh":{"config_dirs":[]},"remote":{"hosts":[],"keep_minutes":1440,"joined":[]},"keymap":{}},"problems":["p"]}"#
         );
         let partial: Control = serde_json::from_str(
             r#"{"type":"set_settings","settings":{"terminal":{"cursor_style":"bar","shell":"git_bash"},"appearance":{"theme":"one-light","diff_colors":"color-blind"},"projects":{"/r":{"later":1}},"claude":{"accounts":[{"name":"Work","config_dir":"/w"}],"account":"/w"},"keymap":{"palette":"Cmd+K","comment":3},"unknown":1}}"#,

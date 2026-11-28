@@ -1055,7 +1055,8 @@
       },
       "remote": {
         "hosts": [],
-        "keep_minutes": 1440
+        "keep_minutes": 1440,
+        "joined": []
       },
       "keymap": {}
     },
@@ -1065,6 +1066,41 @@
   },
   {
     "type": "settings_failed",
+    "message": "m"
+  },
+  {
+    "type": "sharing",
+    "sharing": {
+      "on": true,
+      "group": "team",
+      "spaces": [
+        "work"
+      ],
+      "people": [
+        {
+          "login": "bob",
+          "display": "Bob",
+          "git_name": "Bob B",
+          "git_email": "bob@example.com",
+          "role": "collaborator"
+        }
+      ]
+    },
+    "owner": "alice",
+    "groups": [
+      "team"
+    ],
+    "spaces": [
+      {
+        "id": "work",
+        "name": "Work"
+      }
+    ],
+    "unavailable": "m",
+    "error": "m"
+  },
+  {
+    "type": "sharing_failed",
     "message": "m"
   },
   {

@@ -324,6 +324,16 @@ impl Projects {
         }
     }
 
+    /// Each space's id and name (29.12: the ones Settings → Sharing may share).
+    pub fn space_choices(&self) -> Vec<hive_protocol::SpaceChoice> {
+        let spaces = self.spaces();
+        let choice = |space: &hive_protocol::Space| hive_protocol::SpaceChoice {
+            id: space.id.clone(),
+            name: space.name.clone(),
+        };
+        spaces.spaces.iter().map(choice).collect()
+    }
+
     /// The current space's environment.
     pub fn current_env(&self) -> SpaceEnv {
         self.spaces().current().1

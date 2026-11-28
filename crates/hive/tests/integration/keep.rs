@@ -55,6 +55,7 @@ async fn welcomed(env: &Env, keep_secs: Option<u64>, app_id: Option<&str>) -> Co
         version: hive::VERSION.into(),
         distro: Some(common::DISTRO.into()),
         warning: None,
+        you: None,
     };
     assert_eq!(conn.control().await, (0, welcome));
     conn

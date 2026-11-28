@@ -262,6 +262,7 @@ mod tests {
             version: VERSION.into(),
             distro: None,
             warning: None,
+            you: None,
         }
     }
 

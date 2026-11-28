@@ -50,6 +50,8 @@ pub mod session_watch;
 pub mod sessions;
 pub mod settings;
 pub mod shared;
+#[cfg(unix)]
+pub mod sharing;
 pub mod slim;
 pub mod snapshot;
 pub mod spaces;

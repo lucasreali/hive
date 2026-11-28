@@ -69,6 +69,7 @@ fn welcome() -> Control {
         version: hive::VERSION.into(),
         distro: Some(DISTRO.into()),
         warning: None,
+        you: None,
     }
 }
 

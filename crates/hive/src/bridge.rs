@@ -39,6 +39,28 @@ pub async fn run(paths: &Paths, hive: &Path, remote: bool, replace: bool) -> io:
             connect_when_ready(paths).await?
         }
     };
+    relay(stream).await
+}
+
+/// `hive bridge --join <owner>` (29.12): connects stdio to `owner`'s shared socket under `root`
+/// ([`crate::sharing::join`] checks their folder and that the socket is theirs). Never starts a
+/// service: a teammate cannot, it runs as the owner.
+#[cfg(unix)]
+pub async fn join(
+    root: &Path,
+    owner: &str,
+    users: &dyn crate::sharing::Users,
+) -> Result<(), crate::sharing::JoinError> {
+    let stream = crate::sharing::join(root, owner, users).await?;
+    let relayed = relay(stream).await;
+    relayed.map_err(|err| crate::sharing::JoinError::Refused(err.to_string()))
+}
+
+/// Connects stdio to `stream` until either side closes.
+async fn relay<S>(stream: S) -> io::Result<()>
+where
+    S: tokio::io::AsyncRead + tokio::io::AsyncWrite,
+{
     let (mut from_daemon, mut to_daemon) = tokio::io::split(stream);
     let mut stdin = tokio::io::stdin();
     let mut stdout = tokio::io::stdout();

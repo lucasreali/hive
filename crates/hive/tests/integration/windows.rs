@@ -231,6 +231,7 @@ async fn the_service_serves_the_app_over_its_pipe_and_ends_with_it() {
         version: hive::VERSION.into(),
         distro: None,
         warning: None,
+        you: None,
     };
     app.wait_for(0, welcome).await;
     let settings = Control::Settings {

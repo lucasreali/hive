@@ -106,7 +106,7 @@ impl Env {
         let env = Self {
             dir: tempfile::tempdir().unwrap(),
         };
-        for sub in ["home", "run", "data", "config"] {
+        for sub in ["home", "run", "data", "config", "tmp"] {
             std::fs::create_dir(env.path(sub)).unwrap();
         }
         // fish's first start in a cache without them runs Python in the background to generate
@@ -180,6 +180,8 @@ impl Env {
         }
         // Hive's folder (22.1), where the XDG data folder had it.
         cmd.env("HIVE_HOME", self.path("data/hive"));
+        // A shared folder (29.12) never in the real `/tmp`.
+        cmd.env(hive::sharing::ROOT_VAR, self.path("tmp"));
         // The tests' agents never keep this machine awake (17.17).
         cmd.env(hive::power::OFF, "1");
         // On macOS terminals run `$SHELL`; the tests' shell commands are fish's, as on WSL.
@@ -258,6 +260,7 @@ impl Env {
                     version: hive::VERSION.into(),
                     distro: Some(DISTRO.into()),
                     warning: None,
+                    you: None,
                 }
             )
         );

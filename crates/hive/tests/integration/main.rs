@@ -72,6 +72,9 @@ mod review;
 mod scripts;
 #[cfg(unix)]
 #[cfg(test)]
+mod sharing;
+#[cfg(unix)]
+#[cfg(test)]
 mod spaces;
 #[cfg(unix)]
 #[cfg(test)]

@@ -10,6 +10,8 @@ mod agents;
 mod app;
 #[cfg(unix)]
 mod claim;
+#[cfg(unix)]
+mod share;
 mod terminals;
 mod usage;
 
@@ -56,7 +58,8 @@ const LOCK_RETRY: Duration = Duration::from_millis(20);
 /// How often the service checks that its lock and socket are still in place ([`Claim::keep`]).
 const CLAIM_CHECK: Duration = Duration::from_secs(2);
 
-pub async fn run(paths: &Paths) -> io::Result<()> {
+/// `remote`: a remote service (`hive daemon --remote`), which on Linux may be shared (29.12).
+pub async fn run(paths: &Paths, remote: bool) -> io::Result<()> {
     // Started by `hive bridge`: leave its session, so the service outlives nothing but the
     // app connection. Fails harmlessly for a group leader (e.g. started from a shell).
     // (On Windows the bridge starts it detached.)
@@ -158,10 +161,22 @@ pub async fn run(paths: &Paths) -> io::Result<()> {
     // What a service before 26.11 left, gone before this one's first terminal.
     crate::browser_cleanup::clean(&paths.bin_dir(), &paths.runtime);
     let provenance = crate::provenance::Provenance::new(Some(paths.data.join("provenance")));
+    // Only a remote Linux service may be shared (29.12, Stage 26 Q5).
+    #[cfg(unix)]
+    let share = share::Share::new(
+        crate::sharing::Store::load(paths.data.join("sharing.json")),
+        Arc::new(crate::sharing::System),
+        crate::sharing::root(|key| std::env::var_os(key)),
+        remote && cfg!(target_os = "linux"),
+    );
+    #[cfg(windows)]
+    let _ = remote;
     let state = Arc::new(State {
         warning,
         places,
         provenance,
+        #[cfg(unix)]
+        share,
         ..state
     });
     serve(listener, hold, terminated, state).await
@@ -253,6 +268,9 @@ async fn serve(
     let logs = tokio::spawn(watch_sessions(state.clone(), session_watch::Watch::new()));
     let provenance = tokio::spawn(keep_provenance(state.clone()));
     let mut check = tokio::time::interval(CLAIM_CHECK);
+    // Its shared socket, when sharing is on (29.12).
+    #[cfg(unix)]
+    state.apply_sharing();
     tokio::pin!(terminated);
     // When the terminals kept after the app dropped end, unless an app is back by then.
     let mut kept_until: Option<tokio::time::Instant> = None;
@@ -295,6 +313,8 @@ async fn serve(
     // (waiting for the lock) instead of a listen queue nobody accepts.
     drop(listener);
     hold.release();
+    #[cfg(unix)]
+    state.end_sharing();
     let files = state.watching.lock().await.take().map(|files| files.task);
     for task in [watcher, health, registry, logs, provenance]
         .into_iter()
@@ -452,6 +472,9 @@ struct State {
     ending: tokio::sync::Notify,
     /// The worktrees' snapshots at each agent turn (27.2).
     snapshots: Arc<crate::snapshot::Snapshots>,
+    /// Sharing with teammates (29.12): its settings, the shared socket and who is connected.
+    #[cfg(unix)]
+    share: share::Share,
 }
 
 /// The connected app's link (26.15): what its `hello` asked for.
@@ -489,6 +512,7 @@ impl State {
     ) -> Self {
         // Hive's folder in production (`with_snapshots`), the test's folder in tests.
         let bin_dir_snapshots = bin_dir.join("snapshots");
+        let restore_file = restore.file.clone();
         Self {
             app: Mutex::new(None),
             link: Default::default(),
@@ -532,6 +556,15 @@ impl State {
             uninstalling: Default::default(),
             ending: Default::default(),
             snapshots: Arc::new(crate::snapshot::Snapshots::new(bin_dir_snapshots)),
+            // Never shared but by `run` (a remote Linux service); in tests, Hive's folder is
+            // the test's.
+            #[cfg(unix)]
+            share: share::Share::new(
+                crate::sharing::Store::load(restore_file.with_file_name("sharing.json")),
+                Arc::new(crate::sharing::System),
+                crate::sharing::root(|key| std::env::var_os(key)),
+                false,
+            ),
         }
     }
 

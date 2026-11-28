@@ -97,6 +97,7 @@ where
                 version: VERSION.to_owned(),
                 distro: std::env::var("WSL_DISTRO_NAME").ok(),
                 warning: state.warning.clone(),
+                you: None,
             },
             Some(Client {
                 role,
@@ -408,6 +409,19 @@ async fn app_frame(
             state.view(terminal.filter(|_| focused).unwrap_or(0)).await;
         }
         Ok(Control::GetSettings) => state.send_settings().await,
+        #[cfg(unix)]
+        Ok(Control::GetSharing) => state.to_app(0, &state.sharing_message()).await,
+        #[cfg(unix)]
+        Ok(Control::SetSharing { sharing }) => {
+            let reply = tokio::task::block_in_place(|| state.set_sharing(sharing));
+            state.to_app(0, &reply).await;
+        }
+        // Never shared: a remote is Linux (Stage 26 Q5).
+        #[cfg(windows)]
+        Ok(Control::GetSharing | Control::SetSharing { .. }) => {
+            let message = share_unavailable();
+            state.to_app(0, &Control::SharingFailed { message }).await;
+        }
         Ok(Control::Resync) => resync(state).await,
         Ok(Control::SetSettings { settings }) => {
             let using = |dir: &str| state.projects.using(dir);
@@ -1407,4 +1421,9 @@ mod tests {
         drop((frames, to_service));
         assert_eq!(serving.await.unwrap(), Some(Gone::End));
     }
+}
+
+#[cfg(windows)]
+fn share_unavailable() -> String {
+    "Only the Hive of a remote Linux host can be shared".to_owned()
 }
