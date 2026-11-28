@@ -357,7 +357,8 @@ mod tests {
         // An id too long is ignored; one at the limit is kept.
         commands.launch(&bash(&"i".repeat(MAX_ID + 1), "x"), None, 1, 1);
         commands.launch(&bash(&"i".repeat(MAX_ID), "x"), None, 1, 1);
-        assert_eq!(commands.listed().len(), 3);
+        let lengths: Vec<usize> = commands.listed().iter().map(|c| c.id.len()).collect();
+        assert_eq!(lengths, [2, 2, MAX_ID]);
         // Blank text is no text.
         commands.launch(&bash("b3", " \u{7} "), None, 1, 1);
         assert_eq!(commands.listed()[3].command, "");
