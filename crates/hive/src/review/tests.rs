@@ -168,6 +168,8 @@ fn links_are_saved_privately_marked_pruned_and_renamed() {
         group: false,
         folder: false,
         parent: None,
+        jj: false,
+        trunk: None,
     };
     reviews.mark(&mut project);
     let marks: Vec<_> = project
