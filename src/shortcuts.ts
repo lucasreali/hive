@@ -4,6 +4,7 @@ import { closeFile } from "./shell/RightPanel";
 import { findInTerminal } from "./shell/TerminalSearch";
 import {
   activateTab,
+  endRestore,
   type HiveState,
   leaveSpace,
   markdownShown,
@@ -20,6 +21,7 @@ import {
   spaceProjects,
   terminalShown,
   useHive,
+  withCollapsed,
 } from "./store";
 import { barItems, fileVisible, shownPane } from "./tabs";
 import {
@@ -64,6 +66,8 @@ export function nextPending(): void {
  * another space, that space becomes the current one (6.14).
  */
 export function goToAgent(agent: Agent): void {
+  // The user's move: the launch restore ends (28.27).
+  endRestore();
   // Another host's agent (26.18): its host's spaces show first.
   showHost(agentHost(agent.id));
   const s = useHive.getState();
@@ -76,12 +80,11 @@ export function goToAgent(agent: Agent): void {
   useHive.setState({
     // The place left behind is the one that space shows again (11.5).
     ...(away ? leaveSpace(s) : {}),
-    collapsed: {
-      ...s.collapsed,
+    collapsed: withCollapsed(s.collapsed, {
       [group]: false,
       [agent.project ?? ""]: false,
       [`worktree:${agent.worktree}`]: false,
-    },
+    }),
     selection: agent.id,
     activeTab: tab?.id ?? s.activeTab,
     fileShown: tab ? false : s.fileShown,

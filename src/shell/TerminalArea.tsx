@@ -26,6 +26,7 @@ import {
   accountLine,
   activateTab,
   dropOnPane,
+  endRestore,
   type FileTab as FileTabData,
   type HiveState,
   moveTab,
@@ -776,7 +777,14 @@ export function TerminalArea() {
   const [menu, setMenu] = useState<TabMenu | null>(null);
   const closeMenu = useCallback(() => setMenu(null), []);
   return (
-    <section className="terminals" aria-label="Terminals">
+    // A press or a key in a tab or pane (a terminal typed in, a file edited) is the user's: the
+    // launch restore ends (28.27). Not focus: panes are focused from code too.
+    <section
+      className="terminals"
+      aria-label="Terminals"
+      onPointerDownCapture={endRestore}
+      onKeyDownCapture={endRestore}
+    >
       <div className="bar">
         <div
           className="tabs"
