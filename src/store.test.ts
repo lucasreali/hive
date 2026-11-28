@@ -67,14 +67,13 @@ test("the keymap's problems are kept and said once each time they change (28.7)"
   // The same list again says nothing; a new one says it again.
   apply({ type: "settings", settings: DEFAULT_SETTINGS, problems: ["a"] });
   apply({ type: "settings", settings: DEFAULT_SETTINGS, problems: ["a", "b"] });
-  expect(notices()).toEqual([
-    "The keymap has a problem: see Settings → Keyboard",
-    "The keymap has 2 problems: see Settings → Keyboard",
-  ]);
-  // None (or an older service, which sends none): nothing to say.
+  // The new list's toast replaces the last one's; another toast stays.
+  expect(notices()).toEqual(["The keymap has 2 problems: see Settings → Keyboard"]);
+  apply({ type: "settings_failed", message: "Ignoring settings.json" });
+  // None (or an older service, which sends none): the toast goes.
   apply({ type: "settings", settings: DEFAULT_SETTINGS });
   expect(useHive.getState().settingsProblems).toEqual([]);
-  expect(notices()).toHaveLength(2);
+  expect(notices()).toEqual(["Ignoring settings.json"]);
 });
 
 test("welcome and version_mismatch set the connection", () => {

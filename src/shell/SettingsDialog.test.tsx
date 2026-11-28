@@ -943,10 +943,32 @@ test("on macOS the chords are named with ⌘, with the terminal's own fixed keys
   expect(chips("New worktree")).toEqual(["⌘N", "⇧⌘N"]);
   expect(chips("Show the previous tab")).toEqual(["⌃⇧Tab", "⇧⌘["]);
   expect(chips("Make the terminal font smaller")).toEqual(["⌘-"]);
-  expect(fixedRows()).toContain("Copy in the terminal⌘C");
-  expect(fixedRows()).toContain("Clear the terminal⌘K");
-  expect(fixedRows()).toContain("Move a focused agent in its list⌥↑ ⌥↓");
-  expect(fixedRows()).toContain("Save the file in the editor⌘S");
+  expect(chips("New terminal in this worktree")).toEqual(["⌘T"]);
+  expect(chips("Close the tab")).toEqual(["⌘W"]);
+  expect(chips("Show tab 9")).toEqual(["⌘9"]);
+  expect(chips("Show the next tab")).toEqual(["⌃Tab", "⇧⌘]"]);
+  expect(chips("Keyboard shortcuts")).toEqual(["⌘/"]);
+  expect(document.querySelectorAll(".keymap-row")).toHaveLength(COMMANDS.length);
+  expect(fixedRows()).toEqual([
+    "Copy in the terminal⌘C",
+    "Paste in the terminal⌘V",
+    "Clear the terminal⌘K",
+    "Jump to the previous prompt⌘↑",
+    "Jump to the next prompt⌘↓",
+    "Go to the start of the line⌘←",
+    "Go to the end of the line⌘→",
+    "Delete to the start of the line⌘⌫",
+    "Scroll a page upfn↑",
+    "Scroll a page downfn↓",
+    "Scroll to the topfn←",
+    "Scroll to the bottomfn→",
+    "Move in the tree, lists and menus↑ ↓",
+    "Collapse or expand in the tree← →",
+    "Select or run↩",
+    "Close a dialog, a menu or a searchesc",
+    "Move a focused agent in its list⌥↑ ⌥↓",
+    "Save the file in the editor⌘S",
+  ]);
 });
 
 test("the search filters the commands by label, id or chord", () => {
@@ -969,7 +991,7 @@ test("the search filters the commands by label, id or chord", () => {
   expect(screen.getByText("No command matches.")).toBeTruthy();
 });
 
-test("the settings' search finds the Keyboard section by its name", () => {
+test("the settings' search finds the Keyboard section by its name, or the commands it names", () => {
   open();
   search("shortcut");
   expect(document.querySelectorAll(".keymap-row")).toHaveLength(COMMANDS.length);
@@ -978,6 +1000,17 @@ test("the settings' search finds the Keyboard section by its name", () => {
   expect(fixedRows()).toEqual([]);
   search("keyboard");
   expect(screen.queryByText("No setting matches.")).toBeNull();
+  // A command by its label or its chord: only those.
+  const shown = () =>
+    [...document.querySelectorAll(".keymap-label")].map((l) => l.textContent as string);
+  search("palette");
+  expect(shown()).toEqual(["Command palette"]);
+  search("ctrl shift o");
+  expect(shown()).toEqual(["Add project"]);
+  // A field and no command: the field alone.
+  search("cursor");
+  expect(shown()).toEqual([]);
+  expect(labels()).toEqual(["Cursor styleBlock", "Blinking cursor"]);
 });
 
 test("a recorded chord is added, saved as a change, and its terminal key named", async () => {
@@ -1042,8 +1075,9 @@ test("a chord another command has asks: keep both, or take it", async () => {
   section("Keyboard");
   const keys = { key: "M", code: "KeyM", ctrlKey: true, shiftKey: true };
   record("Command palette", keys);
+  // Kept with a default, the user's chord runs (D1).
   expect(note()?.textContent).toContain(
-    "Ctrl+Shift+M is also the shortcut of Comment on the selected lines",
+    "Ctrl+Shift+M is also the shortcut of Comment on the selected lines; with both, Command palette runs",
   );
   expect(keymap()).toEqual({});
   fireEvent.click(screen.getByRole("button", { name: "Keep both" }));
@@ -1064,6 +1098,15 @@ test("a chord another command has asks: keep both, or take it", async () => {
   );
   expect(keyRow("Comment on the selected lines").textContent).toContain("No shortcut");
   expect(document.querySelector(".keymap .field-warning")).toBeNull();
+  // Two of the user's on one chord: the command first in the table runs, and the note says so.
+  record("Comment on the selected lines", { key: "p", code: "KeyP", ctrlKey: true, altKey: true });
+  await waitFor(() => expect(keymap().comment).toBe("Ctrl+Alt+P"));
+  record("Command palette", { key: "p", code: "KeyP", ctrlKey: true, altKey: true });
+  expect(note()?.textContent).toContain("; with both, Command palette runs");
+  record("Show the next tab", { key: "p", code: "KeyP", ctrlKey: true, altKey: true });
+  expect(note()?.textContent).toContain(
+    "is also the shortcut of Comment on the selected lines; with both, Comment on the selected lines runs",
+  );
 });
 
 test("a chord is removed with its ×, and Reset all asks first", async () => {
@@ -1087,9 +1130,11 @@ test("the service's problems show at the top with the settings file", () => {
   section("Keyboard");
   expect(screen.queryByRole("region", { name: "Problems in the settings file" })).toBeNull();
   const problem = 'keymap: Hive has no command "palete"';
-  act(() => apply({ type: "settings", settings: DEFAULT_SETTINGS, problems: [problem] }));
+  // The same line twice (two hand-typed copies): both shown.
+  act(() => apply({ type: "settings", settings: DEFAULT_SETTINGS, problems: [problem, problem] }));
   const problems = screen.getByRole("region", { name: "Problems in the settings file" });
   expect(problems.textContent).toContain(problem);
+  expect(problems.querySelectorAll(".field-warning")).toHaveLength(2);
   const open_ = spyOn(transport, "openSettingsFile");
   fireEvent.click(within(problems).getByRole("button", { name: "Open settings file" }));
   expect(open_).toHaveBeenCalled();

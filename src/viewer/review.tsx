@@ -1,5 +1,5 @@
 import { useRef } from "react";
-import { withKeys } from "../keymap";
+import { useKeymap, withKeys } from "../keymap";
 import type { ReviewComment } from "../protocol";
 import { ago } from "../sessions";
 import { CloseIcon } from "../shell/icons";
@@ -181,6 +181,8 @@ const NONE: ReviewComment[] = [];
  * Resolved, and "Send all open".
  */
 export function CommentsView({ worktree }: { worktree: string }) {
+  // Its tooltips name the keymap's chords (28.7).
+  useKeymap();
   const comments = useHive((s) => s.comments[worktree]) ?? NONE;
   const open = comments.filter(sendable);
   // Its scroll, as this worktree's comments were left (28.19).
@@ -226,6 +228,8 @@ export function CommentsView({ worktree }: { worktree: string }) {
 
 /** The file view header's "Comment" button. */
 export function CommentButton({ live = true }: { live?: boolean }) {
+  // Its tooltips name the keymap's chords (28.7).
+  useKeymap();
   const why = useHive((s) => (live && s.selectedLines ? null : "Select lines to comment on them"));
   return (
     <button

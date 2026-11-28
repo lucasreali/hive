@@ -7,6 +7,7 @@ import {
 } from "@phosphor-icons/react";
 import { useEffect, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
+import { useShortcut } from "../keymap";
 import { spaceName } from "../notify";
 import type { Agent } from "../protocol";
 import { goToAgent } from "../shortcuts";
@@ -135,6 +136,7 @@ function PendingBell() {
   const [open, setOpen] = useState(false);
   const [close] = useState(() => () => setOpen(false));
   const label = count === 0 ? "Notifications" : `${count} pending: notifications`;
+  const next = useShortcut("next-pending");
   const toggle = () => {
     if (!open) markInboxRead();
     setOpen(!open);
@@ -146,7 +148,7 @@ function PendingBell() {
         type="button"
         className="pending-bell"
         data-pending={count > 0}
-        title={`${label} (${isMac() ? "⇧⌘J" : "F8"}: next pending)`}
+        title={next ? `${label} (${next}: next pending)` : label}
         aria-label={label}
         aria-haspopup="menu"
         aria-expanded={open}

@@ -19,6 +19,7 @@ import {
   chordOf,
   chordText,
   conflicts,
+  effective,
   entries,
   overlap,
   parseChord,
@@ -729,10 +730,19 @@ function Fields({ fields }: { fields: Field[] }) {
 /** A note under a command's row: why a chord was refused, or a conflict to settle. */
 type Note = { id: string; text: string; conflict?: { chord: string; other: Command } };
 
+/** A search as commands are searched: lowercase, without spaces and `+`. */
+const squeeze = (text: string) => text.toLowerCase().replace(/[\s+]/g, "");
+
 /** The text to search a command by: its label, id and chords, written several ways. */
 function searchText(c: Command, chords: string[]): string {
   const keys = chords.flatMap((k) => [k, chordText(k)]);
-  return [c.label, c.id, ...keys].join(" ").toLowerCase().replace(/[\s+]/g, "");
+  return squeeze([c.label, c.id, ...keys].join(" "));
+}
+
+/** The commands `query` finds by label, id or chord, with their effective chords. */
+function foundCommands(query: string): Command[] {
+  const of = effective();
+  return COMMANDS.filter((c) => searchText(c, of.get(c.id)?.chords ?? []).includes(squeeze(query)));
 }
 
 /** The local keys of #35 and the terminal's own: never in the keymap. */
@@ -755,9 +765,9 @@ function fixedKeys(): { label: string; keys: string }[] {
  * Settings → Keyboard (28.7): every command with its chords, filtered by its own search; record,
  * remove, reset one or all, conflicts and the service's problems shown; then the keys that stay
  * fixed. Every change saves the keymap's changes only (`withChords`), as every other setting.
- * `inSearch`: shown by the settings' search, the commands only.
+ * `search`: shown by the settings' search, the commands it finds only.
  */
-function Keyboard({ inSearch = false }: { inSearch?: boolean }) {
+function Keyboard({ search }: { search?: string }) {
   const keymap = useHive((s) => s.settings.keymap);
   const problems = useHive((s) => s.settingsProblems);
   const remote = useHive(onRemote);
@@ -768,7 +778,7 @@ function Keyboard({ inSearch = false }: { inSearch?: boolean }) {
   const of = bindings(keymap, COMMANDS, on);
   const found = conflicts(COMMANDS, of);
   const chordsOf = (c: Command) => of.get(c.id)?.chords ?? [];
-  const wanted = filter.toLowerCase().replace(/[\s+]/g, "");
+  const wanted = squeeze(search ?? filter);
   const rows = COMMANDS.filter((c) => searchText(c, chordsOf(c)).includes(wanted));
   const save = (changes: [Command, string[]][]) =>
     saveSettings((s) => {
@@ -795,7 +805,10 @@ function Keyboard({ inSearch = false }: { inSearch?: boolean }) {
       (o) => o !== c && overlap(o.context, c.context) && chordsOf(o).includes(chord),
     );
     if (other) {
-      const text = `${chordText(chord)} is also the shortcut of ${other.label}`;
+      // With both, the user's chord beats a default; of two of the user's, table order (D1).
+      const first = COMMANDS.indexOf(c) < COMMANDS.indexOf(other);
+      const runs = of.get(other.id)?.user && !first ? other : c;
+      const text = `${chordText(chord)} is also the shortcut of ${other.label}; with both, ${runs.label} runs`;
       setNote({ id: c.id, text, conflict: { chord, other } });
       return;
     }
@@ -806,8 +819,12 @@ function Keyboard({ inSearch = false }: { inSearch?: boolean }) {
       {problems.length > 0 && (
         <section className="field settings-group keymap-problems" aria-labelledby="keymap-problems">
           <h3 id="keymap-problems">Problems in the settings file</h3>
-          {problems.map((p) => (
-            <p className="field-warning" key={p}>
+          {problems.map((p, i) => (
+            // Two equal lines (two hand-typed copies) each keep a key: the text and its copy.
+            <p
+              className="field-warning"
+              key={`${p} ${problems.slice(0, i).filter((q) => q === p).length}`}
+            >
               {p}
             </p>
           ))}
@@ -818,7 +835,7 @@ function Keyboard({ inSearch = false }: { inSearch?: boolean }) {
           )}
         </section>
       )}
-      {!inSearch && (
+      {search === undefined && (
         <SearchField
           aria-label="Search shortcuts"
           placeholder="Search shortcuts"
@@ -951,7 +968,7 @@ function Keyboard({ inSearch = false }: { inSearch?: boolean }) {
           );
         })}
       </ul>
-      {!inSearch && Object.keys(entries(keymap)).length > 0 && (
+      {search === undefined && Object.keys(entries(keymap)).length > 0 && (
         <button
           type="button"
           className="secondary keymap-reset"
@@ -971,7 +988,7 @@ function Keyboard({ inSearch = false }: { inSearch?: boolean }) {
           Reset all
         </button>
       )}
-      {!inSearch && (
+      {search === undefined && (
         <section className="field settings-group" aria-labelledby="fixed-keys">
           <h3 id="fixed-keys">Fixed keys</h3>
           <table className="settings-keys">
@@ -1830,13 +1847,16 @@ function Content({ section, query }: { section: Section; query: string }) {
   );
   if (query) {
     const found = fields.filter((f) => f.label.toLowerCase().includes(query.toLowerCase()));
-    // The Keyboard section by its name, or the commands whose label or chord match.
+    // The Keyboard section by its name (every command), or the commands the query finds.
     const keys = "keyboard shortcuts".includes(query.toLowerCase());
-    if (found.length === 0 && !keys) return <p className="field-help">No setting matches.</p>;
+    const commands = keys || foundCommands(query).length > 0;
+    if (found.length === 0 && !commands) {
+      return <p className="field-help">No setting matches.</p>;
+    }
     return (
       <>
         <Fields fields={found} />
-        {keys && <Keyboard inSearch />}
+        {commands && <Keyboard search={keys ? "" : query} />}
       </>
     );
   }

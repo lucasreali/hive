@@ -354,6 +354,23 @@ test("on macOS the bell names ⇧⌘J for the next pending agent (F8 is Play/Pau
   expect(bell.title).toBe("Notifications (⇧⌘J: next pending)");
 });
 
+test("the tooltips follow the keymap as it changes (28.7)", () => {
+  render(<App />);
+  act(() => apply({ type: "projects", projects: MOCK_REPOS }));
+  const bell = document.querySelector(".pending-bell") as HTMLButtonElement;
+  const keymap = (k: Record<string, unknown>) =>
+    act(() => useHive.setState((s) => ({ settings: { ...s.settings, keymap: k } })));
+  expect(bell.title).toBe("Notifications (F8: next pending)");
+  expect(screen.getByTitle("Add project (Ctrl+Shift+O)")).toBeTruthy();
+  keymap({ "next-pending": "Ctrl+Alt+N", "add-project": "Ctrl+Alt+O" });
+  expect(bell.title).toBe("Notifications (Ctrl+Alt+N: next pending)");
+  expect(screen.getByTitle("Add project (Ctrl+Alt+O)")).toBeTruthy();
+  // No shortcut: the tooltip says none.
+  keymap({ "next-pending": [], "add-project": [] });
+  expect(bell.title).toBe("Notifications");
+  expect(screen.getByTitle("Add project")).toBeTruthy();
+});
+
 test("a host's summary after a reattach shows that host's spaces; its offer, its worktree (26.18)", () => {
   render(<App />);
   const host = "gpu-box";

@@ -9,7 +9,7 @@ import {
   useSyncExternalStore,
 } from "react";
 import { useShallow } from "zustand/react/shallow";
-import { withKeys } from "../keymap";
+import { useKeymap, withKeys } from "../keymap";
 import type {
   Agent,
   AgentState,
@@ -89,6 +89,8 @@ function Rollup({ agents }: { agents: (a: Agent) => boolean }) {
 
 // ponytail: plain list, add TanStack Virtual when trees get long.
 export function Sidebar() {
+  // Its tooltips name the keymap's chords (28.7).
+  useKeymap();
   const all = useHive(useShallow(spaceProjects));
   const width = useHive((s) => s.sidebarWidth);
   // The shown host's link is down (26.18): its last tree, dimmed.

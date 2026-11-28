@@ -42,6 +42,9 @@ import {
 } from "./tabs";
 import { failed, fromDisk, isDirty, isFor, saved, startEdit, toText } from "./viewer/buffer";
 
+/** The start of the keymap's problems toast (28.7): a new list replaces it, none removes it. */
+const KEYMAP_NOTICE = "The keymap has";
+
 // How service data enters the store: `apply` stores what the service sent without deriving
 // anything (#37).
 
@@ -140,14 +143,19 @@ function reduce(s: HiveState, m: HostMessage): Partial<HiveState> {
       // A new list of problems says so once (a hand edit of the file is otherwise silent).
       const problems = m.problems ?? [];
       const n = problems.length;
-      const told = n > 0 && problems.join("\n") !== s.settingsProblems.join("\n");
-      const text = `The keymap has ${n === 1 ? "a problem" : `${n} problems`}: see Settings → Keyboard`;
+      const changed = problems.join("\n") !== s.settingsProblems.join("\n");
+      const text = `${KEYMAP_NOTICE} ${n === 1 ? "a problem" : `${n} problems`}: see Settings → Keyboard`;
+      // A new list replaces the toast of the last one; none takes it away.
+      const notices = changed
+        ? s.notices.filter((x) => !x.text.startsWith(KEYMAP_NOTICE))
+        : s.notices;
       return {
         settings: m.settings,
         settingsProblems: problems,
         settingsError: null,
         settingsPending: false,
-        ...(told ? withNotice(s, "error", text) : {}),
+        notices,
+        ...(changed && n > 0 ? withNotice({ notices }, "error", text) : {}),
       };
     }
     case "settings_failed":

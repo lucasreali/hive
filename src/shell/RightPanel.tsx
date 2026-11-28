@@ -27,7 +27,7 @@ import {
 } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { stageFiles } from "../git";
-import { withKeys } from "../keymap";
+import { useKeymap, withKeys } from "../keymap";
 import type {
   ChangedFile,
   Changes,
@@ -456,6 +456,8 @@ function PanelRail(props: { views: PanelViewEntry[]; view: PanelView; open: bool
  * closed view asks the service for nothing.
  */
 function OpenView({ shown }: { shown: PanelViewEntry }) {
+  // Its tooltips name the keymap's chords (28.7).
+  useKeymap();
   const target = useShownWorktree();
   const view = shown.view;
   return (
@@ -1370,6 +1372,8 @@ export function FileView(props: {
   /** A right click on its header: the tab's menu (25.1). */
   onMenu?: (event: MouseEvent) => void;
 }) {
+  // Its tooltips name the keymap's chords (28.7).
+  useKeymap();
   const { worktree, file: own, pane } = props;
   const remote = useHive(onRemote);
   const openFile = usePane(own, (s) => s.openFile);
