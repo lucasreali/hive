@@ -76,6 +76,7 @@ fn state(id: &str, state: AgentState, subagents: Vec<SubagentState>) -> Control 
         subagents,
         activity: None,
         since_ms: 0,
+        background: vec![],
     }
 }
 
@@ -521,6 +522,96 @@ async fn a_subagent_that_fails_leaves_while_the_others_run_in_the_background() {
 }
 
 #[tokio::test]
+async fn an_agents_background_commands_are_listed_and_end_once_they_leave_its_list() {
+    // Replays `fixtures/background_synthetic.json`: synthetic until the human's recording
+    // (28.8, `docs/spike/background-commands.md` section 8).
+    let fixture: Value =
+        serde_json::from_str(include_str!("../fixtures/background_synthetic.json")).unwrap();
+    assert!(fixture["note"].as_str().unwrap().starts_with("SYNTHETIC"));
+    let repo = Repo::new();
+    let root = repo.root.display().to_string();
+    let fake = repo.env.fake_claude("home/claude");
+    let mut daemon = repo.env.daemon();
+    let mut app = repo.env.connect(Role::App).await;
+    app.open_terminal(1, &repo.root).await;
+    app.input(1, &format!("echo stand-''in; '{}'\r", fake.display()))
+        .await;
+    printed(&mut app, 1, "stand-in").await;
+    let mut steps = Vec::new();
+    for call in fixture["calls"].as_array().unwrap() {
+        let event = call[0].as_str().unwrap();
+        let payload = merged(call[1].clone(), json!({"cwd": root}));
+        steps.push(hook(&repo, &mut app, "1", event, payload).await);
+    }
+    let listed = |step: &[(u32, Control)]| {
+        let last = step.iter().rev().find_map(|(_, message)| match message {
+            Control::AgentState { background, .. } => Some(background.clone()),
+            _ => None,
+        });
+        let background = last.expect("an agent_state");
+        let shown = background.into_iter().map(|c| {
+            let ended = c.ended.map(|e| e.status);
+            (c.id, c.command, c.description, ended)
+        });
+        shown.collect::<Vec<_>>()
+    };
+    let finished = |step: &[(u32, Control)]| {
+        let ended = step.iter().filter_map(|(channel, message)| match message {
+            Control::BackgroundFinished {
+                agent,
+                id,
+                status,
+                alert,
+                notify,
+                ..
+            } => Some((
+                *channel,
+                agent.clone(),
+                id.clone(),
+                *status,
+                *alert,
+                *notify,
+            )),
+            _ => None,
+        });
+        ended.collect::<Vec<_>>()
+    };
+    let first = (
+        "bash_1".to_owned(),
+        "sleep 20; echo ok".to_owned(),
+        Some("Wait, then say ok".to_owned()),
+    );
+    let second = (
+        "bash_2".to_owned(),
+        "sleep 5; exit 3".to_owned(),
+        Some("Fail after 5 s".to_owned()),
+    );
+    let with = |(id, command, description): &(String, String, Option<String>), ended| {
+        (id.clone(), command.clone(), description.clone(), ended)
+    };
+    assert_eq!(listed(&steps[2]), [with(&first, None)]);
+    assert_eq!(listed(&steps[3]), [with(&first, None), with(&second, None)]);
+    assert!(steps[..4].iter().all(|step| finished(step).is_empty()));
+    // The turn ends with only the first listed: the second ended, quietly, its result unknown.
+    use hive_protocol::{BackgroundAlert::Quiet, BackgroundStatus::Unknown};
+    assert_eq!(
+        listed(&steps[4]),
+        [with(&first, None), with(&second, Some(Unknown))]
+    );
+    let quiet = |id: &str| (1, "bg".to_owned(), id.to_owned(), Unknown, Quiet, false);
+    assert_eq!(finished(&steps[4]), [quiet("bash_2")]);
+    // The finished message follows the state that lists it as ended.
+    let order = steps[4]
+        .iter()
+        .map(|(_, m)| matches!(m, Control::AgentState { .. }));
+    assert_eq!(order.collect::<Vec<_>>(), [true, false]);
+    assert!(finished(&steps[5]).is_empty());
+    assert_eq!(finished(&steps[6]), [quiet("bash_1")]);
+    drop(app);
+    assert!(daemon.wait_exit().success());
+}
+
+#[tokio::test]
 async fn clear_in_claude_ends_the_session_and_detects_the_new_one_in_the_same_terminal() {
     // `/clear` (20.3): Claude clears the screen and its scrollback, sends `SessionEnd`
     // ("clear") and then `SessionStart` ("clear") with a new session id, in the same process.
@@ -721,6 +812,43 @@ async fn hook_events_delivered_out_of_order_apply_in_the_order_they_were_sent() 
 }
 
 #[tokio::test]
+async fn a_hook_stamped_far_in_the_future_never_makes_later_events_look_older() {
+    let repo = Repo::new();
+    let mut daemon = repo.env.daemon();
+    let mut app = repo.env.connect(Role::App).await;
+    app.open_terminal(1, &repo.root).await;
+    let cwd = repo.root.display().to_string();
+    let start = json!({"session_id": "s", "cwd": cwd});
+    hook(&repo, &mut app, "1", "SessionStart", start).await;
+    let now = hive::hook::monotonic_ns;
+    let launch = json!({"session_id": "s", "tool_name": "Bash",
+        "tool_response": {"backgroundTaskId": "b1"}});
+    hook(&repo, &mut app, "1", "PostToolUse", launch).await;
+    // A forged stamp: its prompt and its list apply as if sent now.
+    let prompt = json!({"session_id": "s"});
+    hook_sent(&repo, &mut app, "1", "UserPromptSubmit", prompt, u64::MAX).await;
+    let listed = json!({"session_id": "s", "background_tasks": [{"id": "b1", "type": "shell"}]});
+    hook_sent(&repo, &mut app, "1", "Stop", listed, u64::MAX).await;
+    // So a later turn still changes the state, and a later list still ends the command.
+    let prompt = json!({"session_id": "s"});
+    let working = hook_sent(&repo, &mut app, "1", "UserPromptSubmit", prompt, now()).await;
+    assert!(
+        working
+            .iter()
+            .any(|(_, m)| matches!(m, Control::AgentState { state: Working, .. }))
+    );
+    let empty = json!({"session_id": "s", "background_tasks": []});
+    let stop = hook_sent(&repo, &mut app, "1", "Stop", empty, now()).await;
+    let ended = stop.iter().filter_map(|(_, m)| match m {
+        Control::BackgroundFinished { id, .. } => Some(id.as_str()),
+        _ => None,
+    });
+    assert_eq!(ended.collect::<Vec<_>>(), ["b1"]);
+    drop(app);
+    assert!(daemon.wait_exit().success());
+}
+
+#[tokio::test]
 async fn an_agent_finishing_in_view_of_the_focused_window_is_not_pending() {
     let repo = Repo::new();
     let mut daemon = repo.env.daemon();
@@ -758,6 +886,7 @@ async fn an_agent_finishing_in_view_of_the_focused_window_is_not_pending() {
             subagents: vec![],
             activity: None,
             since_ms: 0,
+            background: vec![],
         };
         vec![(1, message)]
     };
@@ -817,6 +946,7 @@ async fn looking_at_an_agent_waiting_for_you_makes_it_not_pending_until_its_next
             subagents: vec![],
             activity: None,
             since_ms: 0,
+            background: vec![],
         };
         vec![(1, message)]
     };

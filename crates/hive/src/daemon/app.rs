@@ -173,6 +173,7 @@ async fn hook_connection<R, W>(
                     .provenance
                     .saw(&projects, &event, crate::hook::now_ms());
             });
+            let sent_ns = present(sent_ns, crate::hook::monotonic_ns());
             state.saw(&event, sent_ns).await;
             // An agent detected or ended: whether its session runs changed.
             if let EventKind::SessionStarted | EventKind::SessionEnded { .. } = event.kind {
@@ -188,6 +189,21 @@ async fn hook_connection<R, W>(
             }
         }
         _ => {}
+    }
+}
+
+/// Longest a hook call's `sent_ns` may be ahead of the service's own clock.
+const AHEAD_NS: u64 = 5_000_000_000;
+
+/// A hook call's `sent_ns` as the agents apply it: one more than [`AHEAD_NS`] ahead of
+/// `now_ns` (the same `CLOCK_MONOTONIC`) is forged or broken, and taken as `now_ns`, so it
+/// cannot make every later event of its agent, or its background list, look older (9.17,
+/// 28.8).
+fn present(sent_ns: u64, now_ns: u64) -> u64 {
+    if sent_ns > now_ns.saturating_add(AHEAD_NS) {
+        now_ns
+    } else {
+        sent_ns
     }
 }
 
@@ -1106,6 +1122,17 @@ mod tests {
     use super::*;
     use crate::states::Agent;
 
+    #[test]
+    fn a_hook_stamped_in_the_future_is_taken_as_now() {
+        let now = 1_000_000_000_000;
+        assert_eq!(present(now - 1, now), now - 1);
+        assert_eq!(present(now + AHEAD_NS, now), now + AHEAD_NS);
+        assert_eq!(present(now + AHEAD_NS + 1, now), now);
+        assert_eq!(present(u64::MAX, now), now);
+        assert_eq!(present(u64::MAX, u64::MAX - 1), u64::MAX);
+        assert_eq!(AHEAD_NS, 5_000_000_000);
+    }
+
     #[tokio::test]
     async fn control_frames_are_written_before_queued_terminal_frames() {
         let (control_tx, control_rx) = mpsc::unbounded_channel();
@@ -1327,6 +1354,7 @@ mod tests {
             subagents: vec![],
             activity: None,
             since_ms: 0,
+            background: vec![],
         };
         // Each agent's state; the named one's name too, and only after its state.
         let named = Control::AgentTitle {

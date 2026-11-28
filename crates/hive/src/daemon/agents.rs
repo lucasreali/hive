@@ -94,6 +94,10 @@ impl State {
         if let Some(state) = agent.apply(id, event, sent_ns, now, &place) {
             self.to_app(channel, &state).await;
         }
+        // After the state that lists them as ended (28.8).
+        for finished in agent.finished(id) {
+            self.to_app(channel, &finished).await;
+        }
         if event.subagent.is_none() {
             self.turn_snapshot(id, agent.worktree.as_deref(), &event.kind);
         }
@@ -122,14 +126,20 @@ impl State {
     /// The agent `id`'s own `kind` of event for its turn snapshots (27.2): a prompt takes one of
     /// `worktree` (a repository's, not a folder project's), an edit before it is done makes it
     /// late, its end drops its snapshots. Git runs on a blocking thread, never on the hook's path;
-    /// the watched worktree's changes are sent again once it is done.
-    fn turn_snapshot(self: &Arc<Self>, id: &str, worktree: Option<&str>, kind: &EventKind) {
+    /// the watched worktree's changes are sent again once it is done. Returns the task doing it,
+    /// when there is one.
+    fn turn_snapshot(
+        self: &Arc<Self>,
+        id: &str,
+        worktree: Option<&str>,
+        kind: &EventKind,
+    ) -> Option<tokio::task::JoinHandle<()>> {
         let (state, snapshots, id) = (self.clone(), self.snapshots.clone(), id.to_owned());
         match (kind, worktree) {
             (EventKind::PromptSubmitted, Some(worktree)) => {
                 snapshots.started(&id);
                 let (worktree, started) = (worktree.to_owned(), crate::hook::now_ms());
-                tokio::spawn(async move {
+                Some(tokio::spawn(async move {
                     let blocking = state.clone();
                     let taken = tokio::task::spawn_blocking(move || {
                         // A folder project's folder (23.1) is in no repository: git refuses it.
@@ -143,20 +153,19 @@ impl State {
                         Ok(worktree) => state.rewatch(Some(&worktree)).await,
                         Err(err) => eprintln!("hive: warning: no snapshot of this turn: {err}"),
                     }
-                });
+                }))
             }
             (EventKind::ToolFinished { tool: Some(tool) }, _)
                 if snapshot::EDITS.contains(&tool.as_str()) =>
             {
                 snapshots.edited(&id);
+                None
             }
-            (EventKind::SessionEnded { .. }, _) => {
-                tokio::spawn(async move {
-                    let _ = tokio::task::spawn_blocking(move || snapshots.end(&id)).await;
-                    state.rewatch(None).await;
-                });
-            }
-            _ => {}
+            (EventKind::SessionEnded { .. }, _) => Some(tokio::spawn(async move {
+                let _ = tokio::task::spawn_blocking(move || snapshots.end(&id)).await;
+                state.rewatch(None).await;
+            })),
+            _ => None,
         }
     }
 
@@ -303,7 +312,18 @@ impl State {
                 self.to_app(agent.channel, &message).await;
             }
         }
+        self.expire_background(&mut agents, now).await;
         self.power_changed(&agents);
+    }
+
+    /// Drops the background commands that ended 10 s or more before `now` (28.8), sending each
+    /// agent's new state.
+    async fn expire_background(&self, agents: &mut HashMap<String, Agent>, now: Instant) {
+        for (id, agent) in agents.iter_mut() {
+            if let Some(message) = agent.expire(id, now) {
+                self.to_app(agent.channel, &message).await;
+            }
+        }
     }
 }
 
@@ -380,5 +400,63 @@ mod tests {
         state.agents.lock().await.remove("busy");
         state.tick_agents(&quiet, now).await;
         assert_eq!(calls.taken(), vec![true, false, true, false]);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn an_ended_background_command_leaves_on_the_tick_ten_seconds_later() {
+        use crate::adapter::{Adapter, ClaudeCode};
+        let dir = tempfile::tempdir().unwrap();
+        let state = super::super::test_state(dir.path());
+        let start = Instant::now();
+        let event = |name: &str, extra: serde_json::Value| {
+            let mut payload = serde_json::json!({"session_id": "s"});
+            for (k, v) in extra.as_object().unwrap() {
+                payload[k] = v.clone();
+            }
+            ClaudeCode.translate(name, Some("1".into()), payload)
+        };
+        let launch = event(
+            "PostToolUse",
+            serde_json::json!({"tool_name": "Bash", "tool_response": {"backgroundTaskId": "b1"}}),
+        );
+        let stop = event("Stop", serde_json::json!({"background_tasks": []}));
+        let mut agent = Agent::new(1, start, 0);
+        agent.apply("s", &launch, 1, start, &|_| None);
+        agent.apply("s", &stop, 2, start, &|_| None);
+        assert_eq!(agent.background_count(), 1);
+        state.agents.lock().await.insert("s".into(), agent);
+        // On the same tick, a working agent whose terminal went quiet waits for you.
+        state
+            .agents
+            .lock()
+            .await
+            .insert("w".into(), Agent::working(2, start));
+        let quiet = HashMap::from([(2, start)]);
+        state.tick_agents(&quiet, start).await;
+        assert_eq!(state.agents.lock().await["s"].background_count(), 1);
+        state
+            .tick_agents(&quiet, start + crate::background::SHOWN_ENDED)
+            .await;
+        let agents = state.agents.lock().await;
+        assert_eq!(agents["s"].background_count(), 0);
+        assert!(!agents["w"].works());
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_prompt_in_a_folder_hive_does_not_follow_takes_no_snapshot() {
+        let dir = tempfile::tempdir().unwrap();
+        let state = super::super::test_state(dir.path());
+        let elsewhere = dir.path().join("elsewhere");
+        std::fs::create_dir(&elsewhere).unwrap();
+        let id = elsewhere.display().to_string();
+        let task = state.turn_snapshot("s", Some(&id), &EventKind::PromptSubmitted);
+        task.unwrap().await.unwrap();
+        assert!(state.snapshots.turns(&elsewhere, &id).is_empty());
+        // Nothing to do for another event.
+        assert!(
+            state
+                .turn_snapshot("s", Some(&id), &EventKind::TurnFinished)
+                .is_none()
+        );
     }
 }

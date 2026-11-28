@@ -3,6 +3,8 @@ import type {
   AgentState,
   Alert,
   AppMode,
+  BackgroundCommand,
+  BackgroundStatus,
   ChangedFile,
   CommitInfo,
   DiffBase,
@@ -1322,11 +1324,78 @@ export function createMockTransport(
   });
   // The typed line stands in for the tool call it is doing.
   const states = new Map<string, AgentState>();
+  /** Each agent's background commands (28.8), as the service lists them. */
+  const backgrounds = new Map<string, BackgroundCommand[]>();
   const setState = (id: string, state: AgentState, activity: string | null = null) => {
     const alert = mockAlert(states.get(id), state);
     states.set(id, state);
     const status = agentStatus(state, activity, Date.now(), alert);
-    later({ type: "agent_state", id, ...status, subagents: [] });
+    const background = backgrounds.get(id) ?? [];
+    const listed = background.length ? { background } : {};
+    later({ type: "agent_state", id, ...status, subagents: [], ...listed });
+  };
+  /** The agent's state again, its background commands changed (no alert). */
+  const resendState = (id: string) => {
+    const state = states.get(id) ?? "idle";
+    const background = backgrounds.get(id) ?? [];
+    const listed = background.length ? { background } : {};
+    later({ type: "agent_state", id, ...agentStatus(state), subagents: [], ...listed });
+  };
+  /**
+   * Stand-ins for an agent's background commands (28.8), typed in its terminal: `bg-start <id>
+   * <command>` (a `run_in_background` launch), `bg-end <id> <status> [exit]` (its end, which
+   * stays listed 10 s, as the service keeps it).
+   */
+  const backgroundMarks = (channel: number, agent: string, line: string) => {
+    const [word, id = "", ...rest] = line.split(" ");
+    const listed = backgrounds.get(agent) ?? [];
+    if (word === "bg-start" && id) {
+      const command = rest.join(" ");
+      const started: BackgroundCommand = {
+        id,
+        kind: "shell",
+        command,
+        description: null,
+        by: null,
+        since_ms: Date.now(),
+      };
+      backgrounds.set(agent, [...listed.filter((c) => c.id !== id), started]);
+      resendState(agent);
+    }
+    const ended = listed.find((c) => c.id === id && !c.ended);
+    if (word !== "bg-end" || !ended) return;
+    const status = (rest[0] ?? "unknown") as BackgroundStatus;
+    const exit = rest[1] === undefined ? null : Number(rest[1]);
+    // As `BackgroundAlert::of`: failed, or a non-zero exit of a completed one.
+    const failed = status === "failed" || (status === "completed" && !!exit);
+    const alert = failed ? ("failed" as const) : ("quiet" as const);
+    const end = { status, exit, ms: Date.now(), alert };
+    backgrounds.set(
+      agent,
+      listed.map((c) => (c === ended ? { ...c, ended: end } : c)),
+    );
+    resendState(agent);
+    const secs = Math.floor((end.ms - ended.since_ms) / 1000);
+    const { since_ms: _, ...command } = ended;
+    const notify = failed;
+    later({
+      type: "background_finished",
+      channel,
+      agent,
+      ...command,
+      status,
+      exit,
+      secs,
+      alert,
+      notify,
+    });
+    setTimeout(() => {
+      backgrounds.set(
+        agent,
+        (backgrounds.get(agent) ?? []).filter((c) => c.id !== id),
+      );
+      resendState(agent);
+    }, 10_000);
   };
   // A stand-in for `projects::place` (without resolving links): the deepest worktree holding it.
   const place = (cwd: string) =>
@@ -2255,6 +2324,7 @@ export function createMockTransport(
         if (terminal.agent && line.startsWith("state ") && URGENCY.includes(next)) {
           setState(terminal.agent, next);
         }
+        if (terminal.agent && line.startsWith("bg-")) backgroundMarks(id, terminal.agent, line);
         // `title <name>` names its session, as Claude Code's own title would (`agent_title`).
         if (terminal.agent && line.startsWith("title ")) {
           later({ type: "agent_title", channel: id, id: terminal.agent, title: line.slice(6) });

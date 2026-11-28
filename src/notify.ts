@@ -1,5 +1,5 @@
 import { agentHost, spaceLabel } from "./hosts";
-import type { AgentState, HostMessage, ServiceMessage } from "./protocol";
+import type { AgentState, BackgroundStatus, HostMessage, ServiceMessage } from "./protocol";
 import { goToAgent } from "./shortcuts";
 import {
   activateTab,
@@ -143,6 +143,10 @@ export function notify(
     if (notifies) void transport.showNotification(text.title, text.body, text.agent);
     return;
   }
+  if (message.type === "background_finished") {
+    backgroundFinished(s, message, now, wall);
+    return;
+  }
   if (message.type !== "agent_state" || !message.alert) return;
   // Right after a reattach, the host's summary stands for its alerts (`summarize`).
   if (message.host !== undefined && settling.has(message.host)) return;
@@ -152,6 +156,56 @@ export function notify(
   addToInbox({ agent: id, state, at: wall, text: text.title, space: spaceName(s, id), ...host });
   toneAt(s, now);
   if (message.notify) void transport.showNotification(text.title, text.body, id);
+}
+
+type BackgroundFinished = Extract<ServiceMessage, { type: "background_finished" }>;
+
+/**
+ * One of an agent's background commands ended (28.8): an inbox item on its terminal (a click shows
+ * it), red when the service says it `failed`. Only a failure plays the tone, and shows an OS
+ * notification when the service says `notify`; any other end is quiet, since Claude's own turn
+ * that it wakes alerts as usual.
+ */
+function backgroundFinished(
+  s: HiveState,
+  m: BackgroundFinished & { host?: string },
+  now: number,
+  wall: number,
+): void {
+  const text = backgroundText(s, m);
+  const failed = m.alert === "failed";
+  const host = m.host === undefined ? {} : { host: m.host };
+  addToInbox({ terminal: m.channel, failed, at: wall, text: text.title, ...host });
+  if (!failed) return;
+  toneAt(s, now);
+  if (!m.notify) return;
+  // The OS keeps its notifications (Notification Center), and a command line may hold a secret:
+  // the notification names the command by its description only.
+  const shown = backgroundText(s, { ...m, command: "" });
+  void transport.showNotification(shown.title, shown.body, shown.agent);
+}
+
+/** How a background command that did not fail ended, in its alert (28.8). */
+const NEUTRAL_END: Record<BackgroundStatus, string> = {
+  completed: "finished",
+  failed: "failed",
+  stopped: "stopped",
+  unknown: "ended",
+};
+
+/**
+ * A background command's alert text (28.8): "Background command failed (exit 3): Build" (its
+ * description, else its command line), body "<terminal> · after 12s".
+ */
+export function backgroundText(s: HiveState, m: BackgroundFinished): AlertText {
+  const what = m.kind === "monitor" ? "Monitor" : "Background command";
+  const code = m.exit !== null && m.exit !== 0 ? ` (exit ${m.exit})` : "";
+  // Only a known success says it finished; an end Claude Code gave no result for is neutral.
+  const how = m.alert === "failed" ? `failed${code}` : NEUTRAL_END[m.status];
+  const named = m.description || m.command;
+  const title = named ? `${what} ${how}: ${named}` : `${what} ${how}`;
+  const body = `${terminalName(s, m.channel)} · after ${duration(m.secs)}`;
+  return { agent: `${TERMINAL_CLICK}${m.channel}`, title, body };
 }
 
 type PullEnded = Extract<ServiceMessage, { type: "pull_ended" }>;

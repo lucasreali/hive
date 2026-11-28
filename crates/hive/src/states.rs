@@ -5,7 +5,8 @@ use std::collections::{HashMap, HashSet};
 use std::time::{Duration, Instant};
 
 use hive_protocol::{
-    AgentEvent, AgentState, Alert, Control, EventKind, ListedAgent, Notification, SubagentState,
+    AgentEvent, AgentState, Alert, BackgroundAlert, Control, EventKind, ListedAgent, Notification,
+    SubagentState,
 };
 use serde_json::Value;
 
@@ -80,6 +81,8 @@ pub struct Agent {
     compacting: Option<(AgentState, Option<String>)>,
     /// Wall clock (ms since the epoch) when the displayed state began.
     since_ms: u64,
+    /// Its and its subagents' background commands (28.8).
+    background: crate::background::Commands,
     /// A moment and its wall clock time: wall times are counted from here with the monotonic
     /// clock, so the caller's clocks are the only ones used. Set again by [`Agent::clock`].
     origin: (Instant, u64),
@@ -114,6 +117,7 @@ impl Agent {
             activity: None,
             compacting: None,
             since_ms: wall_ms,
+            background: Default::default(),
             origin: (now, wall_ms),
         }
     }
@@ -182,6 +186,7 @@ impl Agent {
         let stale = self.stamps.get(&stream).is_some_and(|&last| sent_ns < last);
         let message = self.changed(id, now, false, |agent| {
             agent.last_event = now;
+            agent.follow_background(event, sent_ns, now);
             if let EventKind::WorktreeRemoved { path: Some(path) } = &event.kind {
                 let gone = agent
                     .subagents
@@ -331,6 +336,52 @@ impl Agent {
             *last = sent_ns.max(*last);
         }
         message
+    }
+
+    /// The background commands an event tells of (28.8), whatever its order: a launch, a
+    /// `background_tasks` list (its own order check is by `sent_ns`), or the agent's own
+    /// `SessionEnd`, which forgets them all with no message.
+    fn follow_background(&mut self, event: &AgentEvent, sent_ns: u64, now: Instant) {
+        let wall = self.wall(now);
+        let by = event.subagent.as_ref().map(|s| s.id.as_str());
+        match (&event.kind, by) {
+            (EventKind::ToolFinished { .. }, _) => {
+                self.background.launch(&event.raw, by, sent_ns, wall, now);
+            }
+            (EventKind::SessionEnded { .. }, None) => self.background.clear(),
+            _ => {}
+        }
+        if let Some(live) = event.raw.get("background_tasks").and_then(Value::as_array) {
+            self.background.reconcile(live, sent_ns, wall, now);
+        }
+    }
+
+    /// The `background_finished` messages of the commands that ended since the last call,
+    /// in the order they ended: a failure notifies when the agent is out of view.
+    pub fn finished(&mut self, id: &str) -> Vec<Control> {
+        let watched = self.watched;
+        let ended = self.background.take_ended().into_iter();
+        ended
+            .map(|ended| Control::BackgroundFinished {
+                agent: id.to_owned(),
+                id: ended.command.id,
+                kind: ended.command.kind,
+                command: ended.command.command,
+                description: ended.command.description,
+                by: ended.command.by,
+                status: ended.status,
+                exit: ended.exit,
+                secs: ended.secs,
+                alert: ended.alert,
+                notify: ended.alert == BackgroundAlert::Failed && !watched,
+            })
+            .collect()
+    }
+
+    /// Drops the background commands that ended 10 s or more before `now`; the new message
+    /// when any went.
+    pub fn expire(&mut self, id: &str, now: Instant) -> Option<Control> {
+        self.background.expire(now).then(|| self.message(id))
     }
 
     /// Keeps each waiting subagent's launches that are still in `live` (`background_tasks`),
@@ -501,6 +552,7 @@ impl Agent {
             subagents: self.subagents.clone(),
             activity: self.activity.clone(),
             since_ms: self.since_ms,
+            background: self.background.listed(),
         }
     }
 
@@ -712,6 +764,11 @@ impl Agent {
         let mut agent = Self::new(channel, now, 0);
         agent.state = AgentState::Working;
         agent
+    }
+
+    /// How many background commands it lists, for other modules' tests.
+    pub fn background_count(&self) -> usize {
+        self.background.listed().len()
     }
 }
 
@@ -1095,6 +1152,7 @@ mod tests {
                 subagents: vec![],
                 activity: None,
                 since_ms: 1_005,
+                background: vec![],
             })
         );
     }
@@ -1380,6 +1438,7 @@ mod tests {
                 }],
                 activity: None,
                 since_ms: 0,
+                background: vec![],
             })
         );
         agent.feed("s", &hook("SubagentStart", Some("b"), json!({})), now);
@@ -1572,6 +1631,7 @@ mod tests {
                 subagents: listed.subagents.clone(),
                 activity: listed.activity.clone(),
                 since_ms: listed.since_ms,
+                background: vec![],
             }
         );
         assert_eq!(listed, expected);
@@ -2331,5 +2391,158 @@ mod tests {
             now,
         );
         assert_eq!(shown(&agent).1.len(), 1);
+    }
+
+    /// A Bash `run_in_background` `PostToolUse` (SYNTHETIC, as `hive::slim` forwards it).
+    fn background_launch(sub: Option<&str>, task: &str, command: &str) -> AgentEvent {
+        hook(
+            "PostToolUse",
+            sub,
+            json!({
+                "tool_name": "Bash",
+                "tool_input": {"command": command, "description": "Run", "run_in_background": true},
+                "tool_response": {"backgroundTaskId": task},
+            }),
+        )
+    }
+
+    /// The agent's background commands as `agent_state` lists them, after checking `sent` is
+    /// that message.
+    fn listed(agent: &Agent, sent: &Option<Control>) -> Vec<(String, Option<String>, bool)> {
+        assert_eq!(sent.as_ref(), Some(&agent.message("s")));
+        let background = agent.background.listed().into_iter();
+        background
+            .map(|c| (c.id, c.by, c.ended.is_some()))
+            .collect()
+    }
+
+    #[test]
+    fn background_commands_are_listed_until_a_list_without_them_ends_them_quietly() {
+        let start = Instant::now();
+        let mut agent = Agent::new(4, start, 1_000);
+        let own = agent.feed("s", &background_launch(None, "b1", "sleep 20"), start);
+        assert_eq!(listed(&agent, &own), [("b1".into(), None, false)]);
+        agent.feed("s", &hook("SubagentStart", Some("a"), json!({})), start);
+        let sub = agent.feed("s", &background_launch(Some("a"), "b2", "make"), start);
+        assert_eq!(
+            listed(&agent, &sub),
+            [
+                ("b1".into(), None, false),
+                ("b2".into(), Some("a".into()), false)
+            ]
+        );
+        assert!(agent.finished("s").is_empty());
+        // The turn ends with only b2 running: b1 ended, and says so once.
+        let later = start + Duration::from_secs(12);
+        let tasks = json!([{"id": "b2", "type": "shell", "status": "running", "command": "make"}]);
+        let stop = agent.feed(
+            "s",
+            &hook("Stop", None, json!({"background_tasks": tasks})),
+            later,
+        );
+        assert_eq!(
+            listed(&agent, &stop),
+            [
+                ("b1".into(), None, true),
+                ("b2".into(), Some("a".into()), false)
+            ]
+        );
+        assert_eq!(
+            agent.finished("s"),
+            [Control::BackgroundFinished {
+                agent: "s".into(),
+                id: "b1".into(),
+                kind: hive_protocol::BackgroundKind::Shell,
+                command: "sleep 20".into(),
+                description: Some("Run".into()),
+                by: None,
+                status: hive_protocol::BackgroundStatus::Unknown,
+                exit: None,
+                secs: 12,
+                alert: BackgroundAlert::Quiet,
+                notify: false,
+            }]
+        );
+        assert!(agent.finished("s").is_empty());
+        // Ten seconds later it leaves the row.
+        assert_eq!(agent.expire("s", later + Duration::from_secs(9)), None);
+        let gone = agent.expire("s", later + Duration::from_secs(10));
+        assert_eq!(
+            listed(&agent, &gone),
+            [("b2".into(), Some("a".into()), false)]
+        );
+        assert_eq!(agent.expire("s", later + Duration::from_secs(60)), None);
+    }
+
+    #[test]
+    fn a_failed_background_command_notifies_only_out_of_view() {
+        let now = Instant::now();
+        let mut agent = Agent::new(1, now, 0);
+        agent.feed("s", &background_launch(None, "b1", "x"), now);
+        agent.feed("s", &background_launch(None, "b2", "y"), now);
+        let failed = hive_protocol::BackgroundStatus::Failed;
+        agent.background.end("b1", failed, Some(2), 0, now);
+        agent.watched = true;
+        agent.background.end("b2", failed, None, 0, now);
+        // Watched when the message is made: in view, no OS notification.
+        let quiet = |m: &Control| {
+            let alert = BackgroundAlert::Failed;
+            matches!(m, Control::BackgroundFinished { alert: a, notify: false, .. } if *a == alert)
+        };
+        let notified = agent.finished("s");
+        assert_eq!(notified.len(), 2);
+        assert!(notified.iter().all(quiet));
+        agent.feed("s", &background_launch(None, "b3", "z"), now);
+        agent.watched = false;
+        agent
+            .background
+            .end("b3", hive_protocol::BackgroundStatus::Failed, None, 0, now);
+        let out = agent.finished("s");
+        assert!(matches!(
+            out[..],
+            [Control::BackgroundFinished { notify: true, .. }]
+        ));
+        agent.feed("s", &background_launch(None, "b4", "z"), now);
+        agent
+            .background
+            .end("b4", hive_protocol::BackgroundStatus::Stopped, None, 0, now);
+        let out = agent.finished("s");
+        assert!(matches!(
+            out[..],
+            [Control::BackgroundFinished { notify: false, .. }]
+        ));
+    }
+
+    #[test]
+    fn a_late_launch_still_counts_and_the_session_end_drops_them_all_silently() {
+        let now = Instant::now();
+        let mut agent = Agent::new(1, now, 0);
+        let none = |_: &str| None;
+        agent.apply(
+            "s",
+            &hook("UserPromptSubmit", None, json!({})),
+            50,
+            now,
+            &none,
+        );
+        // Older than the last event applied: its state is not applied, its launch is.
+        let late = agent.apply("s", &background_launch(None, "b1", "x"), 40, now, &none);
+        assert_eq!(listed(&agent, &late), [("b1".into(), None, false)]);
+        // A subagent's `SessionEnd` keeps the commands; the agent's own drops them, unsent.
+        agent.feed("s", &background_launch(Some("a"), "b2", "y"), now);
+        agent.apply(
+            "s",
+            &hook("SessionEnd", Some("a"), json!({})),
+            60,
+            now,
+            &none,
+        );
+        assert_eq!(agent.background.listed().len(), 2);
+        agent.apply("s", &stop_with("Stop", None, &[]), 70, now, &none);
+        let end = agent.apply("s", &hook("SessionEnd", None, json!({})), 80, now, &none);
+        assert!(
+            matches!(end, Some(Control::AgentState { ref background, .. }) if background.is_empty())
+        );
+        assert!(agent.finished("s").is_empty());
     }
 }

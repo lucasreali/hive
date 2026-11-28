@@ -103,6 +103,18 @@ export type ServiceMessage =
   | { type: "agent_removed"; channel: number; id: string }
   | { type: "agent_title"; channel: number; id: string; title: string }
   | ({ type: "agent_state"; id: string } & AgentStatus)
+  // 28.8: one of the agent's background commands ended, sent once; `alert` is the service's call
+  // (`failed` plays the tone, and `notify` says whether it also shows an OS notification).
+  | ({
+      type: "background_finished";
+      channel: number;
+      agent: string;
+      status: BackgroundStatus;
+      exit: number | null;
+      secs: number;
+      alert: BackgroundAlert;
+      notify: boolean;
+    } & Omit<BackgroundCommand, "since_ms" | "ended">)
   | ({ type: "agent_usage"; id: string } & AgentUsage)
   // The current account's 5-hour window (12.1); null when none came yet or it reset.
   // `week` (15.3) is absent from an older service, and so are the pace's `limit_at` and
@@ -791,7 +803,30 @@ export type AgentStatus = {
   /** Show an OS notification for `alert`: the service's call (out of the focused window's view). */
   notify: boolean;
   subagents: Subagent[];
+  /** Its background commands (28.8), running ones oldest first; absent when there are none. */
+  background?: BackgroundCommand[];
 } & Doing;
+
+/**
+ * Mirrors `hive_protocol::BackgroundCommand` (28.8): a `run_in_background` Bash command or a
+ * `Monitor` watch of the agent (`by` null) or of one of its subagents, listed while it runs and
+ * for 10 s after it `ended`.
+ */
+export type BackgroundCommand = {
+  id: string;
+  kind: "shell" | "monitor";
+  /** Cut at 1000 characters by the service; empty when not known. */
+  command: string;
+  description: string | null;
+  by: string | null;
+  since_ms: number;
+  /** How it ended; `alert` is the service's call that it failed. */
+  ended?: { status: BackgroundStatus; exit: number | null; ms: number; alert: BackgroundAlert };
+};
+/** How a background command ended; `unknown` when it only left Claude Code's list. */
+export type BackgroundStatus = "completed" | "failed" | "stopped" | "unknown";
+/** Whether its end alerts: `failed` plays the tone, `quiet` is only an inbox item. */
+export type BackgroundAlert = "quiet" | "failed";
 
 /**
  * What `agent_usage` says: the last turn's context, the window the service assumes, and the

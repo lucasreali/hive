@@ -3077,6 +3077,7 @@ const REMOTE_TO_UI: &[&str] = &[
     "agent_removed",
     "agent_title",
     "agent_state",
+    "background_finished",
     "agent_usage",
     "subagent_worktrees",
     "session_usage",

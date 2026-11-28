@@ -1,4 +1,4 @@
-import { expect, test } from "bun:test";
+import { expect, jest, test } from "bun:test";
 import type {
   AgentState,
   Dirs,
@@ -416,6 +416,64 @@ test("typed stand-ins send a terminal's progress, long command and notification"
     { type: "terminal_notification", channel: id, title: "make", body: "done", notify: true },
     { type: "terminal_notification", channel: id, title: "bare", body: "", notify: true },
   ]);
+});
+
+test("typed stand-ins start and end an agent's background commands (28.8)", async () => {
+  const { transport, messages, id } = await opened();
+  // Not an agent's terminal yet: nothing.
+  await transport.writeTerminal(id, "bg-start b0 sleep 1\r");
+  await transport.writeTerminal(id, "claude\r");
+  await tick();
+  const agent = `mock-session-${id}`;
+  const states = () =>
+    messages.flatMap((m) => (m.type === "agent_state" && m.id === agent ? [m] : []));
+  expect(states().every((m) => m.background === undefined)).toBe(true);
+  for (const line of ["bg-start b1 npm run dev", "bg-start b2 make", "bg-start b3 x", "bg-start"]) {
+    await transport.writeTerminal(id, `${line}\r`);
+  }
+  await tick();
+  const listed = () =>
+    states()
+      .at(-1)
+      ?.background?.map((c) => [c.id, c.command, c.ended?.alert]);
+  expect(listed()).toEqual([
+    ["b1", "npm run dev", undefined],
+    ["b2", "make", undefined],
+    ["b3", "x", undefined],
+  ]);
+  jest.useFakeTimers();
+  try {
+    for (const line of [
+      "bg-end b1 completed 0",
+      "bg-end b2 completed 3",
+      "bg-end b3",
+      "bg-end b9",
+    ]) {
+      await transport.writeTerminal(id, `${line}\r`);
+    }
+    // A typed line sets the agent working: the list stays on that state too.
+    await transport.writeTerminal(id, "hello\r");
+    jest.advanceTimersByTime(0);
+    expect(listed()).toEqual([
+      ["b1", "npm run dev", "quiet"],
+      ["b2", "make", "failed"],
+      ["b3", "x", "quiet"],
+    ]);
+    const ended = messages.flatMap((m) =>
+      m.type === "background_finished" ? [[m.id, m.status, m.exit, m.alert, m.notify]] : [],
+    );
+    expect(ended).toEqual([
+      ["b1", "completed", 0, "quiet", false],
+      ["b2", "completed", 3, "failed", true],
+      ["b3", "unknown", null, "quiet", false],
+    ]);
+    // Ended ones leave after 10 s.
+    jest.advanceTimersByTime(10_000);
+    jest.advanceTimersByTime(0);
+    expect(states().at(-1)?.background).toBeUndefined();
+  } finally {
+    jest.useRealTimers();
+  }
 });
 
 test("a terminal prints a prompt, echoes input and repeats the line", async () => {

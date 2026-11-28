@@ -356,6 +356,30 @@ pub enum Control {
         activity: Option<String>,
         /// Wall clock (ms since the Unix epoch) when the displayed `state` began.
         since_ms: u64,
+        /// Its background commands (28.8): the running ones, oldest first, and those that
+        /// ended in the last 10 s; omitted when there are none.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        background: Vec<BackgroundCommand>,
+    },
+    /// Service → app (28.8): one of the agent's background commands (`agent`, its session
+    /// id; `id`, the task id) ended, once per command: an inbox item. `alert` is the service's
+    /// call: `failed` (status `failed`, or an exit code other than 0) also plays the tone and,
+    /// when `notify` (the agent is not in view of the focused window), an OS notification;
+    /// `quiet` is the inbox item alone. Sent on the agent's terminal channel.
+    BackgroundFinished {
+        agent: String,
+        id: String,
+        kind: BackgroundKind,
+        command: String,
+        description: Option<String>,
+        /// The subagent that started it, when known.
+        by: Option<String>,
+        status: BackgroundStatus,
+        exit: Option<i32>,
+        /// How long it ran, as the service saw it.
+        secs: u64,
+        alert: BackgroundAlert,
+        notify: bool,
     },
     /// The worktrees a live subagent works in as its own (#22) and no agent runs in: the
     /// sidebar shows each only under its subagent, not in its project's list. Sent when the
@@ -3012,6 +3036,84 @@ pub struct ListedUsage {
     pub output_tokens: u64,
 }
 
+/// One of an agent's background commands (28.8, `docs/spike/background-commands.md`): a
+/// `run_in_background` Bash command or a `Monitor` watch, from its `PostToolUse` or Claude
+/// Code's `background_tasks`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BackgroundCommand {
+    /// Claude Code's task id.
+    pub id: String,
+    pub kind: BackgroundKind,
+    /// The command line, cleaned and cut at 1000 characters; empty when not known.
+    pub command: String,
+    /// Claude's description of it, cut at 200 characters.
+    pub description: Option<String>,
+    /// The subagent that started it, when known.
+    pub by: Option<String>,
+    /// Wall clock (ms since the Unix epoch) when the service first saw it.
+    pub since_ms: u64,
+    /// How it ended, for the 10 s it stays listed afterwards.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ended: Option<BackgroundEnd>,
+}
+
+/// How a background command ended (28.8).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BackgroundEnd {
+    pub status: BackgroundStatus,
+    /// The exit code Claude Code's task notice named, when it named one.
+    pub exit: Option<i32>,
+    /// Wall clock (ms since the Unix epoch) when it ended.
+    pub ms: u64,
+    /// Whether it failed, as [`BackgroundAlert::of`] says, so the row shows it red.
+    pub alert: BackgroundAlert,
+}
+
+/// What kind of background task a [`BackgroundCommand`] is: a shell command or a `Monitor`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BackgroundKind {
+    Shell,
+    Monitor,
+}
+
+/// How a background command ended: Claude Code's task notice's status (`completed`,
+/// `failed`, `stopped`), or `unknown` when it only left `background_tasks`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BackgroundStatus {
+    Completed,
+    Failed,
+    Stopped,
+    Unknown,
+}
+
+/// Whether a background command's end alerts (28.8): `failed` plays the tone (and an OS
+/// notification out of view), `quiet` is only an inbox item.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BackgroundAlert {
+    Quiet,
+    Failed,
+}
+
+impl BackgroundAlert {
+    /// The alert of a command that ended with `status` and `exit`: `failed` for status
+    /// `failed` or an exit code other than 0; a stopped or unknown end is quiet.
+    pub fn of(status: BackgroundStatus, exit: Option<i32>) -> Self {
+        let failed = match status {
+            BackgroundStatus::Failed => true,
+            BackgroundStatus::Completed => exit.is_some_and(|code| code != 0),
+            BackgroundStatus::Stopped | BackgroundStatus::Unknown => false,
+        };
+        if failed {
+            BackgroundAlert::Failed
+        } else {
+            BackgroundAlert::Quiet
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SubagentState {
     pub id: String,
@@ -3392,6 +3494,103 @@ mod tests {
     }
 
     #[test]
+    fn background_commands_ride_on_agent_state_and_their_end_is_its_own_message() {
+        let running = BackgroundCommand {
+            id: "b1".into(),
+            kind: BackgroundKind::Shell,
+            command: "sleep 20".into(),
+            description: Some("Wait".into()),
+            by: None,
+            since_ms: 3,
+            ended: None,
+        };
+        let ended = BackgroundCommand {
+            id: "m1".into(),
+            kind: BackgroundKind::Monitor,
+            command: String::new(),
+            description: None,
+            by: Some("a".into()),
+            since_ms: 4,
+            ended: Some(BackgroundEnd {
+                status: BackgroundStatus::Unknown,
+                exit: None,
+                ms: 9,
+                alert: BackgroundAlert::Quiet,
+            }),
+        };
+        let msg = Control::AgentState {
+            id: "s".into(),
+            state: AgentState::WaitingYou,
+            urgency: 4,
+            pending: true,
+            interrupted: false,
+            alert: None,
+            notify: false,
+            subagents: vec![],
+            activity: None,
+            since_ms: 5,
+            background: vec![running, ended],
+        };
+        assert_eq!(
+            std::str::from_utf8(&Frame::control(1, &msg).payload).unwrap(),
+            r#"{"type":"agent_state","id":"s","state":"waiting_you","urgency":4,"pending":true,"interrupted":false,"alert":null,"notify":false,"subagents":[],"activity":null,"since_ms":5,"background":[{"id":"b1","kind":"shell","command":"sleep 20","description":"Wait","by":null,"since_ms":3},{"id":"m1","kind":"monitor","command":"","description":null,"by":"a","since_ms":4,"ended":{"status":"unknown","exit":null,"ms":9,"alert":"quiet"}}]}"#
+        );
+        assert_eq!(Frame::control(1, &msg).to_control().unwrap(), msg);
+        let finished = Control::BackgroundFinished {
+            agent: "s".into(),
+            id: "b1".into(),
+            kind: BackgroundKind::Shell,
+            command: "make".into(),
+            description: None,
+            by: None,
+            status: BackgroundStatus::Failed,
+            exit: Some(3),
+            secs: 12,
+            alert: BackgroundAlert::Failed,
+            notify: true,
+        };
+        assert_eq!(
+            std::str::from_utf8(&Frame::control(1, &finished).payload).unwrap(),
+            r#"{"type":"background_finished","agent":"s","id":"b1","kind":"shell","command":"make","description":null,"by":null,"status":"failed","exit":3,"secs":12,"alert":"failed","notify":true}"#
+        );
+        assert_eq!(Frame::control(1, &finished).to_control().unwrap(), finished);
+        let statuses = [
+            BackgroundStatus::Completed,
+            BackgroundStatus::Stopped,
+            BackgroundStatus::Unknown,
+        ];
+        assert_eq!(
+            serde_json::to_string(&statuses).unwrap(),
+            r#"["completed","stopped","unknown"]"#
+        );
+    }
+
+    #[test]
+    fn a_background_command_failed_on_its_status_or_a_non_zero_exit_never_when_stopped() {
+        use BackgroundAlert::{Failed, Quiet};
+        use BackgroundStatus as S;
+        let cases = [
+            (S::Failed, None, Failed),
+            (S::Failed, Some(0), Failed),
+            (S::Completed, Some(3), Failed),
+            (S::Completed, Some(-1), Failed),
+            (S::Completed, Some(0), Quiet),
+            (S::Completed, None, Quiet),
+            (S::Stopped, Some(3), Quiet),
+            (S::Stopped, None, Quiet),
+            (S::Unknown, Some(1), Quiet),
+            (S::Unknown, None, Quiet),
+        ];
+        for (status, exit, alert) in cases {
+            assert_eq!(
+                BackgroundAlert::of(status, exit),
+                alert,
+                "{status:?} {exit:?}"
+            );
+        }
+    }
+
+    #[test]
     fn agent_state_is_tagged_json() {
         let msg = Control::AgentState {
             id: "s".into(),
@@ -3412,6 +3611,7 @@ mod tests {
             }],
             activity: None,
             since_ms: 5,
+            background: vec![],
         };
         assert_eq!(
             &Frame::control(1, &msg).payload[..],

@@ -1,4 +1,4 @@
-import { PlusIcon as NewChatIcon } from "@phosphor-icons/react";
+import { PlusIcon as NewChatIcon, TerminalWindowIcon } from "@phosphor-icons/react";
 import {
   type KeyboardEvent,
   type MouseEvent,
@@ -14,6 +14,7 @@ import type {
   Agent,
   AgentState,
   AgentUsage,
+  BackgroundCommand,
   Doing,
   Project,
   Subagent,
@@ -548,10 +549,13 @@ function AgentRow({
           )}
         </button>
       </div>
-      {status && status.subagents.length > 0 && (
+      {status && (status.subagents.length > 0 || !!status.background?.length) && (
         <ul>
           {status.subagents.map((sub) => (
             <SubagentLine key={sub.id} sub={sub} />
+          ))}
+          {status.background?.map((command) => (
+            <BackgroundLine key={command.id} command={command} subagents={status.subagents} />
           ))}
         </ul>
       )}
@@ -574,4 +578,49 @@ function SubagentLine({ sub }: { sub: Subagent }) {
       <span className="subagent-time">{time}</span>
     </li>
   );
+}
+
+/**
+ * One of the agent's background commands (28.8): a quiet line after its subagents with a terminal
+ * icon, the subagent that started it (its teammate name or type, "subagent" once it left), the
+ * command's description (else its command line, else its kind) and how long it has run; the full
+ * command line is its tooltip. Ended, it stays 10 s (the service's) with its result, red when the
+ * service says it failed. Nothing to click: Hive only observes, the user stops it in Claude Code.
+ */
+function BackgroundLine({
+  command,
+  subagents,
+}: {
+  command: BackgroundCommand;
+  subagents: Subagent[];
+}) {
+  const time = useElapsed(command.since_ms);
+  const sub = subagents.find((s) => s.id === command.by);
+  const by = command.by && (sub?.teammate_name ?? sub?.agent_type ?? "subagent");
+  const kind = command.kind === "monitor" ? "Monitor" : "Background command";
+  const ended = command.ended;
+  return (
+    <li
+      className="subagent-line background-line"
+      title={command.command || undefined}
+      data-ended={ended ? true : undefined}
+      data-failed={ended?.alert === "failed" || undefined}
+    >
+      <TerminalWindowIcon className="background-icon" size={11} aria-hidden="true" />
+      {by && <span className="subagent-type">{by}</span>}
+      <span className="subagent-activity">{command.description || command.command || kind}</span>
+      <span className="subagent-time">{ended ? endedText(ended) : time}</span>
+    </li>
+  );
+}
+
+/**
+ * A background command's result on its line: "done" (a known success), "stopped", "ended" (no
+ * result known), "failed" or "exit 3".
+ */
+function endedText(ended: NonNullable<BackgroundCommand["ended"]>): string {
+  if (ended.alert === "failed") return ended.exit ? `exit ${ended.exit}` : "failed";
+  return { completed: "done", failed: "failed", stopped: "stopped", unknown: "ended" }[
+    ended.status
+  ];
 }
