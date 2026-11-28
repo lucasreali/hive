@@ -330,6 +330,8 @@ fn project(root: &Path, others: &[&Path]) -> Project {
         error: None,
         group: false,
         parent: None,
+        jj: false,
+        trunk: None,
         folder: false,
     }
 }
