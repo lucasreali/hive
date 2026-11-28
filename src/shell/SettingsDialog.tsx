@@ -35,6 +35,7 @@ import { homeText, isMac } from "../window";
 import { FolderField, useFolderListing } from "./FolderField";
 import { HostsSettings } from "./Hosts";
 import { CloseIcon, ICON } from "./icons";
+import { useKept } from "./panelPlace";
 import { SearchField } from "./SearchField";
 import { accountName, useGhAccounts } from "./SpaceDialog";
 
@@ -1626,10 +1627,12 @@ function Content({ section, query }: { section: Section; query: string }) {
  * service's refusal shows at the top. Terminals and the theme follow the stored settings.
  */
 export function SettingsDialog() {
+  // The section picked last opens again, for this run (28.27), unless one is asked for.
+  const [last, keepSection] = useKept<Section>("settings-section", "Terminal");
   const [section, setSection] = useState<Section>(() => {
     const s = useHive.getState();
     const asked = SECTIONS.find((name) => name === s.settingsSection);
-    return asked ?? (s.modalProject ? "Projects" : "Terminal");
+    return asked ?? (s.modalProject ? "Projects" : last);
   });
   const [query, setQuery] = useState("");
   const error = useHive((s) => s.settingsError);
@@ -1673,6 +1676,7 @@ export function SettingsDialog() {
                 aria-current={!query && name === section ? "page" : undefined}
                 onClick={() => {
                   setSection(name);
+                  keepSection(name);
                   setQuery("");
                 }}
               >

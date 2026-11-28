@@ -265,25 +265,29 @@ const LINKS = {
 /**
  * Opens a terminal in `cwd` (a worktree path) and adds its tab, shown. The Terminal exists
  * before the service is asked, so no output is lost before the tab appears. It gets the Claude
- * `account` when given (12.2), else the current one.
+ * `account` when given (12.2), else the current one. A chat resumed at launch takes no focus
+ * (`focus` false, 28.27: `addTab`).
  */
 export const openTerminal = (
   cwd: string,
   account?: AccountDir,
   // The host it runs on (26.18: null for this Mac); the host shown when not given.
   host: string | null = useHive.getState().host,
+  focus = true,
 ): Promise<number> =>
   startTerminal(
     cwd,
     (term, onData) => transport.openTerminal(cwd, term.cols, term.rows, onData, account, host),
     host,
+    focus,
   );
 
 /**
  * Terminal `id` back in a page that does not have it (`terminal_kept`): one the app kept through
  * a WebContent crash (18.21), or one a remote service kept while the app was gone (26.16), whose
  * ring the service replays. A new Terminal and tab take its output from now on, then it is
- * redrawn ({@link redraw}) and resized again once its pane is fitted.
+ * redrawn ({@link redraw}) and resized again once its pane is fitted. Its tab takes no focus
+ * (28.27: `addTab`).
  */
 export const reattachTerminal = (id: number, cwd: string, host?: string): Promise<number> =>
   startTerminal(
@@ -294,6 +298,7 @@ export const reattachTerminal = (id: number, cwd: string, host?: string): Promis
       return id;
     },
     host ?? null,
+    false,
   );
 
 /**
@@ -321,6 +326,8 @@ async function startTerminal(
   // The host it runs on (26.18: null for this Mac), as its request went: never the one shown
   // since (26.18 review).
   host: string | null,
+  // Whether its tab takes the focus (`addTab`).
+  focus = true,
 ): Promise<number> {
   const term = new Terminal({
     lineHeight: 1.2,
@@ -373,7 +380,7 @@ async function startTerminal(
   el.addEventListener("paste", (event) => onPaste(term, event), { capture: true });
   copyOnSelect(term, el);
   entries.set(id, { term, fit, search, el, webgl: null, marks });
-  addTab(id, cwd, host ?? undefined);
+  addTab(id, cwd, host ?? undefined, focus);
   return id;
 }
 
@@ -387,7 +394,9 @@ export const openClaude = (
   args = "",
   account?: AccountDir,
   host?: string | null,
-): Promise<number> => openWith(cwd, `claude${args && ` ${args}`}`, account, host);
+  // Whether its tab takes the focus: a chat resumed at launch does not (28.27).
+  focus = true,
+): Promise<number> => openWith(cwd, `claude${args && ` ${args}`}`, account, host, focus);
 
 /**
  * For a click or key that opens a terminal (`openTerminal`, `openClaude`, `openWith`,
@@ -403,8 +412,9 @@ export async function openWith(
   account?: AccountDir,
   // The host it runs on (26.18: null for this Mac); the host shown when not given.
   host?: string | null,
+  focus = true,
 ): Promise<number> {
-  const id = await openTerminal(cwd, account, host);
+  const id = await openTerminal(cwd, account, host, focus);
   await transport.writeTerminal(id, `${command}\r`);
   return id;
 }

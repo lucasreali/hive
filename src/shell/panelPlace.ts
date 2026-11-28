@@ -1,4 +1,11 @@
-import { type RefObject, type UIEvent, useLayoutEffect, useRef } from "react";
+import {
+  type RefObject,
+  type UIEvent,
+  useCallback,
+  useLayoutEffect,
+  useReducer,
+  useRef,
+} from "react";
 import { PLACES_LIMIT } from "../persist";
 
 // Where each right-panel view of each worktree was left (28.19), this run only (UI state, #37):
@@ -27,8 +34,51 @@ export function keepViewPlace(key: string, change: Partial<ViewPlace>): void {
   }
 }
 
-/** Forgets every view's place (the tests start each from none). */
-export const forgetViewPlaces = () => places.clear();
+/** Forgets every view's place and every kept choice (the tests start each from none). */
+export const forgetViewPlaces = () => {
+  places.clear();
+  choices.clear();
+};
+
+/**
+ * Choices kept for this run only (28.27, UI state, #37), by key: a view's search or filter per
+ * worktree (`viewKey`), the Settings section, the space switcher's open hosts.
+ */
+const choices = new Map<string, unknown>();
+/** How many choices are kept; the least recently changed are forgotten first. */
+export const CHOICES_LIMIT = 1000;
+
+/** Keeps `value` as choice `key`, the least recently changed past the limit forgotten. */
+function keepChoice(key: string, value: unknown): void {
+  choices.delete(key);
+  choices.set(key, value);
+  for (const old of choices.keys()) {
+    if (choices.size <= CHOICES_LIMIT) break;
+    choices.delete(old);
+  }
+}
+
+/** Choice `key`, `initial` until one was made. */
+const choice = <T>(key: string, initial: T): T =>
+  choices.has(key) ? (choices.get(key) as T) : initial;
+
+/**
+ * A choice kept for this run as `key` (28.27): its value, `initial` until one was made, and its
+ * setter (a value, or a function of the current one). Another `key` (another worktree) reads
+ * that one's choice; a component shown again finds the choice it was left with.
+ */
+export function useKept<T>(key: string, initial: T): [T, (next: T | ((was: T) => T)) => void] {
+  const [, rerender] = useReducer((n: number) => n + 1, 0);
+  const set = useCallback(
+    (next: T | ((was: T) => T)) => {
+      const was = choice(key, initial);
+      keepChoice(key, typeof next === "function" ? (next as (was: T) => T)(was) : next);
+      rerender();
+    },
+    [key, initial],
+  );
+  return [choice(key, initial), set];
+}
 
 /**
  * Puts back the scroll of the element `ref` holds as view `key` was left, when that view shows
