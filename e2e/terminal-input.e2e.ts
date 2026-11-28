@@ -1,10 +1,15 @@
 import { expect, type Page, test } from "@playwright/test";
-import { mod } from "./host";
 
 // 29.7: what is typed into a terminal reaches its PTY once (the mock records each write): plain
 // text, dead-key accents as macOS' WebKit sends them (an accent the next key does not combine
 // with, the apostrophe of "don't", was sent twice and its key lost), an IME composition; again
-// after the host's link drops and the terminal is attached again, and in a split.
+// after the host's link drops and the terminal is attached again, and in a split. The dead keys'
+// handling is macOS' (WebKit's events there), so the pages say Mac on every host, and Hive's
+// command key is Cmd.
+test.use({
+  userAgent:
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko)",
+});
 
 /** What terminal `id` was sent, every write joined, as the mock recorded it. */
 function sent(page: Page, id: number): Promise<string> {
@@ -144,7 +149,7 @@ test("each key typed reaches the PTY once: text, accents, a composition; after a
   await expect.poll(() => sent(page, first)).toBe(before + TYPED);
 
   // Split beside a new terminal, which takes the keys; the first gets nothing more.
-  await page.keyboard.press(`${mod}+Shift+D`);
+  await page.keyboard.press("Meta+Shift+D");
   await expect(page.locator(".terminal-pane:not([hidden])")).toHaveCount(2);
   const second = await focused(page);
   expect(second).not.toBe(first);
