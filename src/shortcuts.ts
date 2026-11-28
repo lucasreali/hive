@@ -4,6 +4,7 @@ import { closeFile } from "./shell/RightPanel";
 import { findInTerminal } from "./shell/TerminalSearch";
 import {
   activateTab,
+  endRestore,
   type HiveState,
   leaveSpace,
   markdownShown,
@@ -65,6 +66,8 @@ export function nextPending(): void {
  * another space, that space becomes the current one (6.14).
  */
 export function goToAgent(agent: Agent): void {
+  // The user's move: the launch restore ends (28.27).
+  endRestore();
   // Another host's agent (26.18): its host's spaces show first.
   showHost(agentHost(agent.id));
   const s = useHive.getState();
