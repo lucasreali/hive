@@ -12,6 +12,7 @@ import {
   MOVE_WAIT_MS,
   onMoved,
   openLocated,
+  pathParts,
   remove,
   restore,
   resume,
@@ -374,4 +375,20 @@ test("how long ago, in the largest unit", () => {
     new Date(minutes(60 * 24 * 30)).toLocaleDateString(),
   );
   expect(ago(Date.now())).toBe("now");
+});
+
+test("a changed file's path: its name, then its folder cut before its last folder (28.22)", () => {
+  expect(pathParts("src/auth/session.ts")).toEqual({
+    name: "session.ts",
+    head: "src",
+    tail: "/auth",
+  });
+  expect(pathParts("a/b/c/handlers/x.ts")).toEqual({
+    name: "x.ts",
+    head: "a/b/c",
+    tail: "/handlers",
+  });
+  expect(pathParts("src/x.ts")).toEqual({ name: "x.ts", head: "", tail: "src" });
+  expect(pathParts("README.md")).toEqual({ name: "README.md", head: "", tail: "" });
+  expect(pathParts("/x")).toEqual({ name: "x", head: "", tail: "" });
 });
