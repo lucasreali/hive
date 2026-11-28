@@ -27,7 +27,7 @@ const row = (page: Page, label: string) =>
 async function keyboardSettings(page: Page) {
   await page.keyboard.press(`${mod}+,`);
   const settings = page.getByRole("dialog", { name: "Settings" });
-  await settings.getByRole("button", { name: "Keyboard" }).click();
+  await settings.getByRole("button", { name: "Keyboard", exact: true }).click();
   return settings;
 }
 
