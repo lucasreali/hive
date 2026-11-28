@@ -372,10 +372,16 @@ function SessionFiles({
                 <span className="session-file-head">{head}</span>
                 <span className="session-file-tail">{tail}</span>
               </span>
+              {/* Another worktree's file names it first; that name gives way, its numbers never. */}
               <span className="session-meta">
-                {f.worktree === worktree
-                  ? fileMeta(f)
-                  : `${worktreeName(projects, f.worktree)} · ${fileMeta(f)}`}
+                {f.worktree !== worktree && (
+                  <span className="session-file-worktree">
+                    {worktreeName(projects, f.worktree)}
+                  </span>
+                )}
+                <span className="session-file-numbers">
+                  {f.worktree === worktree ? fileMeta(f) : ` · ${fileMeta(f)}`}
+                </span>
               </span>
             </button>
           </li>

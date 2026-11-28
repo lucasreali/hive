@@ -445,7 +445,7 @@ test("a session's changed files: counted on its row, listed once opened, each op
   const asked = spyOn(transport, "listSessionFiles").mockResolvedValue();
   spyOn(transport, "openFile").mockResolvedValue();
   act(() => apply({ type: "sessions", sessions: MOCK_SESSIONS, error: null, truncated: false }));
-  const toggle = screen.getByRole("button", { name: "4 files" });
+  const toggle = screen.getByRole("button", { name: "5 files" });
   expect(toggle.getAttribute("aria-expanded")).toBe("false");
   fireEvent.click(toggle);
   expect(asked).toHaveBeenCalledWith(fix.id);
@@ -480,7 +480,7 @@ test("a session's changed files: counted on its row, listed once opened, each op
   expect(useHive.getState().openFile).toEqual({ worktree: shop.id, path: "src/auth/login.ts" });
   expect(useHive.getState().gotoLine).toBeNull();
 
-  fireEvent.click(screen.getByRole("button", { name: "4 files" }));
+  fireEvent.click(screen.getByRole("button", { name: "5 files" }));
   expect(screen.queryByRole("list", { name: "Files changed" })).toBeNull();
   // One file says so.
   act(() => {
@@ -490,7 +490,7 @@ test("a session's changed files: counted on its row, listed once opened, each op
   expect(screen.getByRole("button", { name: "1 file" })).toBeDefined();
 });
 
-test("a live answer: the session's row selected, its edit told and its file highlighted", () => {
+test("a live answer: the session's row marked, its edit told and its file selected", () => {
   show(FIX_LOGIN);
   spyOn(transport, "listSessionFiles").mockResolvedValue();
   act(() => apply({ type: "sessions", sessions: MOCK_SESSIONS, error: null, truncated: false }));

@@ -4106,6 +4106,7 @@ button.result-file:hover,
 .session-file {
   width: 100%;
   height: 22px;
+  overflow: hidden;
   display: flex;
   align-items: center;
   gap: 6px;
@@ -4156,8 +4157,22 @@ button.result-file:hover,
   text-overflow: ellipsis;
 }
 
+/* The numbers stay whole; another worktree's name before them gives way at the narrowest panel. */
+/* Its parts are the row's own flex items: the worktree's name gives way before the file's name. */
 .session-file .session-meta {
+  display: contents;
+}
+
+.session-file-worktree {
+  flex: 0 100 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.session-file-numbers {
   flex: none;
+  white-space: pre;
 }
 
 .sessions-from {

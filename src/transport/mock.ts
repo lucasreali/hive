@@ -501,6 +501,8 @@ export function mockSessionFiles(id: string): SessionFile[] {
       file(SHOP, "src/auth/login.ts", 1, 0, 4),
       // A file at the root and one deep in folders (28.22): the row cuts the folder in the middle.
       file(FIX_LOGIN, "README.md", 1, 2, 3),
+      // Another worktree's file, its name before the numbers at the narrowest panel.
+      file(`${SHOP}/.claude/worktrees/feat-checkout`, "src/checkout/Cart.tsx", 3, 128, 3),
       file(
         FIX_LOGIN,
         "src/checkout/payments/providers/stripe/webhooks/handlers/intent.ts",

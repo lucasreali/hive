@@ -3,6 +3,10 @@ import { expect, test } from "@playwright/test";
 test("who wrote a line: a session's edit opens its row; an unknown line answers by the line (27.5)", async ({
   page,
 }) => {
+  // The right panel at its narrowest (28.22): every file's line still fits its card.
+  await page.addInitScript(() =>
+    localStorage.setItem("hive.widths", JSON.stringify({ panelWidth: 280 })),
+  );
   await page.goto("/");
   const tree = page.getByRole("navigation", { name: "Projects" });
   await tree.getByRole("button", { name: "fix-login" }).click();
@@ -46,7 +50,7 @@ test("who wrote a line: a session's edit opens its row; an unknown line answers 
   );
   // One line per file (28.22), inside the card: a deep folder is cut, not wrapped.
   const rows = files.locator(".session-file");
-  await expect(rows).toHaveCount(4);
+  await expect(rows).toHaveCount(5);
   const card = await row.boundingBox();
   for (const r of await rows.all()) {
     const box = await r.boundingBox();
@@ -57,10 +61,30 @@ test("who wrote a line: a session's edit opens its row; an unknown line answers 
   }
   const deep = rows.filter({ hasText: "intent.ts" });
   const head = deep.locator(".session-file-head");
-  expect(await head.evaluate((e) => e.clientWidth > 0 && e.scrollWidth > e.clientWidth)).toBe(true);
+  // At the narrowest panel the folder gives way first, from its head.
+  expect(await head.evaluate((e) => e.scrollWidth > e.clientWidth)).toBe(true);
   const tail = deep.locator(".session-file-tail");
   await expect(tail).toHaveText("/handlers");
-  expect(await tail.evaluate((e) => e.scrollWidth <= e.clientWidth)).toBe(true);
+  // Another worktree's file: its name gives way, its numbers stay whole, all inside its row.
+  const other = rows.filter({ hasText: "Cart.tsx" });
+  await expect(other.locator(".session-file-worktree")).toHaveText("feat-checkout");
+  await expect(other.locator(".session-file-numbers")).toHaveText(
+    /^ · 3 edits · 128 lines · \d+h ago$/,
+  );
+  for (const r of await rows.all()) {
+    const fits = await r.evaluate((e) => {
+      const right = e.getBoundingClientRect().right;
+      const numbers = e.querySelector(".session-file-numbers") as HTMLElement;
+      return (
+        e.scrollWidth <= e.clientWidth &&
+        numbers.getBoundingClientRect().right <= right &&
+        numbers.scrollWidth <= numbers.clientWidth
+      );
+    });
+    expect(fits).toBe(true);
+  }
+  const name = other.locator(".session-file-worktree");
+  expect(await name.evaluate((e) => e.scrollWidth > e.clientWidth)).toBe(true);
   await page.screenshot({ path: "target/e2e/line-author-session.png" });
   for (const theme of ["one-dark", "one-light"]) {
     await page.evaluate((t) => {
