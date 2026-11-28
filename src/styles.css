@@ -3981,6 +3981,22 @@ button.chevron:hover {
   margin-bottom: 8px;
 }
 
+/* 29.6: inside Settings a search field is as tall as its other text inputs (`.field input`),
+   never squeezed by a long section beside it; the compact ones elsewhere keep 28px. Its input
+   draws nothing of its own, also inside a `.field` (Settings → Hosts' filter). */
+.settings .files-search-field {
+  flex: none;
+  height: 30px;
+  padding: 0 10px;
+}
+
+.settings .files-search-field input {
+  height: auto;
+  padding: 0;
+  box-shadow: none;
+  font-size: var(--fs-mono);
+}
+
 .search-clear {
   flex: none;
   display: inline-flex;
