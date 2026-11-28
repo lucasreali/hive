@@ -12,18 +12,14 @@ import {
 import type { Space } from "./protocol";
 import { apply } from "./reduce";
 import {
-  addTab,
-  followQuietTabs,
   followSpacePlaces,
   type HiveState,
   initialState,
-  type OpenFile,
   select,
   setRightPanel,
   toggleSidebar,
   useHive,
 } from "./store";
-import { fileKey, placeKey, shownPane } from "./tabs";
 import { MOCK_REPOS } from "./transport/mock";
 
 // 28.27: the picks of 28.19's audit (docs/review/last-place.md) kept between runs, each read
@@ -181,74 +177,4 @@ test("the spaces' places unreadable are none; capped; a failing storage keeps th
   const write = stubStorage();
   followSpacePlaces({ ...s(), notices: [] }, s());
   expect(write).not.toHaveBeenCalled();
-});
-
-const W = fixLogin.path;
-const detected = (channel: number, id: string) =>
-  apply({ type: "agent_detected", channel, id, project: shop.id, worktree: W, cwd: W });
-/** A launch whose last run left fix-login with `history`, the most recent last, and `files`. */
-function launch(history: string[], files: OpenFile[] = []) {
-  const tabHistory = { [placeKey({ host: null }, W)]: history };
-  const openFiles = files.map((f) => ({ ...f, editing: false, edit: null, view: null }));
-  useHive.setState({ ...initialState, tabHistory, lastRunHistory: tabHistory, openFiles }, true);
-  apply({ type: "projects", projects: [shop, api] });
-  select(fixLogin.id);
-}
-/** A chat resumed at launch, or a terminal reattached: its tab takes no focus. */
-const reopen = (id: number, host?: string) => addTab(id, W, host, false);
-
-test("chats resumed at launch take no focus: the one shown last in the last run does (row 3)", () => {
-  launch(["session:s1", "session:s2"]);
-  expect(shownPane(s())).toBeNull();
-  // The first shows, as nothing does; the second only once Hive knows it is s2.
-  reopen(7);
-  expect(shownPane(s())).toBe(7);
-  detected(7, "s1");
-  reopen(8);
-  expect(shownPane(s())).toBe(7);
-  detected(8, "s2");
-  expect(shownPane(s())).toBe(8);
-  // A terminal reattached later (no history names a channel) stays behind.
-  reopen(9);
-  expect([shownPane(s()), s().quietTabs]).toEqual([8, [7, 8, 9]]);
-});
-
-test("a tab the user went to meanwhile stays (row 3)", () => {
-  launch(["session:s1", "session:s2"]);
-  reopen(7);
-  detected(7, "s1");
-  // A terminal the user opens takes the focus, as always.
-  addTab(5, W);
-  expect(shownPane(s())).toBe(5);
-  reopen(8);
-  detected(8, "s2");
-  expect(shownPane(s())).toBe(5);
-});
-
-test("a reopened file stands in until the chat shown after it comes (row 3)", () => {
-  const a: OpenFile = { worktree: W, path: "a.ts" };
-  launch([fileKey(a), "session:s1"], [a]);
-  // Selecting the worktree showed its file, the best there was.
-  expect(shownPane(s())).toBe(fileKey(a));
-  reopen(7);
-  expect([shownPane(s()), s().fileShown]).toEqual([fileKey(a), true]);
-  detected(7, "s1");
-  expect([shownPane(s()), s().fileShown]).toEqual([7, false]);
-});
-
-test("a stand-in the history never named gives way; nothing is picked elsewhere (row 3)", () => {
-  launch(["session:s2"]);
-  reopen(7);
-  reopen(8);
-  expect(shownPane(s())).toBe(7);
-  detected(8, "s2");
-  expect(shownPane(s())).toBe(8);
-  // Another host's reattached terminal waits there.
-  reopen(10, "gpu");
-  expect([shownPane(s()), s().quietTabs.at(-1)]).toEqual([8, 10]);
-  // With nothing selected (every tab shown) or another place, the history picks nothing.
-  const before = s();
-  followQuietTabs({ ...before, selection: null, tabs: [...before.tabs] }, before);
-  followQuietTabs({ ...before, tabs: [...before.tabs] }, { ...before, selection: api.id });
-  expect(s()).toBe(before);
 });

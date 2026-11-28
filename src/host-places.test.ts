@@ -226,12 +226,12 @@ test("another host's places come back when its data is first made; a host remove
   expect(savedHostPlaces().gpu?.files).toEqual([{ worktree: "/srv/w", path: "x.ts" }]);
   // A host linked later in this run keeps its saved places meanwhile.
   startHosts({ gpu, later: { ...NO_HOST_PLACES, collapsed: { p: true } } });
-  toggleCollapsed(shop.id);
+  toggleCollapsed(api.id);
   expect(savedHostPlaces().later?.collapsed).toEqual({ p: true });
   apply({ type: "host_link", host: "later", state: "connected" });
   apply({ type: "host_link", host: "later", state: "removed" });
   expect(hostStart("later").collapsed).toEqual({});
-  toggleCollapsed(shop.id);
+  toggleCollapsed(`worktree:${checkout.id}`);
   expect(savedHostPlaces().later).toBeUndefined();
 });
 

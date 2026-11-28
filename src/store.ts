@@ -443,10 +443,21 @@ export type HiveState = {
    */
   lastRunHistory: Record<string, string[]>;
   /**
-   * The tabs reopened for this run (28.27): terminals reattached after a reload and chats
-   * resumed at launch. They do not take the focus as they come; the history picks.
+   * The tabs the launch reopened (28.27): terminals reattached after a reload and chats resumed.
+   * They do not take the focus as they come; the history picks, until the launch restore ends.
    */
   quietTabs: number[];
+  /**
+   * The launch restore is on (28.27): reopened tabs are picked by `lastRunHistory` and the pairs
+   * of the last run wait for their chats. It ends for good (`endRestore`) at the user's first
+   * move (another tab, file or place), once the chats it resumes are all named, or when a link
+   * drops (a later reconnect is not the launch).
+   */
+  restoring: boolean;
+  /** The sessions the launch resumes (`restore_sessions`) not named yet; null before any. */
+  resuming: string[] | null;
+  /** The agent the current space was left on, not known yet at launch: selected once it is. */
+  placeAwaited: string | null;
   /** By worktree (`placeKey`): the right panel's view it showed last (28.19), kept between runs. */
   panelViews: Record<string, PanelView>;
   /** Every open file's tab, in the order they opened; reopened after a restart (28.27). */
@@ -697,6 +708,9 @@ export const initialState: HiveState = {
   tabHistory: {},
   lastRunHistory: {},
   quietTabs: [],
+  restoring: false,
+  resuming: null,
+  placeAwaited: null,
   panelViews: {},
   openFiles: [],
   openFile: null,
@@ -910,9 +924,13 @@ export const hostKey = (host: string | null | undefined): string => host ?? "";
 
 /**
  * A host's data as its places of the last run reopen it (28.27): its files' tabs (without their
- * edits), its diff bases and trees, its pairs of files (a pair with a chat waits for it).
+ * edits), its diff bases and trees, its pairs of files (a pair with a chat waits for it while
+ * the launch restore is on, `waiting`; it is dropped once it ended).
  */
-export function restoredHost(places: HostPlaces = NO_HOST_PLACES): Partial<HostData> {
+export function restoredHost(
+  places: HostPlaces = NO_HOST_PLACES,
+  waiting = true,
+): Partial<HostData> {
   const openFiles: FileTab[] = places.files.map((f) => ({
     ...f,
     editing: false,
@@ -930,7 +948,7 @@ export function restoredHost(places: HostPlaces = NO_HOST_PLACES): Partial<HostD
     if (!files.every((k) => open.has(k))) continue;
     paired.add(left).add(right);
     if (files.length === 2) splits.push({ left, right });
-    else pendingSplits.push([left, right]);
+    else if (waiting) pendingSplits.push([left, right]);
   }
   return {
     openFiles,
@@ -945,6 +963,8 @@ export function restoredHost(places: HostPlaces = NO_HOST_PLACES): Partial<HostD
 const lastRun: Record<string, HostPlaces> = {};
 /** Each host's first data, made once (`hostStart`). */
 const starts = new Map<string, HostData>();
+/** The launch restore ended (`endRestore`): a host made from now on has no waiting pairs. */
+let launchOver = false;
 
 /**
  * Starts the hosts from `hosts`, their places of the last run (28.27): at launch the saved ones,
@@ -954,6 +974,7 @@ export function startHosts(hosts: Record<string, HostPlaces> = savedHostPlaces()
   for (const key of Object.keys(lastRun)) delete lastRun[key];
   Object.assign(lastRun, hosts);
   starts.clear();
+  launchOver = false;
   const local = restoredHost(lastRun[""]);
   // As `saveHosts` would save them now, so an unchanged launch writes nothing.
   const view = { ...initialState, ...local };
@@ -965,7 +986,7 @@ export function startHosts(hosts: Record<string, HostPlaces> = savedHostPlaces()
 export function hostStart(key: string): HostData {
   const kept = starts.get(key);
   if (kept) return kept;
-  const data = { ...NO_HOST_DATA, ...restoredHost(lastRun[key]) } as HostData;
+  const data = { ...NO_HOST_DATA, ...restoredHost(lastRun[key], !launchOver) } as HostData;
   starts.set(key, data);
   return data;
 }
@@ -1083,6 +1104,7 @@ export const useHive = create<HiveState>()(() => ({
   tabOrder: savedTabOrder(),
   ...savedPlaces(),
   lastRunHistory: savedPlaces().tabHistory,
+  restoring: true,
   spacePlaces: savedSpacePlaces(),
   ...startHosts(),
 }));
@@ -1097,6 +1119,7 @@ useHive.subscribe(followSpacePlaces);
 useHive.subscribe(saveHosts);
 useHive.subscribe(followPairs);
 useHive.subscribe(followQuietTabs);
+useHive.subscribe(followRestore);
 
 /** What `followPlaces` reads: any other change leaves the places as they are. */
 const PLACE_FIELDS = [
@@ -1150,13 +1173,23 @@ export function followPlaces(s: HiveState, prev: HiveState): void {
 export function followSpacePlaces(s: HiveState, prev: HiveState): void {
   if (!s.placesRestored) {
     if (s.projects === null || s.spaces === null || s.currentSpace === null) return;
-    const back = s.selection === null && !!s.spacePlaces[spaceKey(s)];
-    useHive.setState({ placesRestored: true, ...(back ? selected(s, spacePlace(s)) : {}) });
+    const kept = s.selection === null ? s.spacePlaces[spaceKey(s)] : null;
+    // An agent not known yet: its project for now, the agent once it comes (while restoring).
+    const unknown = !!kept && !owner(s.projects, kept.place) && !s.agents[kept.place];
+    const awaited = unknown && s.restoring ? { placeAwaited: kept?.place ?? null } : {};
+    autoSet({ placesRestored: true, ...awaited, ...(kept ? selected(s, spacePlace(s)) : {}) });
+    return;
+  }
+  if (s.placeAwaited && s.agents !== prev.agents && s.agents[s.placeAwaited]) {
+    if (useHive.getState().restoring) {
+      autoSet({ ...selected(s, spacePlace(s)), placeAwaited: null });
+    }
     return;
   }
   const fields = ["spacePlaces", "selection", "currentSpace", "host", "placesRestored"] as const;
   if (fields.every((field) => s[field] === prev[field])) return;
-  saveSpacePlaces(leaveSpace(s).spacePlaces ?? s.spacePlaces);
+  // While its agent is awaited, the place saved stays the agent, not its project shown meanwhile.
+  saveSpacePlaces(s.placeAwaited ? s.spacePlaces : (leaveSpace(s).spacePlaces ?? s.spacePlaces));
 }
 
 /** What `saveHosts` reads: any other change leaves the saved places as they are. */
@@ -1199,7 +1232,10 @@ export function placesOf(view: HiveState): HostPlaces {
     diffBases: Object.fromEntries(
       Object.entries(view.diffBases).filter(([path, base]) => !failed(path, base)),
     ),
-    collapsed: view.collapsed,
+    // A node as it is by default is not kept (28.27).
+    collapsed: Object.fromEntries(
+      Object.entries(view.collapsed).filter(([key, value]) => !byDefault(key, value)),
+    ),
   };
 }
 
@@ -1252,19 +1288,87 @@ export function followPairs(s: HiveState, prev: HiveState): void {
  */
 export function followQuietTabs(s: HiveState, prev: HiveState): void {
   if (s.quietTabs.length === 0 || (s.tabs === prev.tabs && s.agents === prev.agents)) return;
+  // The user's own move ends the restore (`followRestore`, after this): nothing is picked then.
+  if (!useHive.getState().restoring || userMoved(s, prev)) return;
   const place = tabsPlace(s);
-  if (place === null || place !== tabsPlace(prev)) return;
-  const pick = (x: HiveState) => lastShown(x, place, barItems(x), x.lastRunHistory);
-  const now = pick(s);
-  const shown = shownPane(s);
-  if (!now || !("id" in now) || !s.quietTabs.includes(now.id) || now.id === shown) return;
-  const before = pick(prev);
-  const blank = !barItems(s).some((t) => paneIdOf(t) === shown);
-  const standIn = before
-    ? paneIdOf(before) === shown
-    : typeof shown === "number" && s.quietTabs.includes(shown);
-  if (blank || standIn) useHive.setState({ activeTab: now.id, fileShown: false });
+  if (place === null) return;
+  const now = lastShown(s, place, barItems(s), s.lastRunHistory);
+  if (!now || !("id" in now) || !s.quietTabs.includes(now.id) || now.id === shownPane(s)) return;
+  autoSet({ activeTab: now.id, fileShown: false });
 }
+
+/** Whether a change the launch restore makes itself (`autoSet`) is being set. */
+let auto = false;
+/** The tab shown and the place selected after the restore's last own change. */
+let autoShown: [PaneId | null, string | null] | null = null;
+
+/** `change` set as the launch restore's own: it is no move of the user's (`userMoved`). */
+function autoSet(change: Partial<HiveState> | ((s: HiveState) => Partial<HiveState>)): void {
+  const was = auto;
+  auto = true;
+  try {
+    useHive.setState(change);
+  } finally {
+    auto = was;
+    const s = useHive.getState();
+    autoShown = [shownPane(s), s.selection];
+  }
+}
+
+/**
+ * Whether the change from `prev` to `s` shows another tab or place, and the user made it: not
+ * the restore's own (a listener of an outer change gets the state its own changes left).
+ */
+function userMoved(s: HiveState, prev: HiveState): boolean {
+  if (auto) return false;
+  const shown = [shownPane(s), s.selection] as const;
+  if (shown[0] === shownPane(prev) && shown[1] === prev.selection) return false;
+  return !autoShown || shown[0] !== autoShown[0] || shown[1] !== autoShown[1];
+}
+
+/** Whether the service's link, or a remote host's, dropped from `prev` to `s`. */
+const linkDropped = (s: HiveState, prev: HiveState): boolean =>
+  (prev.connection.status === "connected" && s.connection.status !== "connected") ||
+  Object.entries(prev.links).some(
+    ([host, link]) => link.state === "connected" && s.links[host]?.state !== "connected",
+  );
+
+/**
+ * Ends the launch restore (28.27) at the user's first move, once every chat it resumes is
+ * named, or when a link drops: from then on nothing reopened takes the focus by the last run's
+ * history, and the last run's pairs still waiting are dropped (not saved again).
+ */
+export function followRestore(s: HiveState, prev: HiveState): void {
+  if (!useHive.getState().restoring) return;
+  const named = s.resuming?.every((id) => id in s.agents);
+  if (named || userMoved(s, prev) || linkDropped(s, prev)) endRestore();
+}
+
+/** Ends the launch restore for good (`followRestore`). */
+export function endRestore(): void {
+  if (!useHive.getState().restoring) return;
+  launchOver = true;
+  starts.clear();
+  useHive.setState((s) => ({
+    restoring: false,
+    quietTabs: [],
+    lastRunHistory: {},
+    resuming: null,
+    placeAwaited: null,
+    pendingSplits: [],
+    stash: Object.fromEntries(
+      Object.entries(s.stash).map(([host, data]) => [host, { ...data, pendingSplits: [] }]),
+    ),
+  }));
+}
+
+/** The launch resumes chats `ids` (`restore_sessions`): the restore lasts until they are named. */
+export const resumeAtLaunch = (ids: string[]) =>
+  useHive.setState((s) => (s.restoring ? { resuming: [...(s.resuming ?? []), ...ids] } : {}));
+
+/** Chat `id` could not be resumed: the restore waits for it no more. */
+export const resumeFailed = (id: string) =>
+  useHive.setState((s) => (s.resuming ? { resuming: s.resuming.filter((r) => r !== id) } : {}));
 
 /**
  * Sets a side's width (kept within its limits) and, unless `persist` is false (a drag in
@@ -1375,10 +1479,13 @@ export const showPanelView = (panelView: PanelView) =>
  * when `editing`; a file already open shows its tab as it was left. The file shown before keeps
  * its state in its tab. Null closes the open file's tab, without asking (`closeFile` asks).
  */
-export const setOpenFile = (openFile: OpenFile | null, editing = false, line?: number) =>
+export const setOpenFile = (openFile: OpenFile | null, editing = false, line?: number) => {
+  // The user's move, even to the file already shown: the launch restore ends (28.27).
+  endRestore();
   useHive.setState((s) =>
     openFile ? opened(s, openFile, editing, line) : s.openFile ? dropFile(s, s.openFile) : {},
   );
+};
 
 /** Keeps file `f`'s view (its selection and scroll) in its tab, for when it shows again. */
 export const saveFileView = (f: OpenFile, view: unknown) =>
@@ -1536,7 +1643,10 @@ export const selectIn = (f: OpenFile) => (lines: Lines | null) => {
  * terminal of them is shown (none when it has none), and the open file stays shown only when
  * it belongs there.
  */
-export const select = (selection: string | null) => useHive.setState((s) => selected(s, selection));
+export const select = (selection: string | null) => {
+  endRestore();
+  useHive.setState((s) => selected(s, selection));
+};
 
 /** `select`'s change of state. */
 export function selected(s: HiveState, selection: string | null): Partial<HiveState> {
@@ -1566,7 +1676,23 @@ export const appliedTheme = (s: Pick<HiveState, "settings" | "systemTheme">): Ap
   s.settings.appearance.theme === "system" ? s.systemTheme : s.settings.appearance.theme;
 export const setVisible = (visible: boolean) => useHive.setState({ visible });
 export const toggleCollapsed = (id: string) =>
-  useHive.setState((s) => ({ collapsed: { ...s.collapsed, [id]: !s.collapsed[id] } }));
+  useHive.setState((s) => ({ collapsed: withCollapsed(s.collapsed, { [id]: !s.collapsed[id] }) }));
+
+/** Whether tree node `key` is `value` by default: a folder collapsed, anything else open. */
+const byDefault = (key: string, value: boolean) =>
+  value === (key.startsWith("files:") || key.startsWith("changes:"));
+
+/**
+ * `collapsed` with `changes` (28.27): each node changed moves last, so the least recently
+ * changed are the first a cap forgets.
+ */
+export function withCollapsed(
+  collapsed: HiveState["collapsed"],
+  changes: HiveState["collapsed"],
+): HiveState["collapsed"] {
+  const rest = Object.entries(collapsed).filter(([key]) => !(key in changes));
+  return Object.fromEntries([...rest, ...Object.entries(changes)]);
+}
 
 /**
  * A terminal just opened in `cwd`: its tab is shown and its worktree selected. One reopened for
@@ -1574,10 +1700,11 @@ export const toggleCollapsed = (id: string) =>
  * when its place shows nothing, and the worktree's history picks (`followQuietTabs`).
  */
 export const addTab = (id: number, cwd: string, host?: string, focus = true) =>
-  useHive.setState((s) => {
+  (focus ? useHive.setState : autoSet)((s) => {
     const tab: Tab = host === undefined ? { id, cwd } : { id, cwd, host };
     const added = { tabs: [...s.tabs, tab], tabOrder: withKey(s.tabOrder, `tab:${id}`) };
-    const quiet = focus ? {} : { quietTabs: [...s.quietTabs, id] };
+    // Picked by the last run's history only while the launch restore is on.
+    const quiet = !focus && s.restoring ? { quietTabs: [...s.quietTabs, id] } : {};
     // Another host's (a remote's kept terminal, 26.18) waits under its worktree there.
     if ((host ?? null) !== s.host) return { ...added, ...quiet };
     if (focus) return { ...added, activeTab: id, fileShown: false, selection: tabWorktree(s, tab) };
@@ -1589,12 +1716,15 @@ export const addTab = (id: number, cwd: string, host?: string, focus = true) =>
     return { ...added, ...quiet, ...(shown ? { activeTab: id, fileShown: false } : {}) };
   });
 /** Shows `tab`, and its host's spaces when it runs on another host (26.18). */
-export const activateTab = (tab: Tab) =>
+export const activateTab = (tab: Tab) => {
+  // The user's move, even to the tab already shown: the launch restore ends (28.27).
+  endRestore();
   useHive.setState((s) => {
     const shown = switchedHost(s, tab.host ?? null);
     const selection = tabWorktree({ ...s, ...shown }, tab);
     return { ...shown, activeTab: tab.id, fileShown: false, selection };
   });
+};
 
 /**
  * Shows `host`'s spaces (26.18): the shown host's service data goes to `stash` and `host`'s
@@ -1841,7 +1971,11 @@ export function baseKey(base: DiffBase): string {
 
 /** Picks the base the worktree at `path` is compared with. */
 export function setDiffBase(path: string, base: DiffBase): void {
-  useHive.setState((s) => ({ diffBases: { ...s.diffBases, [path]: base } }));
+  // Moved last: the least recently picked are the first a cap forgets (28.27).
+  useHive.setState((s) => {
+    const { [path]: _, ...rest } = s.diffBases;
+    return { diffBases: { ...rest, [path]: base } };
+  });
 }
 
 /** The project a space lists for the project `id`: its group (14.1), else itself. */
@@ -1925,7 +2059,8 @@ export function leaveSpace(s: HiveState): Partial<HiveState> {
   if (s.currentSpace === null) return {};
   const place =
     s.selection === null ? null : { place: s.selection, project: placeProject(s, s.selection) };
-  return { spacePlaces: { ...s.spacePlaces, [spaceKey(s)]: place } };
+  // Moved last: the least recently left are the first a cap forgets (28.27).
+  return { spacePlaces: remembered(s.spacePlaces, spaceKey(s), place) };
 }
 
 /**
