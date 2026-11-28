@@ -1071,6 +1071,77 @@ test("on macOS the Option keys the setting makes Meta send Esc + the key, the ot
   write.mockRestore();
 });
 
+/**
+ * A dead key (`code`: its key code) then `next` on macOS' WebKit, as a WKWebView sends them with
+ * a Brazilian layout (traced in one, 29.7), each native event in its own task: the accent's
+ * composition, committed before the keydown of the next key. That keydown is the composing one
+ * (229) when the two combine (´a → á); else it is the dead key's own code with both characters
+ * as its key ("'t"), and the next key's text comes as its keypress and input, unless taken.
+ */
+async function deadKey(term: Terminal, accent: string, code: number, next: string, combined = "") {
+  const area = term.textarea as HTMLTextAreaElement;
+  // happy-dom keeps neither a composition's nor an input's data: set on each event.
+  const send = (event: Event, data: string | null) => {
+    Object.defineProperty(event, "data", { value: data });
+    area.dispatchEvent(event);
+  };
+  const composition = (type: string, data: string) =>
+    send(new CompositionEvent(type, { bubbles: true }), data);
+  const input = (inputType: string, data: string | null) =>
+    send(new InputEvent("input", { inputType, bubbles: true, composed: true }), data);
+  const key = (type: string, key: string, keyCode: number, extra: object = {}) => {
+    const event = new KeyboardEvent(type, { key, bubbles: true, cancelable: true });
+    for (const [name, value] of Object.entries({ keyCode, which: keyCode, ...extra })) {
+      Object.defineProperty(event, name, { value });
+    }
+    area.dispatchEvent(event);
+    return event;
+  };
+  const before = area.value;
+  composition("compositionstart", "");
+  composition("compositionupdate", accent);
+  area.value = before + accent;
+  input("insertCompositionText", accent);
+  key("keydown", "Dead", 229, { isComposing: true });
+  await settle();
+  key("keyup", accent, code, { isComposing: true });
+  await settle();
+  area.value = before;
+  input("deleteCompositionText", null);
+  area.value = before + (combined || accent);
+  input("insertFromComposition", combined || accent);
+  composition("compositionend", combined || accent);
+  if (combined) key("keydown", combined, 229);
+  else if (!key("keydown", accent + next, code).defaultPrevented) {
+    const charCode = accent.charCodeAt(0);
+    if (!key("keypress", accent + next, charCode, { charCode }).defaultPrevented) {
+      area.value += next;
+      input("insertText", next);
+    }
+  }
+  await settle();
+  key("keyup", next, next.toUpperCase().charCodeAt(0));
+  await settle();
+}
+
+test("a dead key then a key it does not combine with types each once, on macOS (29.7)", async () => {
+  const write = spyOn(transport, "writeTerminal");
+  const { id, term } = await open();
+  showTerminal(id);
+  asMac();
+  const sent = () => write.mock.calls.map(([, data]) => data);
+  // ´ then t: the apostrophe of "don't", as macOS types it; " then x, ~ then /.
+  await deadKey(term, "'", 222, "t");
+  expect(sent()).toEqual(["'", "t"]);
+  await deadKey(term, '"', 222, "x");
+  await deadKey(term, "˜", 192, "/");
+  expect(sent().join("")).toBe(`'t"x˜/`);
+  // ´ then a combine: á, once.
+  await deadKey(term, "'", 222, "a", "á");
+  expect(sent().join("")).toBe(`'t"x˜/á`);
+  write.mockRestore();
+});
+
 test("screen reader mode follows the setting, on new terminals and live on open ones", async () => {
   const { term } = await open();
   expect(term.options.screenReaderMode).toBe(false);

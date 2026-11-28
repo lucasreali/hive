@@ -33,7 +33,7 @@ import {
   tabWorktree,
 } from "./tabs";
 import { transport } from "./transport";
-import { commandKey, isMac } from "./window";
+import { commandKey, composing, isMac } from "./window";
 
 // xterm.js lives here, outside React (#30): one Terminal per terminal id, fed straight from
 // the transport. React renders the host element and says which tab is shown; output never
@@ -368,8 +368,11 @@ async function startTerminal(
     if (!s.terminals[id]?.exited && !linkDown(s, host)) void transport.writeTerminal(id, data);
   });
   term.onResize(({ cols, rows }) => void transport.resizeTerminal(id, cols, rows));
-  term.attachCustomKeyEventHandler((event) => keys(term, marks, event));
+  // The text of the composition that ended last, until the next keydown (`afterAccent`).
+  const accent = { text: "" };
+  term.attachCustomKeyEventHandler((event) => keys(term, marks, accent, event));
   const el = document.createElement("div");
+  el.addEventListener("compositionend", (event) => (accent.text = event.data), { capture: true });
   el.className = "terminal-pane";
   el.dataset.terminal = String(id);
   el.hidden = true;
@@ -483,6 +486,27 @@ function macKey(term: Terminal, marks: Marks, event: KeyboardEvent): boolean {
   return true;
 }
 
+/**
+ * A dead key then a key it does not combine with (29.7: ´ then t on a Brazilian layout, the
+ * apostrophe of "don't"; " then x; ~ then /). macOS' WebKit commits the accent's composition
+ * first, which xterm sends, then gives the next key a keydown with the dead key's own code and
+ * both characters as its key ("'t"). Left to xterm, that keydown sent the accent again and its
+ * key was lost ("''"). It is taken here and only its own character is sent, after the accent
+ * xterm still sends on a later task. `accent` is the composition that ended last, cleared by
+ * any keydown.
+ */
+function afterAccent(term: Terminal, accent: { text: string }, event: KeyboardEvent): boolean {
+  if (event.type !== "keydown") return false;
+  const text = accent.text;
+  accent.text = "";
+  const follows = text && !composing(event) && event.key.startsWith(text);
+  const rest = follows ? event.key.slice(text.length) : "";
+  if (!rest) return false;
+  event.preventDefault();
+  setTimeout(() => term.input(rest), 0);
+  return true;
+}
+
 /** The Option keys held down (`AltLeft`, `AltRight`), for `optionMeta`. */
 const optionsDown = new Set<string>();
 
@@ -544,8 +568,17 @@ function optionMeta(term: Terminal, event: KeyboardEvent): boolean {
  * interrupt with nothing selected, 18.2) and Cmd+V, and Ctrl+C stays the shell's, plus macOS'
  * own keys (`macKey`). Every other key is the shell's.
  */
-function keys(term: Terminal, marks: Marks, event: KeyboardEvent): boolean {
-  const done = intercept(event) || macKey(term, marks, event) || macScroll(term, event);
+function keys(
+  term: Terminal,
+  marks: Marks,
+  accent: { text: string },
+  event: KeyboardEvent,
+): boolean {
+  const done =
+    afterAccent(term, accent, event) ||
+    intercept(event) ||
+    macKey(term, marks, event) ||
+    macScroll(term, event);
   if (done || optionMeta(term, event)) return false;
   const chord = commandKey(event) && event.shiftKey !== isMac() && !event.altKey;
   const clipboard = CLIPBOARD_KEYS.get(event.key.toUpperCase());
