@@ -54,13 +54,15 @@ test("the edit's wording: its session, tool, time, lines and what the user did",
     "general-purpose subagent of Fix the login",
   );
   expect(editAuthor({ ...edit, agent: "a1" })).toBe("Subagent of Fix the login");
-  expect(editLine(edit, NOW)).toBe("Edit · 3h ago · lines 120–122");
+  expect(editLine(edit, NOW)).toBe("Edited lines 120–122 · 3h ago");
   expect(editLine({ ...edit, len: 1, user_modified: true }, NOW)).toBe(
-    "Edit · 3h ago · line 120 · you changed it before accepting",
+    "Edited line 120 · 3h ago · you changed it before accepting",
   );
   expect(editLine({ ...edit, deleted: true }, NOW)).toBe(
-    "Edit · 3h ago · lines 120–122 · session deleted",
+    "Edited lines 120–122 · 3h ago · session deleted",
   );
+  expect(editLine({ ...edit, tool: "Write", len: 1 }, NOW)).toBe("Wrote line 120 · 3h ago");
+  expect(editLine({ ...edit, tool: "MultiEdit" }, NOW)).toBe("Edited lines 120–122 · 3h ago");
   expect(shortId(commit.id)).toBe("abc1234");
   expect(probably(edit, commit, NOW)).toBe("Probably Fix the login, committed in abc1234 · 2d ago");
   expect(commitLine(commit, NOW)).toBe("abc1234 · Ada · 2d ago · Keep sessions");

@@ -30,13 +30,17 @@ export function editAuthor(edit: LineEdit): string {
   return edit.agent ? `Subagent of ${title}` : title;
 }
 
-/** The edit's tool, time and lines, e.g. "Edit · 3h ago · lines 120–122". */
+/** The verb a session's row tells an edit by: "Wrote" for a Write, "Edited" for the rest. */
+const VERB: Record<string, string> = { Write: "Wrote" };
+
+/** The edit as its session's row tells it (28.22), e.g. "Edited lines 120–122 · 3h ago". */
 export function editLine(edit: LineEdit, now = Date.now()): string {
   const last = edit.start + edit.len - 1;
   const lines = edit.len > 1 ? `lines ${edit.start}–${last}` : `line ${edit.start}`;
   const changed = edit.user_modified && "you changed it before accepting";
   const deleted = edit.deleted && "session deleted";
-  return [edit.tool, ago(edit.ms, now), lines, changed, deleted].filter(Boolean).join(" · ");
+  const verb = VERB[edit.tool] ?? "Edited";
+  return [`${verb} ${lines}`, ago(edit.ms, now), changed, deleted].filter(Boolean).join(" · ");
 }
 
 /** "Probably <session>, committed in <id> · <time>": found through the commit, not followed. */

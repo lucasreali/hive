@@ -205,3 +205,15 @@ export function ago(ms: number, now = Date.now()): string {
   if (minutes < 60 * 24 * 30) return `${Math.floor(minutes / (60 * 24))}d ago`;
   return new Date(ms).toLocaleDateString();
 }
+
+/**
+ * A changed file's path as its row shows it (28.22): the file's name, then its folder split
+ * before its last folder, so the row can cut it in the middle: the head gives way first, and the
+ * folder holding the file stays.
+ */
+export function pathParts(path: string): { name: string; head: string; tail: string } {
+  const slash = path.lastIndexOf("/");
+  const folder = path.slice(0, Math.max(slash, 0));
+  const cut = Math.max(folder.lastIndexOf("/"), 0);
+  return { name: path.slice(slash + 1), head: folder.slice(0, cut), tail: folder.slice(cut) };
+}
