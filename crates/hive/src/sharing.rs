@@ -71,14 +71,19 @@ impl Users for System {
             let group = nix::unistd::Group::from_gid(gid).ok().flatten()?;
             Some((gid.as_raw(), group.name))
         });
-        let mut groups: Vec<(u32, String)> = Vec::new();
-        named.for_each(|(gid, name)| {
-            if !groups.iter().any(|(id, _)| *id == gid) {
-                groups.push((gid, name));
-            }
-        });
-        groups
+        unique(named)
     }
+}
+
+/// `groups` each once, by id, in their first order.
+fn unique(groups: impl Iterator<Item = (u32, String)>) -> Vec<(u32, String)> {
+    let mut kept: Vec<(u32, String)> = Vec::new();
+    for (gid, name) in groups {
+        if !kept.iter().any(|(id, _)| *id == gid) {
+            kept.push((gid, name));
+        }
+    }
+    kept
 }
 
 /// The shared folders' parent: `HIVE_SHARED_ROOT` when absolute, else `/tmp`.
@@ -290,6 +295,13 @@ pub enum JoinError {
     Refused(String),
 }
 
+/// A failure past the checks (a broken link): refused, with what failed.
+impl From<io::Error> for JoinError {
+    fn from(err: io::Error) -> Self {
+        Self::Refused(err.to_string())
+    }
+}
+
 impl JoinError {
     /// The line the bridge prints on stderr for the app (`classify` in `src-tauri/src/remote.rs`).
     pub fn line(&self) -> String {
@@ -303,7 +315,6 @@ impl JoinError {
 /// Connects to `owner`'s shared socket under `root` (`hive bridge --join`): their folder must be
 /// theirs (lstat) with no write for the group or others, and the socket's peer must be them.
 pub async fn join(root: &Path, owner: &str, users: &dyn Users) -> Result<UnixStream, JoinError> {
-    let refuse = |err: io::Error| JoinError::Refused(err.to_string());
     check_login(owner).map_err(JoinError::Refused)?;
     let uid = users
         .uid(owner)
@@ -311,7 +322,7 @@ pub async fn join(root: &Path, owner: &str, users: &dyn Users) -> Result<UnixStr
     let dir = dir(root, uid);
     let meta = match std::fs::symlink_metadata(&dir) {
         Err(err) if err.kind() == io::ErrorKind::NotFound => return Err(JoinError::Down),
-        meta => meta.map_err(refuse)?,
+        meta => meta?,
     };
     check_folder(&dir, &meta, uid, owner)?;
     let stream = UnixStream::connect(dir.join(SOCKET))
@@ -321,9 +332,9 @@ pub async fn join(root: &Path, owner: &str, users: &dyn Users) -> Result<UnixStr
             io::ErrorKind::PermissionDenied => JoinError::Refused(format!(
                 "you are not in the group {owner}'s Hive is shared to"
             )),
-            _ => refuse(err),
+            _ => err.into(),
         })?;
-    let peer = stream.peer_cred().map_err(refuse)?.uid();
+    let peer = stream.peer_cred()?.uid();
     check_peer(&dir, peer, uid, owner)?;
     Ok(stream)
 }
@@ -444,6 +455,18 @@ mod tests {
         let mut ids: Vec<u32> = groups.iter().map(|g| g.0).collect();
         ids.dedup();
         assert_eq!(ids.len(), groups.len(), "each once: {groups:?}");
+    }
+
+    #[test]
+    fn groups_are_listed_once_in_their_first_order() {
+        let named = |pairs: &[(u32, &str)]| -> Vec<(u32, String)> {
+            pairs.iter().map(|(id, n)| (*id, (*n).to_owned())).collect()
+        };
+        let groups = named(&[(20, "staff"), (12, "team"), (20, "staff"), (7, "x")]);
+        assert_eq!(
+            unique(groups.into_iter()),
+            named(&[(20, "staff"), (12, "team"), (7, "x")])
+        );
     }
 
     #[test]
@@ -759,6 +782,8 @@ mod tests {
         let why = format!("{} is not erin's: someone else made it", erins.display());
         assert_eq!(planted, refused(&why));
         assert_eq!(JoinError::Down.line(), "hive-join-down");
+        let broken = JoinError::from(io::Error::other("broken pipe"));
+        assert_eq!(broken, JoinError::Refused("broken pipe".into()));
         assert_eq!(JoinError::Refused("x".into()).line(), "hive-join: x");
     }
 

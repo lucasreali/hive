@@ -189,10 +189,10 @@ impl State {
         let dir = sharing::dir(&share.root, uid);
         let (listener, id) = sharing::open(&dir, uid, gid).map_err(|err| err.to_string())?;
         let listener = Arc::new(listener);
-        let accept = move || {
+        let accept: Accept = Box::new(move || {
             let listener = listener.clone();
-            async move { listener.accept().await.map(|(stream, _)| stream) }
-        };
+            Box::pin(async move { listener.accept().await.map(|(stream, _)| stream) })
+        });
         let task = tokio::spawn(accept_guests(accept, self.clone()));
         Ok(Open {
             group: group.to_owned(),
@@ -222,12 +222,15 @@ impl State {
 /// How long a failed accept on the shared socket waits before the next (e.g. no file left).
 const ACCEPT_RETRY: Duration = Duration::from_millis(100);
 
+/// The next connection on the shared socket (a fake in tests). Boxed, so `accept_guests` has
+/// one instantiation, as line coverage needs.
+type Accept = Box<
+    dyn FnMut() -> std::pin::Pin<Box<dyn Future<Output = std::io::Result<UnixStream>> + Send>>
+        + Send,
+>;
+
 /// Serves each connection `accept` gives (the shared socket's), until the task is aborted.
-async fn accept_guests<A, F>(mut accept: A, state: Arc<State>)
-where
-    A: FnMut() -> F,
-    F: Future<Output = std::io::Result<UnixStream>>,
-{
+async fn accept_guests(mut accept: Accept, state: Arc<State>) {
     loop {
         match accept().await {
             Ok(stream) => drop(tokio::spawn(guest(stream, state.clone()))),

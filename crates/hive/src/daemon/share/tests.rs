@@ -212,10 +212,9 @@ async fn sharing_opens_the_group_socket_and_a_teammate_on_the_list_is_welcomed()
     wait_until(|| lock(&state.share.guests).len() == 1).await;
     let (_again, answer) = hello(&state, app()).await;
     assert!(matches!(answer, Control::Welcome { .. }));
-    // A list that still has bob keeps his connection.
-    let carol = person("carol", ShareRole::Viewer);
-    let both = on(vec![person("bob", ShareRole::Viewer), carol]);
-    state.share.store.set(both).unwrap();
+    // A list that still has bob (alone, in another role) keeps his connection.
+    let again = on(vec![person("bob", ShareRole::Viewer)]);
+    state.share.store.set(again).unwrap();
     state.apply_sharing();
     let quiet = tokio::time::timeout(Duration::from_millis(200), client.0.next()).await;
     assert!(quiet.is_err(), "still connected: {quiet:?}");
@@ -403,16 +402,16 @@ async fn a_failed_accept_is_tried_again_after_a_pause() {
     let state = shared(tmp.path(), &[(me(), "alice")]);
     let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let counted = calls.clone();
-    let accept = move || {
+    let accept: Accept = Box::new(move || {
         let n = counted.fetch_add(1, Ordering::SeqCst);
-        async move {
+        Box::pin(async move {
             if n == 0 {
                 Err(std::io::Error::other("too many open files"))
             } else {
                 std::future::pending().await
             }
-        }
-    };
+        })
+    });
     let task = tokio::spawn(accept_guests(accept, state));
     wait_until(|| calls.load(Ordering::SeqCst) == 2).await;
     task.abort();

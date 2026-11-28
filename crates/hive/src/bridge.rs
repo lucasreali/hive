@@ -52,8 +52,7 @@ pub async fn join(
     users: &dyn crate::sharing::Users,
 ) -> Result<(), crate::sharing::JoinError> {
     let stream = crate::sharing::join(root, owner, users).await?;
-    let relayed = relay(stream).await;
-    relayed.map_err(|err| crate::sharing::JoinError::Refused(err.to_string()))
+    Ok(relay(stream).await?)
 }
 
 /// Connects stdio to `stream` until either side closes.
