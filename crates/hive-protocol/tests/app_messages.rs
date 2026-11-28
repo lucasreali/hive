@@ -271,7 +271,11 @@ fn samples() -> Vec<Control> {
             version: s("0.4.0"),
             distro: Some(s("Ubuntu")),
             warning: Some(s("cannot move Hive's files into /h/.hive")),
-            you: None,
+            you: Some(Guest {
+                name: s("bob"),
+                display: s("Bob"),
+                role: ShareRole::Viewer,
+            }),
         },
         VersionMismatch {
             protocol: 1,

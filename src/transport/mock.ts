@@ -25,6 +25,7 @@ import type {
   Session,
   SessionFile,
   Settings,
+  Sharing,
   Space,
   SpaceEnv,
   Subagent,
@@ -1076,7 +1077,31 @@ export type MockOptions = {
   onLine?: (line: string) => void;
   /** Whether it finds a `claude` (27.11); true when left out. */
   claude?: boolean;
+  /** Whether it may be shared (29.12): a remote Linux host's; false when left out. */
+  shareable?: boolean;
 };
+
+/** Why the fake service cannot be shared (29.12): the service's own words. */
+export const MOCK_UNSHAREABLE = "Only the Hive of a remote Linux host can be shared";
+
+/** The fake owner's login name and groups (29.12). */
+export const MOCK_OWNER = "dev";
+export const MOCK_GROUPS = ["dev", "team"];
+
+/** Why the fake service refuses a Sharing list (29.12), as `hive::sharing::check` would. */
+export function mockSharingError(sharing: Sharing): string | null {
+  if (sharing.on && !sharing.group) return "Pick the Unix group your teammates are in";
+  if (sharing.group && !MOCK_GROUPS.includes(sharing.group)) {
+    return `You are not in the group "${sharing.group}"`;
+  }
+  for (const p of sharing.people) {
+    if (!/^[a-z_][a-z0-9_-]{0,31}$/.test(p.login)) {
+      return `The login name "${p.login}" may hold only a-z, 0-9, _ and -, and starts with a letter or _`;
+    }
+    if (p.login === MOCK_OWNER) return `${p.login} is you: this Hive is yours`;
+  }
+  return null;
+}
 
 export function createMockTransport(
   scenario: string | null = null,
@@ -1180,6 +1205,18 @@ export function createMockTransport(
   const terminals = new Map<number, MockTerminal>();
   const encoder = new TextEncoder();
   const later = (message: ServiceMessage) => setTimeout(() => send(message), 0);
+  /** Its Sharing settings (29.12). */
+  let sharing: Sharing = { on: false, group: "", spaces: [], people: [] };
+  const sendSharing = () =>
+    later({
+      type: "sharing",
+      sharing,
+      owner: MOCK_OWNER,
+      groups: MOCK_GROUPS,
+      spaces: spaces.map((space) => ({ id: space.id, name: space.name })),
+      unavailable: options.shareable ? null : MOCK_UNSHAREABLE,
+      error: null,
+    });
   /** The worktree whose scripts the app last asked for (23.4), and each worktree's first port. */
   let scriptsAsked: string | null = null;
   const ports = new Map<string, number>();
@@ -1633,6 +1670,18 @@ export function createMockTransport(
     },
     async listGhAccounts(ghConfigDir) {
       sendGhAccounts(ghConfigDir);
+    },
+    async getSharing() {
+      sendSharing();
+    },
+    async setSharing(_host, next) {
+      const message = options.shareable ? mockSharingError(next) : MOCK_UNSHAREABLE;
+      if (message !== null) {
+        later({ type: "sharing_failed", message });
+        return;
+      }
+      sharing = next;
+      sendSharing();
     },
     async switchGhAccount(ghConfigDir, account) {
       for (const l of loginsIn(ghConfigDir)) {

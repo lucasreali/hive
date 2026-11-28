@@ -10,6 +10,7 @@ import {
   RobotIcon,
   TerminalWindowIcon,
   UserCircleIcon,
+  UsersThreeIcon,
 } from "@phosphor-icons/react";
 import { type CSSProperties, Fragment, type ReactNode, useEffect, useRef, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
@@ -50,6 +51,7 @@ import { HostsSettings } from "./Hosts";
 import { CloseIcon, ICON } from "./icons";
 import { useKept } from "./panelPlace";
 import { SearchField } from "./SearchField";
+import { SharingSettings } from "./Sharing";
 import { accountName, useGhAccounts } from "./SpaceDialog";
 
 const close = () => openModal(null);
@@ -66,6 +68,7 @@ export const SECTIONS = [
   "Agents",
   "Accounts",
   "Hosts",
+  "Sharing",
   "Worktrees",
   "Projects",
   "Keyboard",
@@ -86,6 +89,7 @@ const SECTION_ICON: Record<Section, Icon> = {
   Agents: RobotIcon,
   Accounts: UserCircleIcon,
   Hosts: HardDrivesIcon,
+  Sharing: UsersThreeIcon,
   Worktrees: GitBranchIcon,
   Projects: FolderSimpleIcon,
   Keyboard: KeyboardIcon,
@@ -1870,6 +1874,7 @@ function Content({ section, query }: { section: Section; query: string }) {
   if (section === "Keyboard") return <Keyboard />;
   if (section === "About") return <About />;
   if (section === "Projects") return <ProjectScriptsSection />;
+  if (section === "Sharing") return <SharingSettings />;
   const shown = <Fields fields={fields.filter((f) => f.section === section)} />;
   if (section === "Hosts") {
     return (
@@ -1927,7 +1932,8 @@ export function SettingsDialog() {
   const remote = useHive(onRemote);
   // Only the macOS app links to remote hosts (26.17): none where it offers WSL or Windows.
   const hosts = useHive((s) => s.appMode === null);
-  const sections = SECTIONS.filter((name) => hosts || name !== "Hosts");
+  // Sharing is a remote host's (29.12): only where hosts are.
+  const sections = SECTIONS.filter((name) => hosts || (name !== "Hosts" && name !== "Sharing"));
   return (
     <dialog
       className="dialog settings"

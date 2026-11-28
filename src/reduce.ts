@@ -423,6 +423,16 @@ function reduce(s: HiveState, m: HostMessage): Partial<HiveState> {
       return m.host === undefined
         ? { claudeLogins: m.logins }
         : { hostClaude: { logins: m.logins, claude: m.claude } };
+    // A host's own Settings → Sharing (29.12), kept by host whichever host is shown.
+    case "sharing": {
+      const { type: _, host, ...state } = m;
+      return { sharing: { ...s.sharing, [hostKey(host)]: { ...state, failed: null } } };
+    }
+    case "sharing_failed": {
+      const known = s.sharing[hostKey(m.host)];
+      if (!known) return {};
+      return { sharing: { ...s.sharing, [hostKey(m.host)]: { ...known, failed: m.message } } };
+    }
     case "gh_accounts": {
       const { type: _, ...accounts } = m;
       return { ghAccounts: { ...s.ghAccounts, [accounts.gh_config_dir ?? ""]: accounts } };
@@ -849,10 +859,11 @@ function fileDialogDone(s: HiveState, worktree: string): Partial<HiveState> {
 /**
  * The app's own fields a message of a host not shown may change (26.18): its terminals, the
  * toasts, the bell's seen agents (keyed apart by host, `agentKey`), and this Mac's account
- * logins (27.11: only this Mac's `claude_logins` sets them). The rest of what it changes is that
+ * logins (27.11: only this Mac's `claude_logins` sets them), and every host's Settings → Sharing
+ * (29.12, keyed by host). The rest of what it changes is that
  * host's data, kept in `stash`.
  */
-const SHARED_FIELDS = ["terminals", "notices", "pendingSeen", "claudeLogins"] as const;
+const SHARED_FIELDS = ["terminals", "notices", "pendingSeen", "claudeLogins", "sharing"] as const;
 
 /**
  * `m` applied to the store: to its host's data (26.18), the shown one's or the one kept in

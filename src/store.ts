@@ -47,7 +47,7 @@ import type {
   FileText,
   GhAccounts,
   GhIdentity,
-  HostLink,
+  HostLinkOf,
   LineEdit,
   LineOrigin,
   LineSide,
@@ -63,6 +63,7 @@ import type {
   SessionWindow,
   Settings,
   Shared,
+  SharingState,
   Space,
   TableEdit,
   TableText,
@@ -288,7 +289,7 @@ export const DEFAULT_SETTINGS: Settings = {
   projects: {},
   claude: { accounts: [], default_name: "Default", share_sessions: false },
   gh: { config_dirs: [] },
-  remote: { hosts: [], keep_minutes: 1440 },
+  remote: { hosts: [], keep_minutes: 1440, joined: [] },
   keymap: {},
 };
 
@@ -600,6 +601,11 @@ export type HiveState = {
    * the settings').
    */
   hostClaude: { logins: ClaudeLogin[]; claude: boolean } | null;
+  /**
+   * Each remote host's Settings → Sharing (29.12), by host: its last `sharing`, with why its
+   * last save was refused (`failed`, null when it was not). A host is missing until asked.
+   */
+  sharing: Record<string, SharingView>;
   /** The project a dialog opened for (e.g. the row's "New worktree"). */
   modalProject: string | null;
   /** The section Settings opens on (27.8: the hosts popover opens Hosts); null: its default. */
@@ -769,6 +775,7 @@ export const initialState: HiveState = {
   ghIdentity: null,
   claudeLogins: null,
   hostClaude: null,
+  sharing: {},
   modalProject: null,
   settingsSection: null,
   modalWorktree: null,
@@ -917,7 +924,10 @@ export const HOST_FIELDS = [
 export type HostData = Pick<HiveState, (typeof HOST_FIELDS)[number]>;
 
 /** A remote host's link (`host_link`) and when it took that state (ms since the epoch). */
-export type LinkState = HostLink & { since: number };
+export type LinkState = HostLinkOf & { since: number };
+
+/** A host's Settings → Sharing in the store (29.12): its `sharing`, and a refused save's why. */
+export type SharingView = SharingState & { failed: string | null };
 
 /** `s`'s fields of `HOST_FIELDS`: the shown host's service data. */
 export function hostData(s: Partial<HiveState>): Partial<HostData> {

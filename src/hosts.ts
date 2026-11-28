@@ -93,6 +93,9 @@ export const REMOTE_TYPES = [
   "gh_identity_failed",
   // The host's own Claude accounts (27.11), kept as `hostClaude`, never as this Mac's.
   "claude_logins",
+  // The host's own Settings → Sharing (29.12), kept by host in `sharing`.
+  "sharing",
+  "sharing_failed",
 ] as const satisfies readonly ServiceMessage["type"][];
 
 /** What the app side itself says of a remote link, tagged with its host (26.17). */

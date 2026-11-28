@@ -1,4 +1,5 @@
 import { type KeyboardEvent, useEffect, useRef, useState } from "react";
+import { joinedName } from "../protocol";
 import {
   type Connection,
   type HiveState,
@@ -49,7 +50,8 @@ export function linkText(link: LinkState): string {
     case "reconnecting":
       return "reconnecting";
     case "disconnected":
-      return link.kind === "version"
+      // A joined Hive's version is its owner's to update (29.12): its reason says so.
+      return link.kind === "version" && !link.owner
         ? `disconnected: version ${link.version ?? "?"}, this app ${link.app_version ?? "?"}: restart the remote service to update it`
         : `disconnected: ${link.reason}`;
     case "removed":
@@ -284,7 +286,8 @@ function HostRow({ host, link, shown }: { host: string; link: LinkState; shown: 
  */
 export function HostActions({ host, link }: { host: string; link: LinkState | undefined }) {
   if (!link || !hostProblem(link)) return null;
-  if (link.state === "disconnected" && link.kind === "version") {
+  // Only the owner restarts a joined Hive (29.12, Q5): its link offers Reconnect only.
+  if (link.state === "disconnected" && link.kind === "version" && !link.owner) {
     const terminals = link.terminals || 0;
     return (
       <button
@@ -426,12 +429,20 @@ export function HostOverlay() {
  * the popover's action (27.10, `HostActions`): Reconnect, or "Restart the remote service".
  */
 export function HostsSettings() {
-  const hosts = useHive((s) => s.settings.remote.hosts);
+  const own = useHive((s) => s.settings.remote.hosts);
+  const joined = useHive((s) => s.settings.remote.joined);
   const links = useHive((s) => s.links);
   const [alias, setAlias] = useState("");
   const [query, setQuery] = useState("");
+  // The user's own hosts, then the Hives joined (29.12), by the names their links have.
+  const hosts = [...own, ...joined.map(joinedName)];
   const many = hosts.length > MANY_HOSTS;
   const listed = many ? hosts.filter((h) => matches(h, query)) : hosts;
+  const remove = (host: string) =>
+    saveSettings((s) => {
+      s.remote.hosts = s.remote.hosts.filter((h) => h !== host);
+      s.remote.joined = s.remote.joined.filter((j) => joinedName(j) !== host);
+    });
   const add = () => {
     const name = alias.trim();
     if (!name) return;
@@ -483,11 +494,7 @@ export function HostsSettings() {
                 className="ghost"
                 title={`Remove ${host}`}
                 aria-label={`Remove ${host}`}
-                onClick={() =>
-                  saveSettings((s) => {
-                    s.remote.hosts = s.remote.hosts.filter((h) => h !== host);
-                  })
-                }
+                onClick={() => remove(host)}
               >
                 <CloseIcon />
               </button>
@@ -516,6 +523,61 @@ export function HostsSettings() {
           Add host
         </button>
       </form>
+      <JoinHive />
     </section>
+  );
+}
+
+/**
+ * "Join someone's Hive" (29.12): the alias of your own login on their host, and their login
+ * name there. The link runs your own `hive bridge --join <owner>` on that host; the service
+ * checks both when the settings are saved.
+ */
+export function JoinHive() {
+  const [alias, setAlias] = useState("");
+  const [owner, setOwner] = useState("");
+  const ready = alias.trim() !== "" && owner.trim() !== "";
+  return (
+    <form
+      className="host-add host-join"
+      aria-labelledby="join-title"
+      onSubmit={(e) => {
+        e.preventDefault();
+        if (!ready) return;
+        const joined = { alias: alias.trim(), owner: owner.trim() };
+        saveSettings((s) => {
+          s.remote.joined.push(joined);
+        });
+        setAlias("");
+        setOwner("");
+      }}
+    >
+      <h4 id="join-title">Join someone's Hive</h4>
+      <p className="field-help">
+        A teammate shares their Hive on a host you log in to as yourself (their Settings → Sharing).
+        It runs as them; you see the spaces they share.
+      </p>
+      <input
+        aria-label="Your alias of their host"
+        placeholder="Alias in ~/.ssh/config"
+        value={alias}
+        spellCheck={false}
+        autoCapitalize="off"
+        autoCorrect="off"
+        onChange={(e) => setAlias(e.currentTarget.value)}
+      />
+      <input
+        aria-label="Their login name"
+        placeholder="Their login name"
+        value={owner}
+        spellCheck={false}
+        autoCapitalize="off"
+        autoCorrect="off"
+        onChange={(e) => setOwner(e.currentTarget.value)}
+      />
+      <button type="submit" className="secondary" disabled={!ready}>
+        Join
+      </button>
+    </form>
   );
 }

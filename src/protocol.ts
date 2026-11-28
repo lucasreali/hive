@@ -16,7 +16,14 @@ export type HostMessage = ServiceMessage & { host?: string };
 export type ServiceMessage =
   // `warning`: why the service still uses the folders of Hive before 22.1, its files not moved
   // into `~/.hive` (shown in the status bar).
-  | { type: "welcome"; version: string; distro: string | null; warning?: string | null }
+  // `you` (29.12): who a shared service takes this app's user for, on a joined Hive only.
+  | {
+      type: "welcome";
+      version: string;
+      distro: string | null;
+      warning?: string | null;
+      you?: Guest;
+    }
   // `problems`: the keymap's (28.7), each a line; the entries they name are ignored.
   | { type: "settings"; settings: Settings; problems?: string[] }
   // A refused `set_settings`, or a settings file the service ignored (then `settings` holds
@@ -70,7 +77,7 @@ export type ServiceMessage =
   // (26.16); the UI redraws it.
   | { type: "terminal_reattached"; channel: number }
   // From the app side (Rust, 26.17): a remote host's link changed; replayed to a reloaded UI.
-  | ({ type: "host_link"; host: string } & HostLink)
+  | ({ type: "host_link"; host: string; owner?: string } & HostLink)
   // `protocol`/`version` are the service's; `app_*` and `bundled` are added by the app side (Rust).
   // `bundled`: the app runs the `hive` its installer brought (not a development build).
   // `terminals` (26.17): how many terminals the service runs, which restarting it would end;
@@ -145,6 +152,9 @@ export type ServiceMessage =
   | { type: "gh_identity_failed"; account: GhAccount; message: string }
   // `claude`: whether that service finds a `claude` on the user's `PATH` (27.11).
   | { type: "claude_logins"; logins: ClaudeLogin[]; claude: boolean }
+  // 29.12: a remote host's own Settings → Sharing, and a save it refused.
+  | ({ type: "sharing" } & SharingState)
+  | { type: "sharing_failed"; message: string }
   | { type: "notice"; message: string }
   | ({ type: "pulls" } & Pulls)
   | { type: "pull"; project: string; number: number; pull: PullDetail | null; error: string | null }
@@ -282,8 +292,19 @@ export type ServiceMessage =
 /** Where the service runs on Windows (12.5.4). */
 export type AppMode = "wsl" | "native";
 
-/** Why a remote host's link stopped (26.17): only `network` is retried by itself. */
-export type HostFailure = "host_key" | "auth" | "platform" | "install" | "version" | "network";
+/**
+ * Why a remote host's link stopped (26.17): only `network` is retried by itself. `denied`
+ * (29.12): a joined Hive refused this user (not on its Sharing list), or joining it failed.
+ */
+export type HostFailure =
+  | "host_key"
+  | "auth"
+  | "platform"
+  | "install"
+  | "version"
+  | "limit"
+  | "denied"
+  | "network";
 
 /**
  * A remote host's link (26.17, `host_link`), as the app side tells it: `connecting`;
@@ -305,6 +326,49 @@ export type HostLink =
       terminals?: number;
     }
   | { state: "removed" };
+
+/**
+ * A host link's state as the UI keeps it: a joined Hive's (29.12) says whose it is (`owner`),
+ * and only its owner restarts it.
+ */
+export type HostLinkOf = HostLink & { owner?: string };
+
+/** What a teammate may do on a shared Hive (29.12). Mirrors `hive_protocol::ShareRole`. */
+export type ShareRole = "viewer" | "collaborator";
+
+/** A teammate on a Sharing list (29.12). Mirrors `hive_protocol::Person`. */
+export type Person = {
+  login: string;
+  display: string;
+  git_name: string;
+  git_email: string;
+  role: ShareRole;
+};
+
+/** Settings → Sharing of a remote Linux host's Hive (29.12). Mirrors `hive_protocol::Sharing`. */
+export type Sharing = { on: boolean; group: string; spaces: string[]; people: Person[] };
+
+/** Who a joined Hive takes this app's user for (29.12). Mirrors `hive_protocol::Guest`. */
+export type Guest = { name: string; display: string; role: ShareRole };
+
+/**
+ * A host's `sharing` (29.12): its settings, its owner's login name, the owner's groups, its
+ * spaces, and why it cannot be shared (`unavailable`) or why its socket is not open (`error`).
+ */
+export type SharingState = {
+  sharing: Sharing;
+  owner: string;
+  groups: string[];
+  spaces: { id: string; name: string }[];
+  unavailable: string | null;
+  error: string | null;
+};
+
+/** Someone else's Hive the user joins (29.12). Mirrors `hive_protocol::JoinedHost`. */
+export type JoinedHost = { alias: string; owner: string };
+
+/** How the app names a joined Hive's link and host: `<owner>@<alias>` (`JoinedHost::name`). */
+export const joinedName = (joined: JoinedHost) => `${joined.owner}@${joined.alias}`;
 
 /** Mirrors `hive_protocol::KeptTerminal` (26.16): a terminal a remote service kept running. */
 export type KeptTerminal = {
@@ -899,7 +963,7 @@ export type Settings = {
    * `~/.ssh/config`, and how long a remote keeps its terminals after the link drops (1 to
    * 10080 minutes).
    */
-  remote: { hosts: string[]; keep_minutes: number };
+  remote: { hosts: string[]; keep_minutes: number; joined: JoinedHost[] };
   /**
    * The user's shortcuts (28.7): a command id mapped to a chord, a list of chords, or `[]` /
    * null for none; only the changes to the defaults. Any other value is the service's problem

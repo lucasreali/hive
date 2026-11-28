@@ -9,6 +9,7 @@ import type {
   ServiceMessage,
   SessionTarget,
   Settings,
+  Sharing,
   SpaceEnv,
   TableEdit,
 } from "../protocol";
@@ -109,6 +110,10 @@ export interface Transport {
    * `claude_logins`: this Mac's, or with `host` that remote host's own (27.11).
    */
   listClaudeLogins(host?: string): Promise<void>;
+  /** Settings → Sharing of the remote host `host`'s own service (29.12); answered by `sharing`. */
+  getSharing(host: string): Promise<void>;
+  /** Saves `host`'s Sharing settings (29.12); answered by `sharing`, or `sharing_failed`. */
+  setSharing(host: string, sharing: Sharing): Promise<void>;
   /**
    * The accounts logged in to `gh` (9.30), in `ghConfigDir` when set (else `gh`'s own config);
    * answered by `gh_accounts`, logins only.

@@ -11,7 +11,7 @@ import { initialState, useHive } from "./store";
 type Fields<M> = { [F in Exclude<keyof M, "type">]-?: true };
 /** Every message type with its fields, as `ServiceMessage` says: the typecheck keeps it exact. */
 const FIELDS: { [T in ServiceMessage["type"]]: Fields<Extract<ServiceMessage, { type: T }>> } = {
-  welcome: { version: true, distro: true, warning: true },
+  welcome: { version: true, distro: true, warning: true, you: true },
   settings: { settings: true, problems: true },
   settings_failed: { message: true },
   diagnostics: { settings_file: true, wrapper: true, claude: true, git_error: true },
@@ -38,7 +38,7 @@ const FIELDS: { [T in ServiceMessage["type"]]: Fields<Extract<ServiceMessage, { 
   tray_clicked: { agent: true },
   files_dropped: { text: true, x: true, y: true },
   terminal_kept: { channel: true, cwd: true, worktree: true, account: true },
-  host_link: { host: true, state: true },
+  host_link: { host: true, owner: true, state: true },
   terminal_reattached: { channel: true },
   terminals_kept: { terminals: true },
   terminal_reset: { channel: true, offset: true },
@@ -105,6 +105,15 @@ const FIELDS: { [T in ServiceMessage["type"]]: Fields<Extract<ServiceMessage, { 
   gh_identity: { account: true, name: true, email: true },
   gh_identity_failed: { account: true, message: true },
   claude_logins: { logins: true, claude: true },
+  sharing: {
+    sharing: true,
+    owner: true,
+    groups: true,
+    spaces: true,
+    unavailable: true,
+    error: true,
+  },
+  sharing_failed: { message: true },
   notice: { message: true },
   pulls: { project: true, repo: true, mine: true, review: true, fetched_ms: true, error: true },
   pull: { project: true, number: true, pull: true, error: true },

@@ -3,7 +3,12 @@
     "type": "welcome",
     "version": "0.4.0",
     "distro": "Ubuntu",
-    "warning": "cannot move Hive's files into /h/.hive"
+    "warning": "cannot move Hive's files into /h/.hive",
+    "you": {
+      "name": "bob",
+      "display": "Bob",
+      "role": "viewer"
+    }
   },
   {
     "type": "version_mismatch",

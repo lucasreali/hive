@@ -3084,6 +3084,100 @@ button.chevron:hover {
   min-width: 0;
 }
 
+/* "Join someone's Hive" (29.12): its title and help over the alias, the owner and Join. */
+.host-join {
+  flex-wrap: wrap;
+  margin-top: 14px;
+}
+
+.host-join h4,
+.host-join .field-help {
+  flex-basis: 100%;
+  margin: 0;
+}
+
+.host-join h4 {
+  font-size: var(--fs-small);
+  font-weight: 600;
+  color: var(--text-2);
+}
+
+/* Settings → Sharing (29.12): the switch, the group, the spaces, the people and Save. */
+.sharing {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.sharing fieldset {
+  border: 0;
+  margin: 0;
+  padding: 0;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.sharing legend {
+  padding: 0;
+  margin-bottom: 6px;
+  color: var(--text-2);
+}
+
+/* A person: login, display name, role and Remove, then the git name and e-mail under them. */
+.sharing-person {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr)) 132px 24px;
+  grid-template-areas:
+    "login display role remove"
+    "git-name git-email . .";
+  gap: 6px;
+  align-items: center;
+}
+
+.sharing-person + .sharing-person {
+  padding-top: 6px;
+  border-top: 1px solid var(--border-subtle);
+}
+
+.sharing-login {
+  grid-area: login;
+}
+
+.sharing-display {
+  grid-area: display;
+}
+
+.sharing-git-name {
+  grid-area: git-name;
+}
+
+.sharing-git-email {
+  grid-area: git-email;
+}
+
+.sharing-role {
+  grid-area: role;
+}
+
+.sharing-remove {
+  grid-area: remove;
+}
+
+.sharing-person input {
+  min-width: 0;
+}
+
+.sharing-people > .secondary {
+  align-self: flex-start;
+}
+
+.sharing-actions {
+  display: flex;
+  justify-content: flex-end;
+}
+
 .accounts input {
   min-width: 0;
 }

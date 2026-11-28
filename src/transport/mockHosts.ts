@@ -1,5 +1,12 @@
 import { REMOTE_TYPES } from "../hosts";
-import type { HostLink, HostMessage, ServiceMessage, Settings, Space } from "../protocol";
+import {
+  type HostLink,
+  type HostMessage,
+  joinedName,
+  type ServiceMessage,
+  type Settings,
+  type Space,
+} from "../protocol";
 import { DEFAULT_SETTINGS, useHive } from "../store";
 import type { Transport } from ".";
 
@@ -15,6 +22,12 @@ export const MOCK_REMOTE_REPO = "/home/dev/models";
 
 /** Why the fake link dropped (`drop-link` typed in a terminal). */
 export const MOCK_DROP_REASON = "Connection to gpu-box closed by remote host.";
+
+/**
+ * The one teammate whose Hive the fake joins (29.12): joining `alice` on any host links, and
+ * serves nothing yet (29.13); anyone else's refuses the user, who is not on their list.
+ */
+export const MOCK_TEAMMATE = "alice";
 
 /** The name of the `i`-th fake host after gpu-box (27.8, `&hosts=<n>`): `build-02` and on. */
 export const mockHostName = (i: number) => `build-${String(i).padStart(2, "0")}`;
@@ -138,7 +151,7 @@ export async function createHostsTransport(
   count = 1,
 ): Promise<Transport> {
   // Loaded as `index.ts` loads it: the fake service stays a chunk of its own (9.24).
-  const { createMockTransport, mockProject } = await import("./mock");
+  const { createMockTransport, mockProject, MOCK_OWNER } = await import("./mock");
   const repos = [mockProject(MOCK_REMOTE_REPO, "models", ["train-run"])];
   const ids = { last: 0 };
   let send: (message: HostMessage) => void = () => {};
@@ -161,10 +174,10 @@ export async function createHostsTransport(
   }
   const settings: Settings = {
     ...DEFAULT_SETTINGS,
-    remote: { hosts: [MOCK_HOST, ...seeded.keys()], keep_minutes: 1440 },
+    remote: { hosts: [MOCK_HOST, ...seeded.keys()], keep_minutes: 1440, joined: [] },
   };
   const local = createMockTransport(null, cast, { ids, settings, onLine });
-  const remoteOptions = { ids, repos, onLine, claude: true };
+  const remoteOptions = { ids, repos, onLine, claude: true, shareable: true };
   const remote = createMockTransport(null, null, remoteOptions);
   /** The remote's terminals, by id. */
   const remoteIds = new Set<number>();
@@ -216,6 +229,8 @@ export async function createHostsTransport(
       else if (fake) {
         status(host, fake.link);
         later({ type: "spaces", spaces: fake.spaces, current: "default", host });
+      } else if (joined.has(host)) {
+        joinHive(host, joined.get(host) as string);
       } else {
         status(host, { state: "connecting" });
         const reason = `ssh: Could not resolve hostname ${host}: nodename nor servname provided, or not known`;
@@ -223,6 +238,18 @@ export async function createHostsTransport(
       }
     }
     hosts = next;
+  };
+  /** The Hives joined (29.12), by their link's name, with their owner. */
+  let joined = new Map<string, string>();
+  /** Links the Hive `owner` shares on `host` as `hive bridge --join` would (29.12). */
+  const joinHive = (host: string, owner: string) => {
+    const of = (link: HostLink) =>
+      later({ type: "host_link", host, owner, ...link } as HostMessage);
+    of({ state: "connecting" });
+    if (owner === MOCK_TEAMMATE) return of({ state: "connected" });
+    const why = `${MOCK_OWNER}'s login is not on ${owner}'s Sharing list`;
+    const reason = `${owner}'s Hive on ${host.slice(owner.length + 1)} refused you: ${why}`;
+    of({ state: "disconnected", reason, kind: "denied" });
   };
   const shown = () => useHive.getState().host === MOCK_HOST;
   // A fake host after gpu-box serves nothing: its requests go nowhere.
@@ -262,7 +289,10 @@ export async function createHostsTransport(
       send = onMessage;
       await local.connect((message) => {
         onMessage(message);
-        if (message.type === "settings") follow(message.settings.remote.hosts);
+        if (message.type !== "settings") return;
+        const remote = message.settings.remote;
+        joined = new Map(remote.joined.map((j) => [joinedName(j), j.owner]));
+        follow([...remote.hosts, ...joined.keys()]);
       });
     },
     async openTerminal(cwd, cols, rows, onData, account, host) {
@@ -276,6 +306,15 @@ export async function createHostsTransport(
     async listClaudeLogins(host) {
       if (host === undefined) return local.listClaudeLogins();
       if (host === MOCK_HOST) return remote.listClaudeLogins();
+    },
+    // A host's own Settings → Sharing (29.12): gpu-box's may be shared, this Mac's never is.
+    async getSharing(host) {
+      if (host === MOCK_HOST) return remote.getSharing(host);
+      if (!seeded.has(host) && !joined.has(host)) return local.getSharing(host);
+    },
+    async setSharing(host, sharing) {
+      if (host === MOCK_HOST) return remote.setSharing(host, sharing);
+      if (!seeded.has(host) && !joined.has(host)) return local.setSharing(host, sharing);
     },
     async reconnectHost(host) {
       if (host === MOCK_HOST && !up && hosts.includes(host)) await connectRemote(true);

@@ -242,7 +242,7 @@ test("the new space's host picker: this Mac or a host, by click, keys or filter 
 
 test("Settings → Hosts filters a long list (27.8)", () => {
   const hosts = ["a1", "a2", "a3", "b1", "b2", "b3"];
-  const settings = { ...DEFAULT_SETTINGS, remote: { hosts, keep_minutes: 60 } };
+  const settings = { ...DEFAULT_SETTINGS, remote: { hosts, keep_minutes: 60, joined: [] } };
   act(() => apply({ type: "settings", settings }));
   render(<HostsSettings />);
   const names = () => screen.queryAllByRole("button", { name: /^Remove / }).map((b) => b.title);
@@ -262,7 +262,7 @@ test("Settings → Hosts offers the popover's action on a host with a problem (2
   const reconnect = spyOn(transport, "reconnectHost").mockResolvedValue();
   const restart = spyOn(transport, "restartRemote").mockResolvedValue();
   const hosts = ["gpu-box", "lab", "vps", "box"];
-  const settings = { ...DEFAULT_SETTINGS, remote: { hosts, keep_minutes: 60 } };
+  const settings = { ...DEFAULT_SETTINGS, remote: { hosts, keep_minutes: 60, joined: [] } };
   act(() => apply({ type: "settings", settings }));
   link("gpu-box", { state: "connected" });
   link("lab", { state: "reconnecting", reason: "gone", retry_secs: 5 });
@@ -327,7 +327,10 @@ test("while the shown host is down, the sidebar and its terminals say so", () =>
 test("Settings → Hosts adds, tests and removes a host by its alias", () => {
   const saved = spyOn(transport, "setSettings").mockResolvedValue();
   const reconnect = spyOn(transport, "reconnectHost").mockResolvedValue();
-  const settings = { ...DEFAULT_SETTINGS, remote: { hosts: ["gpu-box", "lab"], keep_minutes: 60 } };
+  const settings = {
+    ...DEFAULT_SETTINGS,
+    remote: { hosts: ["gpu-box", "lab"], keep_minutes: 60, joined: [] },
+  };
   act(() => apply({ type: "settings", settings }));
   link("gpu-box", { state: "connected" });
   render(<HostsSettings />);
@@ -350,4 +353,62 @@ test("Settings → Hosts adds, tests and removes a host by its alias", () => {
   expect(saved.mock.calls[1]?.[0].remote.hosts).toEqual(["gpu-box"]);
   saved.mockRestore();
   reconnect.mockRestore();
+});
+
+test("Settings → Hosts joins someone's Hive by alias and owner, and lists it by its link (29.12)", () => {
+  const saved = spyOn(transport, "setSettings").mockResolvedValue();
+  const restart = spyOn(transport, "restartRemote").mockResolvedValue();
+  const joined = [{ alias: "gpu-box", owner: "alice" }];
+  const settings = {
+    ...DEFAULT_SETTINGS,
+    remote: { hosts: ["gpu-box"], keep_minutes: 60, joined },
+  };
+  act(() => apply({ type: "settings", settings }));
+  const version = { version: "0.30.0", app_version: "0.31.0", terminals: 2 };
+  const reason = "alice's Hive is 0.30.0, yours is 0.31.0; ask alice to update.";
+  const refused = { state: "disconnected", reason, kind: "version", ...version };
+  act(() =>
+    apply({ type: "host_link", host: "alice@gpu-box", owner: "alice", ...refused } as HostMessage),
+  );
+  render(<HostsSettings />);
+  const rows = document.querySelector(".hosts")?.textContent;
+  expect(rows).toContain(`alice@gpu-boxdisconnected: ${reason}`);
+  // Only alice restarts her Hive: Reconnect, never a restart.
+  const restartIt = { name: "Restart the remote service on alice@gpu-box" };
+  expect(screen.queryByRole("button", restartIt)).toBeNull();
+  expect(screen.getByRole("button", { name: "Reconnect alice@gpu-box" })).toBeDefined();
+  expect(restart).not.toHaveBeenCalled();
+  // Join needs both the alias and the owner.
+  const join = screen.getByRole("button", { name: "Join" }) as HTMLButtonElement;
+  expect(join.disabled).toBe(true);
+  fireEvent.submit(join.closest("form") as HTMLFormElement);
+  expect(saved).not.toHaveBeenCalled();
+  const alias = screen.getByLabelText("Your alias of their host");
+  fireEvent.change(alias, { target: { value: " lab " } });
+  expect(join.disabled).toBe(true);
+  fireEvent.change(screen.getByLabelText("Their login name"), { target: { value: " bob " } });
+  fireEvent.submit(join.closest("form") as HTMLFormElement);
+  expect(saved.mock.calls[0]?.[0].remote.joined).toEqual([
+    { alias: "gpu-box", owner: "alice" },
+    { alias: "lab", owner: "bob" },
+  ]);
+  expect((screen.getByLabelText("Their login name") as HTMLInputElement).value).toBe("");
+  // Removing it drops that one only, never one's own host of the same alias.
+  act(() => apply({ type: "settings", settings }));
+  fireEvent.click(screen.getByRole("button", { name: "Remove alice@gpu-box" }));
+  expect(saved.mock.calls[1]?.[0].remote).toEqual({ ...settings.remote, joined: [] });
+  saved.mockRestore();
+  restart.mockRestore();
+});
+
+test("a joined Hive's other version says to ask its owner (29.12)", () => {
+  const reason = "alice's Hive is 1, yours is 2; ask alice to update.";
+  const link = {
+    state: "disconnected",
+    reason,
+    kind: "version",
+    owner: "alice",
+    since: 0,
+  } as const;
+  expect(linkText(link)).toBe(`disconnected: ${reason}`);
 });

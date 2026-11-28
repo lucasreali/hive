@@ -1,11 +1,13 @@
 import { afterEach, expect, test } from "bun:test";
 import type { HostMessage } from "../protocol";
 import { DEFAULT_SETTINGS, initialState, useHive } from "../store";
+import { MOCK_OWNER, MOCK_UNSHAREABLE, mockSharingError } from "./mock";
 import {
   createHostsTransport,
   MOCK_DROP_REASON,
   MOCK_HOST,
   MOCK_REMOTE_REPO,
+  MOCK_TEAMMATE,
   mockHostName,
 } from "./mockHosts";
 
@@ -111,7 +113,7 @@ test("the hosts follow this Mac's settings; quitting may end a host's terminals"
   const other = await transport.openTerminal(MOCK_REMOTE_REPO, 80, 24, () => {});
   got.length = 0;
   useHive.setState({ host: null });
-  const settings = { ...DEFAULT_SETTINGS, remote: { hosts: ["lab"], keep_minutes: 5 } };
+  const settings = { ...DEFAULT_SETTINGS, remote: { hosts: ["lab"], keep_minutes: 5, joined: [] } };
   await transport.setSettings(settings);
   await settle();
   expect(got).toContainEqual({
@@ -123,7 +125,10 @@ test("the hosts follow this Mac's settings; quitting may end a host's terminals"
   expect(states(got)).toEqual(["removed"]);
   expect(states(got, "lab")).toEqual(["connecting", "disconnected"]);
   // gpu-box again: linked again.
-  await transport.setSettings({ ...settings, remote: { hosts: [MOCK_HOST], keep_minutes: 5 } });
+  await transport.setSettings({
+    ...settings,
+    remote: { hosts: [MOCK_HOST], keep_minutes: 5, joined: [] },
+  });
   await settle();
   expect(states(got, "lab")).toEqual(["connecting", "disconnected", "removed"]);
   expect(states(got)).toEqual(["removed", "connecting", "connected"]);
@@ -182,7 +187,10 @@ test("with a host count, fake hosts come in every state with their spaces (27.8)
   // Not once it is removed.
   got.length = 0;
   useHive.setState({ host: null });
-  await transport.setSettings({ ...DEFAULT_SETTINGS, remote: { hosts: [], keep_minutes: 5 } });
+  await transport.setSettings({
+    ...DEFAULT_SETTINGS,
+    remote: { hosts: [], keep_minutes: 5, joined: [] },
+  });
   await settle();
   await transport.reconnectHost(host(8));
   await settle();
@@ -207,4 +215,78 @@ test("each host answers its own Claude accounts; `no-claude` takes claude off gp
   await transport.writeTerminal(id, "no-claude\r");
   await settle();
   expect(logins().map((m) => [m.host, m.claude])).toEqual([[MOCK_HOST, false]]);
+});
+
+test("a Hive joined links by its owner, and only gpu-box's own Sharing may be set (29.12)", async () => {
+  const { transport, got } = await linked(3);
+  const joined = [
+    { alias: MOCK_HOST, owner: MOCK_TEAMMATE },
+    { alias: MOCK_HOST, owner: "carol" },
+  ];
+  const remote = { hosts: [MOCK_HOST, mockHostName(2)], keep_minutes: 5, joined };
+  await transport.setSettings({ ...DEFAULT_SETTINGS, remote });
+  await settle();
+  const alice = `${MOCK_TEAMMATE}@${MOCK_HOST}`;
+  expect(states(got, alice)).toEqual(["connecting", "connected"]);
+  expect(got.find((m) => m.type === "host_link" && m.host === alice)).toMatchObject({
+    owner: MOCK_TEAMMATE,
+  });
+  const refused = got.filter((m) => m.type === "host_link" && m.host === `carol@${MOCK_HOST}`);
+  expect(refused.at(-1)).toMatchObject({
+    state: "disconnected",
+    kind: "denied",
+    owner: "carol",
+    reason: `carol's Hive on ${MOCK_HOST} refused you: ${MOCK_OWNER}'s login is not on carol's Sharing list`,
+  });
+  // gpu-box's own Sharing: it may be shared; a fake host, or a joined one, answers nothing.
+  got.length = 0;
+  await transport.getSharing(MOCK_HOST);
+  await transport.getSharing(mockHostName(2));
+  await transport.getSharing(alice);
+  await settle();
+  const answers = got.filter((m) => m.type === "sharing");
+  expect(answers).toHaveLength(1);
+  expect(answers[0]).toMatchObject({ host: MOCK_HOST, owner: MOCK_OWNER, unavailable: null });
+  got.length = 0;
+  const on = { on: true, group: "team", spaces: ["default"], people: [] };
+  await transport.setSharing(MOCK_HOST, on);
+  await transport.setSharing(mockHostName(2), on);
+  await transport.setSharing(alice, on);
+  await transport.setSharing(MOCK_HOST, { ...on, group: "" });
+  await settle();
+  expect(got.filter((m) => m.type === "sharing")).toHaveLength(1);
+  expect(got.find((m) => m.type === "sharing")).toMatchObject({ host: MOCK_HOST, sharing: on });
+  expect(got.find((m) => m.type === "sharing_failed")).toMatchObject({
+    host: MOCK_HOST,
+    message: "Pick the Unix group your teammates are in",
+  });
+  // This Mac's own is never shared.
+  got.length = 0;
+  await transport.getSharing("this-mac");
+  await transport.setSharing("this-mac", on);
+  await settle();
+  expect(got.find((m) => m.type === "sharing")).toMatchObject({ unavailable: MOCK_UNSHAREABLE });
+  expect(got.find((m) => m.type === "sharing_failed")).toMatchObject({
+    message: MOCK_UNSHAREABLE,
+  });
+});
+
+test("the fake service refuses a Sharing list as the real one would (29.12)", () => {
+  const person = (login: string) => ({
+    login,
+    display: "",
+    git_name: "",
+    git_email: "",
+    role: "viewer" as const,
+  });
+  const ok = { on: true, group: "team", spaces: [], people: [person("bob")] };
+  expect(mockSharingError(ok)).toBeNull();
+  expect(mockSharingError({ ...ok, on: false, group: "" })).toBeNull();
+  expect(mockSharingError({ ...ok, group: "wheel" })).toBe('You are not in the group "wheel"');
+  expect(mockSharingError({ ...ok, people: [person("Bob")] })).toBe(
+    'The login name "Bob" may hold only a-z, 0-9, _ and -, and starts with a letter or _',
+  );
+  expect(mockSharingError({ ...ok, people: [person(MOCK_OWNER)] })).toBe(
+    `${MOCK_OWNER} is you: this Hive is yours`,
+  );
 });
