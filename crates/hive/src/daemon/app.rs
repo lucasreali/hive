@@ -56,6 +56,17 @@ where
     }
 }
 
+/// Whether the service is shared now (29.12, `welcome.shared`); a Windows one never is.
+fn shared(state: &State) -> bool {
+    #[cfg(unix)]
+    return state.shared();
+    #[cfg(windows)]
+    return {
+        let _ = state;
+        false
+    };
+}
+
 /// Reads the client's `Hello`; answers `Welcome`, or `VersionMismatch` (with the number of
 /// terminals restarting the service would end, 26.17) and gives up.
 async fn handshake<R, W>(
@@ -98,6 +109,7 @@ where
                 distro: std::env::var("WSL_DISTRO_NAME").ok(),
                 warning: state.warning.clone(),
                 you: None,
+                shared: shared(state),
             },
             Some(Client {
                 role,

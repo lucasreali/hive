@@ -56,6 +56,7 @@ async fn welcomed(env: &Env, keep_secs: Option<u64>, app_id: Option<&str>) -> Co
         distro: Some(common::DISTRO.into()),
         warning: None,
         you: None,
+        shared: false,
     };
     assert_eq!(conn.control().await, (0, welcome));
     conn

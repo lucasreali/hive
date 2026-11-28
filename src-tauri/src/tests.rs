@@ -111,6 +111,7 @@ async fn welcomed() -> (Hive, Service, mpsc::UnboundedReceiver<Value>) {
         distro: Some("Ubuntu".into()),
         warning: None,
         you: None,
+        shared: false,
     };
     service.send(0, welcome).await;
     assert_eq!(
@@ -1957,6 +1958,7 @@ async fn a_remote_services_kept_terminals_are_checked_before_they_are_taken() {
         distro: None,
         warning: None,
         you: None,
+        shared: false,
     };
     service.send(0, welcome).await;
     let got = told(&mut service, &mut rx, vec![kept_terminal(6, 1)]).await;
@@ -2055,6 +2057,7 @@ async fn a_ui_reloaded_during_the_handshake_waits_for_welcome() {
                 distro: None,
                 warning: None,
                 you: None,
+                shared: false,
             },
         )
         .await;
@@ -2072,6 +2075,7 @@ async fn welcome_waits_for_a_ui_that_connects_later() {
         distro: Some("Ubuntu".into()),
         warning: None,
         you: None,
+        shared: false,
     };
     service.send(0, welcome).await;
     let stored = async {
@@ -2354,6 +2358,7 @@ async fn a_connection_after_a_refused_one_gets_its_own_handshake() {
         distro: None,
         warning: None,
         you: None,
+        shared: false,
     };
     service.send(0, welcome).await;
     assert_eq!(next(&mut rx).await["type"], "welcome");

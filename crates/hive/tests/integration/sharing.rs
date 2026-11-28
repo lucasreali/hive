@@ -250,6 +250,28 @@ async fn a_remote_linux_service_shares_a_group_socket_and_refuses_anyone_not_lis
     let refused = next.unwrap().unwrap().to_control().unwrap();
     let message = format!("{} is not on {}'s Sharing list", login(), login());
     assert_eq!(refused, Control::Error { message });
+    // The owner's own socket keeps one app: a second is told the service is shared and is
+    // refused as before (several apps are 29.13's).
+    let mut second = env.raw().await;
+    second
+        .send(0, Control::hello(Role::App, hive::VERSION))
+        .await;
+    let (_, welcome) = second.control().await;
+    assert!(
+        matches!(
+            welcome,
+            Control::Welcome {
+                shared: true,
+                you: None,
+                ..
+            }
+        ),
+        "{welcome:?}"
+    );
+    let refused = Control::Error {
+        message: "another app is already connected".into(),
+    };
+    assert_eq!(second.control().await, (0, refused));
     // A hook on the shared socket gets nothing either.
     let stream = tokio::net::UnixStream::connect(dir.join("hive.sock"))
         .await
@@ -277,15 +299,42 @@ async fn a_remote_linux_service_shares_a_group_socket_and_refuses_anyone_not_lis
     let (_, reply) = app.control().await;
     assert!(matches!(reply, Control::Sharing { .. }), "{reply:?}");
     assert!(!dir.exists());
-    // On again, then the service ends: they go too.
+    // A folder planted in its place (a link to one of ours stands for another user's): sharing
+    // on says why, and nothing is created in it.
+    let target = env.path("planted");
+    std::fs::create_dir(&target).unwrap();
+    std::os::unix::fs::symlink(&target, &dir).unwrap();
     let on = Sharing {
         on: true,
         group: group(),
         ..Sharing::default()
     };
+    app.send(
+        0,
+        Control::SetSharing {
+            sharing: on.clone(),
+        },
+    )
+    .await;
+    let (_, reply) = app.control().await;
+    let Control::Sharing { error, .. } = reply else {
+        panic!("{reply:?}")
+    };
+    assert!(error.unwrap().contains("someone else made it first"));
+    assert!(!target.join("hive.sock").exists());
+    // Gone, on again, then the service ends: the socket and folder go too.
+    std::fs::remove_file(&dir).unwrap();
+    app.send(
+        0,
+        Control::SetSharing {
+            sharing: Sharing::default(),
+        },
+    )
+    .await;
+    let _ = app.control().await;
     app.send(0, Control::SetSharing { sharing: on }).await;
     let _ = app.control().await;
-    assert!(dir.exists());
+    assert!(dir.join("hive.sock").exists());
     drop(app);
     crate::common::stop(daemon);
     assert!(!dir.exists());

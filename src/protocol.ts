@@ -23,6 +23,8 @@ export type ServiceMessage =
       distro: string | null;
       warning?: string | null;
       you?: Guest;
+      // 29.12: whether the service is shared now (its shared socket is open).
+      shared?: boolean;
     }
   // `problems`: the keymap's (28.7), each a line; the entries they name are ignored.
   | { type: "settings"; settings: Settings; problems?: string[] }

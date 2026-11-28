@@ -643,6 +643,7 @@ impl Service {
             distro: None,
             warning: None,
             you: None,
+            shared: false,
         };
         self.send(0, welcome).await;
         assert_eq!(self.control().await, (0, Control::ListProjects));

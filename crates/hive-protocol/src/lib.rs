@@ -189,6 +189,10 @@ pub enum Control {
         /// own socket, and from an older service.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         you: Option<Guest>,
+        /// Whether the service is shared now (29.12): its shared socket is open. Always true for
+        /// a teammate's connection; left out when false, and absent from an older service.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        shared: bool,
     },
     /// Handshake refused; the connection is closed after this message. `terminals` (26.17):
     /// how many terminals the service runs, which restarting it would end; optional, so
@@ -3462,9 +3466,12 @@ mod tests {
             distro: None,
             warning: None,
             you: None,
+            shared: false,
         };
         let text = serde_json::to_string(&welcome).unwrap();
-        assert!(!text.contains("you"), "{text}");
+        assert!(!text.contains("you") && !text.contains("shared"), "{text}");
+        let old: Control = serde_json::from_str(r#"{"type":"welcome","version":"1"}"#).unwrap();
+        assert_eq!(old, welcome);
     }
 
     #[test]
@@ -3579,6 +3586,7 @@ mod tests {
             distro: None,
             warning: None,
             you: None,
+            shared: false,
         };
         assert_eq!(frame.to_control().unwrap(), welcome);
     }

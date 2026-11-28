@@ -197,6 +197,11 @@ impl State {
         })
     }
 
+    /// Whether the shared socket is open (`welcome.shared`).
+    pub(super) fn shared(&self) -> bool {
+        lock(&self.share.open).is_some()
+    }
+
     /// The service ends: the shared socket and folder go, and every teammate's connection.
     pub(super) fn end_sharing(&self) {
         if let Some(open) = lock(&self.share.open).take() {
@@ -303,6 +308,7 @@ async fn guest(stream: UnixStream, state: Arc<State>) {
         distro: None,
         warning: None,
         you: Some(you),
+        shared: true,
     };
     if writer.send(Frame::control(0, &welcome)).await.is_ok() {
         // Held until it closes or is closed: its frames are 29.13's to serve.
@@ -477,6 +483,7 @@ mod tests {
             panic!()
         };
         assert_eq!((owner.as_str(), unavailable, error), ("bob", None, None));
+        assert!(state.shared());
         assert_eq!(groups, ["team", "gone"]);
         let dir = sharing::dir(&state.share.root, me());
         assert_eq!(std::fs::metadata(&dir).unwrap().mode() & 0o777, 0o710);
@@ -492,6 +499,7 @@ mod tests {
             distro: None,
             warning: None,
             you: Some(you),
+            shared: true,
         };
         assert_eq!(answer, welcome);
         // Its requests are not served yet (29.13): read and dropped, the connection held.
@@ -529,6 +537,7 @@ mod tests {
         state.share.store.set(Sharing::default()).unwrap();
         state.apply_sharing();
         assert!(!dir.exists());
+        assert!(!state.shared());
     }
 
     #[tokio::test(flavor = "multi_thread")]

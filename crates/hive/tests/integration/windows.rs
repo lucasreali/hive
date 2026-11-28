@@ -232,6 +232,7 @@ async fn the_service_serves_the_app_over_its_pipe_and_ends_with_it() {
         distro: None,
         warning: None,
         you: None,
+        shared: false,
     };
     app.wait_for(0, welcome).await;
     let settings = Control::Settings {

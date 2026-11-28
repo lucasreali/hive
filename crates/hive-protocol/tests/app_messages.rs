@@ -276,6 +276,7 @@ fn samples() -> Vec<Control> {
                 display: s("Bob"),
                 role: ShareRole::Viewer,
             }),
+            shared: true,
         },
         VersionMismatch {
             protocol: 1,

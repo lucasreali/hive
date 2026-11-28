@@ -263,6 +263,7 @@ mod tests {
             distro: None,
             warning: None,
             you: None,
+            shared: false,
         }
     }
 

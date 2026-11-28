@@ -11,7 +11,7 @@ import { initialState, useHive } from "./store";
 type Fields<M> = { [F in Exclude<keyof M, "type">]-?: true };
 /** Every message type with its fields, as `ServiceMessage` says: the typecheck keeps it exact. */
 const FIELDS: { [T in ServiceMessage["type"]]: Fields<Extract<ServiceMessage, { type: T }>> } = {
-  welcome: { version: true, distro: true, warning: true, you: true },
+  welcome: { version: true, distro: true, warning: true, you: true, shared: true },
   settings: { settings: true, problems: true },
   settings_failed: { message: true },
   diagnostics: { settings_file: true, wrapper: true, claude: true, git_error: true },

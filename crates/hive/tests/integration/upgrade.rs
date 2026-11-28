@@ -60,6 +60,7 @@ async fn an_upgrade_moves_the_old_files_into_the_hive_folder() {
         distro: Some(DISTRO.into()),
         warning: None,
         you: None,
+        shared: false,
     };
     assert_eq!(welcome, expected);
     // The settings the service reads are the old ones, now in `~/.hive`.

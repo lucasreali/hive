@@ -261,6 +261,7 @@ impl Env {
                     distro: Some(DISTRO.into()),
                     warning: None,
                     you: None,
+                    shared: false,
                 }
             )
         );
