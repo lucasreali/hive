@@ -29,6 +29,7 @@ import {
   MOCK_FOLDER_FILES,
   MOCK_GROUP,
   MOCK_IGNORED,
+  MOCK_INPUT,
   MOCK_ISSUES,
   MOCK_NAME_RULE,
   MOCK_OWN_WORKTREE,
@@ -391,6 +392,16 @@ test("the mock shell marks its prompts and commands; false fails", async () => {
   const { transport, id, output } = await opened();
   await transport.writeTerminal(id, "false\r");
   expect(output()).toBe(`${A}mock$ false\r\n${C}false\r\n${D(1)}${A}mock$ `);
+});
+
+test("each write to a terminal is recorded by its id, as sent (29.7)", async () => {
+  const { transport, id } = await opened();
+  MOCK_INPUT.delete(id);
+  await transport.writeTerminal(id, "a");
+  await transport.writeTerminal(id, "ã\r");
+  await transport.writeTerminal(9999, "nowhere");
+  expect(MOCK_INPUT.get(id)).toEqual(["a", "ã\r"]);
+  expect(MOCK_INPUT.has(9999)).toBe(false);
 });
 
 test("`copy-files` stands in for files copied in Finder, as the app side reads them (18.3)", async () => {

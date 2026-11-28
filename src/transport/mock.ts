@@ -60,6 +60,12 @@ const HANDSHAKE: Record<string, ServiceMessage> = {
   disconnected: { type: "disconnected", reason: "mock: the hive bridge exited", bundled: true },
 };
 /** `?mock=load`: when the first terminal's replay starts, and how much later each next one does. */
+/**
+ * What each fake terminal was sent, write by write, by its id (29.7): the e2e specs check that
+ * every key typed reaches its terminal once.
+ */
+export const MOCK_INPUT = new Map<number, string[]>();
+
 export const LOAD_START_MS = 500;
 export const LOAD_STAGGER_MS = 100;
 export const MOCK_DIAGNOSTICS = {
@@ -2299,6 +2305,7 @@ export function createMockTransport(
     async writeTerminal(id, data) {
       const terminal = terminals.get(id);
       if (!terminal) return;
+      MOCK_INPUT.set(id, [...(MOCK_INPUT.get(id) ?? []), data]);
       for (const char of data) {
         if (char !== "\r") {
           terminal.line += char;
