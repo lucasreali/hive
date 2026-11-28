@@ -14,8 +14,19 @@ import {
 import { type CSSProperties, Fragment, type ReactNode, useEffect, useRef, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { version as appVersion } from "../../package.json";
+import {
+  bindings,
+  chordOf,
+  chordText,
+  conflicts,
+  entries,
+  overlap,
+  parseChord,
+  platform,
+  withChords,
+} from "../keymap";
 import type { Account, AppMode, ClaudeLogin, ProjectScripts, Settings } from "../protocol";
-import { commandKeys, platformCommands } from "../shortcuts";
+import { COMMANDS, type Command } from "../shortcuts";
 import {
   ask,
   type HiveState,
@@ -31,7 +42,7 @@ import { transport } from "../transport";
 import { NumberInput } from "../ui/NumberInput";
 import { Select, type SelectGroup, type SelectOption } from "../ui/Select";
 import { openSettingsFile, openSharedFolder } from "../viewer/external";
-import { homeText, isMac } from "../window";
+import { homeText, isMac, keyText } from "../window";
 import { FolderField, useFolderListing } from "./FolderField";
 import { HostsSettings } from "./Hosts";
 import { CloseIcon, ICON } from "./icons";
@@ -54,7 +65,7 @@ export const SECTIONS = [
   "Hosts",
   "Worktrees",
   "Projects",
-  "Shortcuts",
+  "Keyboard",
   "About",
 ] as const;
 type Section = (typeof SECTIONS)[number];
@@ -74,7 +85,7 @@ const SECTION_ICON: Record<Section, Icon> = {
   Hosts: HardDrivesIcon,
   Worktrees: GitBranchIcon,
   Projects: FolderSimpleIcon,
-  Shortcuts: KeyboardIcon,
+  Keyboard: KeyboardIcon,
   About: InfoIcon,
 };
 
@@ -715,25 +726,269 @@ function Fields({ fields }: { fields: Field[] }) {
   });
 }
 
-/** Read-only: the command table `shortcut()` runs and, on macOS, the terminal's own keys. */
-function Shortcuts() {
-  const rows = [
-    ...platformCommands().map((c) => ({ id: c.id, label: c.label, keys: commandKeys(c) })),
-    ...(isMac() ? MAC_TERMINAL_KEYS.map((k) => ({ ...k, id: k.keys })) : []),
+/** A note under a command's row: why a chord was refused, or a conflict to settle. */
+type Note = { id: string; text: string; conflict?: { chord: string; other: Command } };
+
+/** The text to search a command by: its label, id and chords, written several ways. */
+function searchText(c: Command, chords: string[]): string {
+  const keys = chords.flatMap((k) => [k, chordText(k)]);
+  return [c.label, c.id, ...keys].join(" ").toLowerCase().replace(/[\s+]/g, "");
+}
+
+/** The local keys of #35 and the terminal's own: never in the keymap. */
+function fixedKeys(): { label: string; keys: string }[] {
+  const mac = isMac();
+  return [
+    { label: "Copy in the terminal", keys: mac ? "⌘C" : "Ctrl+Shift+C" },
+    { label: "Paste in the terminal", keys: mac ? "⌘V" : "Ctrl+Shift+V" },
+    ...(mac ? MAC_TERMINAL_KEYS : []),
+    { label: "Move in the tree, lists and menus", keys: "↑ ↓" },
+    { label: "Collapse or expand in the tree", keys: "← →" },
+    { label: "Select or run", keys: keyText("Enter") },
+    { label: "Close a dialog, a menu or a search", keys: keyText("Esc") },
+    { label: "Move a focused agent in its list", keys: mac ? "⌥↑ ⌥↓" : "Alt+↑ Alt+↓" },
+    { label: "Save the file in the editor", keys: keyText("Ctrl+S") },
   ];
+}
+
+/**
+ * Settings → Keyboard (28.7): every command with its chords, filtered by its own search; record,
+ * remove, reset one or all, conflicts and the service's problems shown; then the keys that stay
+ * fixed. Every change saves the keymap's changes only (`withChords`), as every other setting.
+ * `inSearch`: shown by the settings' search, the commands only.
+ */
+function Keyboard({ inSearch = false }: { inSearch?: boolean }) {
+  const keymap = useHive((s) => s.settings.keymap);
+  const problems = useHive((s) => s.settingsProblems);
+  const remote = useHive(onRemote);
+  const [filter, setFilter] = useState("");
+  const [recording, setRecording] = useState<string | null>(null);
+  const [note, setNote] = useState<Note | null>(null);
+  const on = platform();
+  const of = bindings(keymap, COMMANDS, on);
+  const found = conflicts(COMMANDS, of);
+  const chordsOf = (c: Command) => of.get(c.id)?.chords ?? [];
+  const wanted = filter.toLowerCase().replace(/[\s+]/g, "");
+  const rows = COMMANDS.filter((c) => searchText(c, chordsOf(c)).includes(wanted));
+  const save = (changes: [Command, string[]][]) =>
+    saveSettings((s) => {
+      for (const [c, chords] of changes) s.keymap = withChords(s.keymap, c, chords, on);
+    });
+  const add = (c: Command, chord: string) => {
+    const reaches = !chord.includes("Cmd+") && (chord.includes("Ctrl+") || chord.includes("Alt+"));
+    save([[c, [...chordsOf(c), chord]]]);
+    setNote(
+      reaches ? { id: c.id, text: `${chordText(chord)} no longer reaches the terminal` } : null,
+    );
+  };
+  const recorded = (c: Command, event: KeyboardEvent) => {
+    const chord = chordOf(event);
+    if (!chord) return;
+    setRecording(null);
+    const parsed = parseChord(chord, on, c.id);
+    if (parsed.error !== undefined) {
+      setNote({ id: c.id, text: parsed.error.replace(JSON.stringify(chord), chordText(chord)) });
+      return;
+    }
+    if (chordsOf(c).includes(chord)) return;
+    const other = COMMANDS.find(
+      (o) => o !== c && overlap(o.context, c.context) && chordsOf(o).includes(chord),
+    );
+    if (other) {
+      const text = `${chordText(chord)} is also the shortcut of ${other.label}`;
+      setNote({ id: c.id, text, conflict: { chord, other } });
+      return;
+    }
+    add(c, chord);
+  };
   return (
-    <table className="settings-keys">
-      <tbody>
-        {rows.map((row) => (
-          <tr key={row.id}>
-            <td>{row.label}</td>
-            <td>
-              <kbd>{row.keys}</kbd>
-            </td>
-          </tr>
-        ))}
-      </tbody>
-    </table>
+    <>
+      {problems.length > 0 && (
+        <section className="field settings-group keymap-problems" aria-labelledby="keymap-problems">
+          <h3 id="keymap-problems">Problems in the settings file</h3>
+          {problems.map((p) => (
+            <p className="field-warning" key={p}>
+              {p}
+            </p>
+          ))}
+          {!remote && (
+            <button type="button" className="secondary" onClick={openSettingsFile}>
+              Open settings file
+            </button>
+          )}
+        </section>
+      )}
+      {!inSearch && (
+        <SearchField
+          aria-label="Search shortcuts"
+          placeholder="Search shortcuts"
+          value={filter}
+          onChange={setFilter}
+        />
+      )}
+      {rows.length === 0 && <p className="field-help">No command matches.</p>}
+      <ul className="keymap">
+        {rows.map((c) => {
+          const chords = chordsOf(c);
+          const user = of.get(c.id)?.user ?? false;
+          const mine = note?.id === c.id ? note : null;
+          return (
+            <li className="keymap-row" key={c.id}>
+              <span className="keymap-label">
+                {c.label}
+                {user && <span className="keymap-changed" title="Changed from Hive's default" />}
+              </span>
+              <span className="keymap-chords">
+                {chords.map((k) => (
+                  <span className="keymap-chord" key={k}>
+                    <kbd>{chordText(k)}</kbd>
+                    <button
+                      type="button"
+                      className="ghost keymap-remove"
+                      aria-label={`Remove ${chordText(k)} from ${c.label}`}
+                      onClick={() => {
+                        setNote(null);
+                        save([[c, chords.filter((x) => x !== k)]]);
+                      }}
+                    >
+                      <CloseIcon />
+                    </button>
+                  </span>
+                ))}
+                {chords.length === 0 && recording !== c.id && (
+                  <span className="field-help">No shortcut</span>
+                )}
+                {recording === c.id ? (
+                  <input
+                    className="keymap-record"
+                    aria-label={`New shortcut for ${c.label}`}
+                    placeholder="Press the keys…"
+                    readOnly
+                    // biome-ignore lint/a11y/noAutofocus: the field exists to catch the next key.
+                    autoFocus
+                    onBlur={() => setRecording(null)}
+                    onKeyDown={(event) => {
+                      // Nothing else gets the key: neither the dialog (Esc) nor a shortcut.
+                      event.preventDefault();
+                      event.stopPropagation();
+                      const { key, ctrlKey, altKey, shiftKey, metaKey } = event;
+                      if (key === "Escape" && !ctrlKey && !altKey && !shiftKey && !metaKey) {
+                        setRecording(null);
+                        return;
+                      }
+                      recorded(c, event.nativeEvent);
+                    }}
+                  />
+                ) : (
+                  <button
+                    type="button"
+                    className="ghost keymap-add"
+                    aria-label={`Add a shortcut to ${c.label}`}
+                    title="Add a shortcut"
+                    onClick={() => {
+                      setNote(null);
+                      setRecording(c.id);
+                    }}
+                  >
+                    +
+                  </button>
+                )}
+                {user && (
+                  <button
+                    type="button"
+                    className="link"
+                    aria-label={`Reset ${c.label}`}
+                    onClick={() => {
+                      setNote(null);
+                      save([[c, c.defaults[on]]]);
+                    }}
+                  >
+                    Reset
+                  </button>
+                )}
+              </span>
+              {found.get(c.id)?.map((f) => (
+                <p className="field-warning keymap-note" key={`${f.chord} ${f.other.id}`}>
+                  {f.runs
+                    ? `${chordText(f.chord)} is also the shortcut of ${f.other.label}; this one runs`
+                    : `${chordText(f.chord)} runs ${f.other.label}`}
+                </p>
+              ))}
+              {mine && (
+                <p className="field-help keymap-note" role="status">
+                  {mine.text}
+                  {mine.conflict && (
+                    <>
+                      {" "}
+                      <button
+                        type="button"
+                        className="link"
+                        onClick={() => {
+                          const { chord, other } = mine.conflict as NonNullable<Note["conflict"]>;
+                          setNote(null);
+                          save([
+                            [c, [...chords, chord]],
+                            [other, chordsOf(other).filter((x) => x !== chord)],
+                          ]);
+                        }}
+                      >
+                        Take it
+                      </button>{" "}
+                      <button
+                        type="button"
+                        className="link"
+                        onClick={() =>
+                          add(c, (mine.conflict as NonNullable<Note["conflict"]>).chord)
+                        }
+                      >
+                        Keep both
+                      </button>
+                    </>
+                  )}
+                </p>
+              )}
+            </li>
+          );
+        })}
+      </ul>
+      {!inSearch && Object.keys(entries(keymap)).length > 0 && (
+        <button
+          type="button"
+          className="secondary keymap-reset"
+          onClick={() =>
+            ask({
+              title: "Reset every shortcut?",
+              text: "Every command gets Hive's default shortcuts back.",
+              action: "Reset all",
+              back: "settings",
+              run: () =>
+                saveSettings((s) => {
+                  s.keymap = {};
+                }),
+            })
+          }
+        >
+          Reset all
+        </button>
+      )}
+      {!inSearch && (
+        <section className="field settings-group" aria-labelledby="fixed-keys">
+          <h3 id="fixed-keys">Fixed keys</h3>
+          <table className="settings-keys">
+            <tbody>
+              {fixedKeys().map((row) => (
+                <tr key={row.label}>
+                  <td>{row.label}</td>
+                  <td>
+                    <kbd>{row.keys}</kbd>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </section>
+      )}
+    </>
   );
 }
 
@@ -1575,10 +1830,17 @@ function Content({ section, query }: { section: Section; query: string }) {
   );
   if (query) {
     const found = fields.filter((f) => f.label.toLowerCase().includes(query.toLowerCase()));
-    if (found.length === 0) return <p className="field-help">No setting matches.</p>;
-    return <Fields fields={found} />;
+    // The Keyboard section by its name, or the commands whose label or chord match.
+    const keys = "keyboard shortcuts".includes(query.toLowerCase());
+    if (found.length === 0 && !keys) return <p className="field-help">No setting matches.</p>;
+    return (
+      <>
+        <Fields fields={found} />
+        {keys && <Keyboard inSearch />}
+      </>
+    );
   }
-  if (section === "Shortcuts") return <Shortcuts />;
+  if (section === "Keyboard") return <Keyboard />;
   if (section === "About") return <About />;
   if (section === "Projects") return <ProjectScriptsSection />;
   const shown = <Fields fields={fields.filter((f) => f.section === section)} />;

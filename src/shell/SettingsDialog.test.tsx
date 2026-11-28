@@ -896,43 +896,204 @@ test("the search lists every matching field across sections", () => {
   expect(labels()).toHaveLength(2);
 });
 
-const shortcutRows = () =>
+const fixedRows = () =>
   [...document.querySelectorAll(".settings-keys tr")].map((r) => r.textContent);
+const keyRow = (label: string) =>
+  [...document.querySelectorAll<HTMLElement>(".keymap-row")].find(
+    (r) => r.querySelector(".keymap-label")?.textContent === label,
+  ) as HTMLElement;
+const chips = (label: string) =>
+  [...keyRow(label).querySelectorAll(".keymap-chord kbd")].map((k) => k.textContent);
+const keymap = () => settings().keymap as Record<string, unknown>;
+/** The note under a row: a refusal, a conflict or a terminal key. */
+const note = () => document.querySelector(".keymap [role=status]");
+/** Records `keys` as a new chord of the command `label`. */
+function record(label: string, keys: Partial<KeyboardEvent>) {
+  fireEvent.click(screen.getByRole("button", { name: `Add a shortcut to ${label}` }));
+  const field = screen.getByRole("textbox", { name: `New shortcut for ${label}` });
+  expect(document.activeElement).toBe(field);
+  return fireEvent.keyDown(field, keys);
+}
 
-test("shortcuts are the command table, read-only, without macOS' own", () => {
+test("Keyboard lists every command with its chords, then the fixed keys", () => {
   open();
-  section("Shortcuts");
-  expect(shortcutRows()).toEqual(COMMANDS.filter((c) => !c.mac).map((c) => `${c.label}${c.keys}`));
-  expect(shortcutRows()).toContain("Go to the next pending agentF8");
+  section("Keyboard");
+  const rows = document.querySelectorAll(".keymap-row");
+  expect(rows).toHaveLength(COMMANDS.length);
+  expect(chips("Command palette")).toEqual(["Ctrl+Shift+P"]);
+  expect(chips("Go to the next pending agent")).toEqual(["F8"]);
+  expect(chips("Keyboard shortcuts")).toEqual(["Ctrl+Shift+/"]);
+  // macOS' own commands exist here too, with no default.
+  expect(chips("Close the tab")).toEqual([]);
+  expect(keyRow("Close the tab").textContent).toContain("No shortcut");
+  expect(fixedRows()).toContain("Copy in the terminalCtrl+Shift+C");
+  expect(fixedRows()).toContain("Paste in the terminalCtrl+Shift+V");
+  expect(fixedRows()).not.toContain("Clear the terminal⌘K");
+  // Nothing changed: no reset.
+  expect(screen.queryByRole("button", { name: "Reset all" })).toBeNull();
+  expect(screen.queryByRole("button", { name: "Reset Command palette" })).toBeNull();
 });
 
-test("on macOS the shortcuts are named with ⌘, with macOS' own and the terminal's keys", () => {
+test("on macOS the chords are named with ⌘, with the terminal's own fixed keys", () => {
   asMac();
   open();
-  section("Shortcuts");
-  const rows = shortcutRows();
-  expect(rows).toHaveLength(COMMANDS.length + 10);
-  expect(rows).toContain("Command palette⇧⌘P");
-  expect(rows).toContain("Go to the next pending agent⇧⌘J or F8");
-  expect(rows).toContain("New terminal in this worktree⌘T");
-  expect(rows).toContain("New worktree⌘N or ⇧⌘N");
-  expect(rows).toContain("Close the tab⌘W");
-  expect(rows).toContain("Show the next tab⌃Tab or ⇧⌘]");
-  expect(rows).toContain("Show the previous tab⌃⇧Tab or ⇧⌘[");
-  expect(rows).toContain("Show tab 9⌘9");
-  expect(rows).toContain("Make the terminal font smaller⌘-");
-  expect(rows.slice(-10)).toEqual([
-    "Clear the terminal⌘K",
-    "Jump to the previous prompt⌘↑",
-    "Jump to the next prompt⌘↓",
-    "Go to the start of the line⌘←",
-    "Go to the end of the line⌘→",
-    "Delete to the start of the line⌘⌫",
-    "Scroll a page upfn↑",
-    "Scroll a page downfn↓",
-    "Scroll to the topfn←",
-    "Scroll to the bottomfn→",
-  ]);
+  section("Keyboard");
+  expect(chips("Command palette")).toEqual(["⇧⌘P"]);
+  expect(chips("Go to the next pending agent")).toEqual(["⇧⌘J", "F8"]);
+  expect(chips("New worktree")).toEqual(["⌘N", "⇧⌘N"]);
+  expect(chips("Show the previous tab")).toEqual(["⌃⇧Tab", "⇧⌘["]);
+  expect(chips("Make the terminal font smaller")).toEqual(["⌘-"]);
+  expect(fixedRows()).toContain("Copy in the terminal⌘C");
+  expect(fixedRows()).toContain("Clear the terminal⌘K");
+  expect(fixedRows()).toContain("Move a focused agent in its list⌥↑ ⌥↓");
+  expect(fixedRows()).toContain("Save the file in the editor⌘S");
+});
+
+test("the search filters the commands by label, id or chord", () => {
+  open();
+  section("Keyboard");
+  const filter = (value: string) =>
+    fireEvent.change(screen.getByRole("searchbox", { name: "Search shortcuts" }), {
+      target: { value },
+    });
+  const shown = () =>
+    [...document.querySelectorAll(".keymap-label")].map((l) => l.textContent as string);
+  filter("ctrl shift p");
+  expect(shown()).toEqual(["Command palette"]);
+  filter("toggle-panel");
+  expect(shown()).toEqual(["Show or hide the side panel's view"]);
+  filter("COMMENT");
+  expect(shown()).toEqual(["Comment on the selected lines"]);
+  filter("nothing like it");
+  expect(shown()).toEqual([]);
+  expect(screen.getByText("No command matches.")).toBeTruthy();
+});
+
+test("the settings' search finds the Keyboard section by its name", () => {
+  open();
+  search("shortcut");
+  expect(document.querySelectorAll(".keymap-row")).toHaveLength(COMMANDS.length);
+  // Only the commands: no search of its own, no fixed keys.
+  expect(screen.queryByRole("searchbox", { name: "Search shortcuts" })).toBeNull();
+  expect(fixedRows()).toEqual([]);
+  search("keyboard");
+  expect(screen.queryByText("No setting matches.")).toBeNull();
+});
+
+test("a recorded chord is added, saved as a change, and its terminal key named", async () => {
+  open();
+  section("Keyboard");
+  // A lone modifier is no chord yet.
+  record("Command palette", { key: "Control", code: "ControlLeft", ctrlKey: true });
+  expect(screen.getByRole("textbox", { name: "New shortcut for Command palette" })).toBeTruthy();
+  // Option's character is the key's: Alt+K, never "˚".
+  const field = screen.getByRole("textbox", { name: "New shortcut for Command palette" });
+  expect(fireEvent.keyDown(field, { key: "˚", code: "KeyK", ctrlKey: true, altKey: true })).toBe(
+    false,
+  );
+  await waitFor(() => expect(keymap().palette).toEqual(["Ctrl+Shift+P", "Ctrl+Alt+K"]));
+  expect(chips("Command palette")).toEqual(["Ctrl+Shift+P", "Ctrl+Alt+K"]);
+  expect(note()?.textContent).toBe("Ctrl+Alt+K no longer reaches the terminal");
+  expect(screen.getByRole("button", { name: "Reset all" })).toBeTruthy();
+  // The same chord again changes nothing.
+  record("Command palette", { key: "k", code: "KeyK", ctrlKey: true, altKey: true });
+  expect(note()).toBeNull();
+  // Reset brings the default back, and drops the entry.
+  fireEvent.click(screen.getByRole("button", { name: "Reset Command palette" }));
+  await waitFor(() => expect(keymap()).toEqual({}));
+  expect(chips("Command palette")).toEqual(["Ctrl+Shift+P"]);
+});
+
+test("a function key needs no modifier and says nothing of the terminal", async () => {
+  open();
+  section("Keyboard");
+  record("Close the tab", { key: "F4", code: "F4" });
+  await waitFor(() => expect(keymap()["close-tab"]).toBe("F4"));
+  expect(note()).toBeNull();
+});
+
+test("a chord with no modifier or a fixed key is refused, and Esc or a click away cancels", () => {
+  open();
+  section("Keyboard");
+  record("Comment on the selected lines", { key: "m", code: "KeyM" });
+  expect(note()?.textContent).toBe("M would take the key from the terminal: add Ctrl or Alt");
+  record("Comment on the selected lines", {
+    key: "C",
+    code: "KeyC",
+    ctrlKey: true,
+    shiftKey: true,
+  });
+  expect(note()?.textContent).toBe("Ctrl+Shift+C is the terminal's Copy and stays fixed");
+  // Esc ends the recording, not the dialog.
+  const dialog = screen.getByRole("dialog", { name: "Settings" }) as HTMLDialogElement;
+  record("Comment on the selected lines", { key: "Escape", code: "Escape" });
+  expect(screen.queryByRole("textbox", { name: /^New shortcut/ })).toBeNull();
+  expect(dialog.open).toBe(true);
+  fireEvent.click(
+    screen.getByRole("button", { name: "Add a shortcut to Comment on the selected lines" }),
+  );
+  fireEvent.blur(screen.getByRole("textbox", { name: /^New shortcut/ }));
+  expect(screen.queryByRole("textbox", { name: /^New shortcut/ })).toBeNull();
+  expect(keymap()).toEqual({});
+});
+
+test("a chord another command has asks: keep both, or take it", async () => {
+  open();
+  section("Keyboard");
+  const keys = { key: "M", code: "KeyM", ctrlKey: true, shiftKey: true };
+  record("Command palette", keys);
+  expect(note()?.textContent).toContain(
+    "Ctrl+Shift+M is also the shortcut of Comment on the selected lines",
+  );
+  expect(keymap()).toEqual({});
+  fireEvent.click(screen.getByRole("button", { name: "Keep both" }));
+  await waitFor(() => expect(keymap().palette).toEqual(["Ctrl+Shift+P", "Ctrl+Shift+M"]));
+  // Both rows say so; the user's chord runs.
+  expect(keyRow("Command palette").querySelector(".field-warning")?.textContent).toBe(
+    "Ctrl+Shift+M is also the shortcut of Comment on the selected lines; this one runs",
+  );
+  expect(keyRow("Comment on the selected lines").querySelector(".field-warning")?.textContent).toBe(
+    "Ctrl+Shift+M runs Command palette",
+  );
+  fireEvent.click(screen.getByRole("button", { name: "Reset Command palette" }));
+  await waitFor(() => expect(keymap()).toEqual({}));
+  record("Command palette", keys);
+  fireEvent.click(screen.getByRole("button", { name: "Take it" }));
+  await waitFor(() =>
+    expect(keymap()).toEqual({ palette: ["Ctrl+Shift+P", "Ctrl+Shift+M"], comment: [] }),
+  );
+  expect(keyRow("Comment on the selected lines").textContent).toContain("No shortcut");
+  expect(document.querySelector(".keymap .field-warning")).toBeNull();
+});
+
+test("a chord is removed with its ×, and Reset all asks first", async () => {
+  open();
+  section("Keyboard");
+  fireEvent.click(screen.getByRole("button", { name: "Remove Ctrl+Shift+P from Command palette" }));
+  await waitFor(() => expect(keymap()).toEqual({ palette: [] }));
+  expect(keyRow("Command palette").textContent).toContain("No shortcut");
+  fireEvent.click(screen.getByRole("button", { name: "Reset all" }));
+  // Hive's own question (8.20), never `confirm`.
+  expect(useHive.getState().question).toMatchObject({
+    title: "Reset every shortcut?",
+    action: "Reset all",
+  });
+  act(() => useHive.getState().question?.run());
+  await waitFor(() => expect(keymap()).toEqual({}));
+});
+
+test("the service's problems show at the top with the settings file", () => {
+  open();
+  section("Keyboard");
+  expect(screen.queryByRole("region", { name: "Problems in the settings file" })).toBeNull();
+  const problem = 'keymap: Hive has no command "palete"';
+  act(() => apply({ type: "settings", settings: DEFAULT_SETTINGS, problems: [problem] }));
+  const problems = screen.getByRole("region", { name: "Problems in the settings file" });
+  expect(problems.textContent).toContain(problem);
+  const open_ = spyOn(transport, "openSettingsFile");
+  fireEvent.click(within(problems).getByRole("button", { name: "Open settings file" }));
+  expect(open_).toHaveBeenCalled();
+  open_.mockRestore();
 });
 
 test("Option as Meta is a macOS setting, off by default, per Option key", async () => {

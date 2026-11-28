@@ -2702,6 +2702,86 @@ button.chevron:hover {
   text-align: right;
 }
 
+/* Settings → Keyboard (28.7): one row per command, its chords as chips with a remove button,
+   "+" to record one, Reset when changed; a note or a conflict under the row. */
+.keymap {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: var(--fs-body);
+}
+
+.keymap-row {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: center;
+  gap: 2px 12px;
+  padding: 5px 0;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.keymap-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+/* A command whose chords are not Hive's defaults. */
+.keymap-changed {
+  width: 6px;
+  height: 6px;
+  flex: none;
+  border-radius: 50%;
+  background: var(--accent);
+}
+
+.keymap-chords {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 4px;
+}
+
+.keymap-chord {
+  display: inline-flex;
+  align-items: center;
+}
+
+.keymap-remove {
+  padding: 0 2px;
+  height: 18px;
+}
+
+.keymap-add {
+  min-width: 22px;
+  height: 22px;
+  padding: 0 4px;
+}
+
+.keymap-record {
+  width: 130px;
+  padding: 2px 6px;
+  background: var(--bg);
+  border: 1px solid var(--focus);
+  border-radius: var(--radius);
+  color: var(--text);
+  font-size: var(--fs-small);
+  outline: none;
+  box-shadow: 0 0 0 1px var(--focus);
+}
+
+.keymap-note {
+  grid-column: 1 / -1;
+  margin: 0;
+  font-size: var(--fs-small);
+}
+
+.keymap-reset {
+  align-self: flex-start;
+}
+
 .settings-about {
   margin: 0;
   display: grid;
