@@ -498,15 +498,21 @@ function macKey(term: Terminal, marks: Marks, event: KeyboardEvent): boolean {
 class AccentKey {
   /** The text of the composition that ended last, until the next keydown. */
   private text = "";
+  /**
+   * The accent of the composition that ended last while xterm has not sent it, until a key is
+   * taken after it (it then waits in `waiting`). One only: an accent xterm never sends (a blur
+   * right after it) is replaced by the next, never left behind to take a later key (29.21).
+   */
+  private unsent = "";
   /** The accents xterm has not sent yet, oldest first, each with the key taken after it. */
   private readonly waiting: { accent: string; rest: string }[] = [];
 
   constructor(private readonly term: Terminal) {}
 
-  /** A composition ended with `data`, which xterm sends next: an accent waits for it. */
+  /** A composition ended with `data`, which xterm sends next. */
   ended(data: string): void {
     this.text = data;
-    if (accentText(data)) this.waiting.push({ accent: data, rest: "" });
+    this.unsent = accentText(data) ? data : "";
   }
 
   /**
@@ -522,6 +528,8 @@ class AccentKey {
       out += accent + rest;
       left = left.slice(accent.length);
     }
+    // The last accent is sent (with others xterm sends in one piece, or after them).
+    if (this.unsent && left.includes(this.unsent)) this.unsent = "";
     return out + left;
   }
 
@@ -539,10 +547,12 @@ class AccentKey {
       return false;
     }
     event.preventDefault();
-    const last = this.waiting.at(-1);
-    // Its accent is the last one waiting, or xterm sent it already.
-    if (!last) return this.send(next);
-    last.rest = next;
+    // xterm sent its accent already.
+    if (!this.unsent) return this.send(next);
+    // Bounded: past that many in one task, those before go out first, in order.
+    if (this.waiting.length >= MAX_WAITING) this.flush();
+    this.waiting.push({ accent: this.unsent, rest: next });
+    this.unsent = "";
     // Never lost: one xterm never sent as it was (its data did not start with it) goes out on
     // a later task, after xterm's own send of the composition, which was asked for first.
     setTimeout(() => this.flush(), 0);
@@ -560,6 +570,9 @@ class AccentKey {
     return true;
   }
 }
+
+/** At most that many keys wait for their accents (`AccentKey`); far more than a task takes. */
+const MAX_WAITING = 64;
 
 /** Whether a composition's text is an accent: one code point, not a letter (an IME's are). */
 const accentText = (text: string) => [...text].length === 1 && !/\p{L}/u.test(text);

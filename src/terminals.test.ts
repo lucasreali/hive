@@ -1263,6 +1263,24 @@ test("a key taken after an accent is never lost or reordered, however fast the n
   await settle();
   await settle();
   expect(sent()).toEqual(["t"]);
+  write.mockClear();
+  // 29.21: an accent xterm never sends with no key taken after it (its text gone, as a blur
+  // in that window leaves it) leaves nothing waiting: the next fast ´ t h is "'th", not "'ht".
+  accent("'");
+  area.value = area.value.slice(0, -1);
+  await settle();
+  await deadKey(term, "'", 222, "t", "", () => key("h", 72));
+  expect(sent().join("")).toBe("'th");
+  write.mockClear();
+  // At most 64 keys wait for their accents: past that, those waiting go first, none lost.
+  for (let i = 0; i < 70; i++) {
+    accent("'");
+    key("'t", 222);
+  }
+  expect(sent().join("")).toBe("t".repeat(64));
+  await settle();
+  await settle();
+  expect(sent().join("")).toBe(`${"t".repeat(64)}${"'t".repeat(6)}${"'".repeat(64)}`);
   write.mockRestore();
 });
 
