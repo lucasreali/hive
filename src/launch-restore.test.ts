@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, expect, jest, test } from "bun:test";
+import { afterEach, beforeEach, expect, jest, spyOn, test } from "bun:test";
 import { savedHostPlaces, savedSpacePlaces } from "./persist";
 import type { ServiceMessage, Space } from "./protocol";
 import { apply } from "./reduce";
@@ -27,6 +27,7 @@ import {
   useHive,
   withCollapsed,
 } from "./store";
+import * as tabsModule from "./tabs";
 import { fileKey, placeKey, shownPane } from "./tabs";
 import { MOCK_REPOS } from "./transport/mock";
 
@@ -265,9 +266,15 @@ test("with nothing selected, or another host's terminal, the restore picks nothi
   // Another host's reattached terminal waits there, never taking the focus.
   reopen(10, "gpu");
   expect([shownPane(s()), s().quietTabs.at(-1)]).toEqual([8, 10]);
-  // With nothing selected (every tab shown), the history picks nothing.
+  // With nothing selected (every tab shown) or another place, the history picks nothing: with
+  // nothing selected before either, the history is not even looked at.
   const before = s();
-  followQuietTabs({ ...before, selection: null, tabs: [...before.tabs] }, before);
+  const looked = spyOn(tabsModule, "lastShown");
+  const none = { ...before, selection: null };
+  followQuietTabs({ ...none, tabs: [...before.tabs] }, none);
+  expect(looked).not.toHaveBeenCalled();
+  looked.mockRestore();
+  followQuietTabs({ ...before, tabs: [...before.tabs] }, { ...before, selection: api.id });
   expect(s()).toBe(before);
 });
 
