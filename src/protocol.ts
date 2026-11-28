@@ -373,6 +373,16 @@ export type Project = {
    */
   folder?: boolean;
   parent?: string | null;
+  /**
+   * A colocated Jujutsu repository (28.26): the Changes panel warns next to the main worktree's
+   * Stage/Commit. Absent from an older service.
+   */
+  jj?: boolean;
+  /**
+   * In a jj repository whose main worktree is detached, the branch the other worktrees are
+   * compared with (the first of main, master, trunk). Absent from an older service.
+   */
+  trunk?: string | null;
 };
 
 export type ProjectError =

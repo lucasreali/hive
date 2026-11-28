@@ -153,6 +153,30 @@ pub fn branches(root: &Path) -> io::Result<Branches> {
     git(root, &args).map(|out| parse_branches(&out))
 }
 
+/// The bookmarks jj's default `trunk()` looks for, in its order: a colocated jj repository's
+/// detached main worktree is compared through the first of them that git has (28.26).
+const TRUNKS: [&str; 3] = ["main", "master", "trunk"];
+
+/// Parses `git for-each-ref --format=%(refname)` of [`TRUNKS`]: the first one listed exactly
+/// (a pattern also lists the refs below it, such as `refs/heads/main/x`).
+pub fn parse_trunk(out: &[u8]) -> Option<String> {
+    let names: Vec<&[u8]> = out
+        .split(|&b| b == b'\n')
+        .filter_map(|line| line.strip_prefix(b"refs/heads/"))
+        .collect();
+    let found = TRUNKS.into_iter().find(|t| names.contains(&t.as_bytes()));
+    found.map(str::to_owned)
+}
+
+/// The first of [`TRUNKS`] that is a branch of the repository at `root`, never running jj.
+/// Git gets [`git::TIME_LIMIT`]: projects are listed while the agents lock is held (9.13).
+pub fn trunk(root: &Path) -> io::Result<Option<String>> {
+    let refs = TRUNKS.map(|t| format!("refs/heads/{t}"));
+    let mut args = vec!["for-each-ref", "--format=%(refname)"];
+    args.extend(refs.iter().map(String::as_str));
+    git::output_within(root, &args, &[0], git::TIME_LIMIT).map(|out| parse_trunk(&out))
+}
+
 /// Parses `git worktree list --porcelain -z`.
 pub fn parse_porcelain(out: &[u8]) -> Vec<Worktree> {
     let mut list: Vec<Worktree> = Vec::new();
@@ -690,6 +714,27 @@ worktree /repo/.claude/worktrees/c\0HEAD 3333\0branch refs/heads/worktree-c\0pru
             }
         );
         assert_eq!(parse_branches(b""), Branches::default());
+    }
+
+    #[test]
+    fn the_trunk_is_the_first_of_main_master_and_trunk() {
+        let trunk = |out: &[u8]| parse_trunk(out);
+        assert_eq!(
+            trunk(b"refs/heads/main\nrefs/heads/master\n"),
+            Some("main".into())
+        );
+        assert_eq!(
+            trunk(b"refs/heads/trunk\nrefs/heads/master\n"),
+            Some("master".into())
+        );
+        assert_eq!(trunk(b"refs/heads/trunk\n"), Some("trunk".into()));
+        // Only an exact name: a pattern also lists the refs below it.
+        assert_eq!(trunk(b"refs/heads/main/x\nrefs/remotes/main\n"), None);
+        assert_eq!(trunk(b""), None);
+        // A git that fails is an error, which the listing reads as no trunk.
+        let tmp = tempfile::tempdir().unwrap();
+        let missing = tmp.path().join("missing");
+        assert!(super::trunk(&missing).is_err());
     }
 
     #[test]

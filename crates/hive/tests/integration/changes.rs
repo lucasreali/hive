@@ -215,3 +215,54 @@ async fn seen_marks_are_kept_invalidated_and_dropped_with_the_worktree() {
     drop(conn);
     stop(daemon);
 }
+
+#[tokio::test]
+async fn a_colocated_jj_repository_compares_its_worktrees_with_its_trunk() {
+    // What jj leaves (28.11, 28.26), made with git alone: `.jj/` beside `.git`, the main
+    // worktree detached at its last change, the `main` bookmark exported and lagging.
+    let repo = Repo::new();
+    assert!(repo.hive(&["create", "a"]).status.success());
+    let root = repo.root.display().to_string();
+    let wt = format!("{root}/.claude/worktrees/a");
+    let a = std::path::PathBuf::from(&wt);
+    std::fs::write(a.join("agent.txt"), "1\n2\n").unwrap();
+    repo.git_in(&a, &["add", "agent.txt"]);
+    repo.git_in(&a, &["commit", "-q", "-m", "agent"]);
+    repo.git(&["switch", "-q", "--detach"]);
+    repo.commit("work.txt", "w\n");
+    repo.write(".jj/.gitignore", "/*\n");
+    let daemon = repo.env.daemon();
+    let mut conn = repo.env.connect(Role::App).await;
+    conn.send(0, Control::AddProject { path: root.clone() })
+        .await;
+    let Control::ProjectAdded { project } = conn.control().await.1 else {
+        panic!("expected the project")
+    };
+    assert_eq!((project.jj, project.trunk.as_deref()), (true, Some("main")));
+    let counts = |path: &str| {
+        let w = project.worktrees.iter().find(|w| w.path == path).unwrap();
+        let s = w.status.clone().expect("a status");
+        (w.branch.clone(), s.ahead, s.behind, s.merged)
+    };
+    assert_eq!(counts(&root), (None, None, None, false));
+    let branch = Some("worktree-a".to_owned());
+    assert_eq!(counts(&wt), (branch, Some(1), Some(0), false));
+
+    // "Compare with: branch" lists the agent's commit, against the trunk.
+    let Control::Changes {
+        base,
+        branch,
+        base_error,
+        files,
+        ..
+    } = changes(&mut conn, &wt).await
+    else {
+        panic!("expected changes")
+    };
+    let expected = (DiffBase::Branch, Some("main".into()), None);
+    assert_eq!((base, branch, base_error), expected);
+    let paths: Vec<_> = files.into_iter().map(|f| f.path).collect();
+    assert_eq!(paths, ["agent.txt"]);
+    drop(conn);
+    stop(daemon);
+}

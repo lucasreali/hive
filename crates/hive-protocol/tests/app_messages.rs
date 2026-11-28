@@ -252,6 +252,8 @@ fn project() -> Project {
         group: false,
         folder: false,
         parent: Some(s("/g")),
+        jj: true,
+        trunk: Some(s("main")),
     }
 }
 
