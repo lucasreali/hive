@@ -13,10 +13,10 @@ Task 29.8 (`TODO.md`). Measured only: nothing was optimised. Later tasks compare
 |---|---|
 | Service: start, idle, terminals, streaming, flood, echo, refresh | `cargo bench -p hive --bench service_perf` (all, about 5 min) or `-- <scenario> [args]`, scenarios in the file's header |
 | Hook → service handled | `cargo bench -p hive --bench hook_latency` (1.x, unchanged) |
-| Frontend: output → painted, agent state → shown, cold load, memory, CPU profile | `E2E_PORT=<port> bunx playwright test -c e2e/perf.config.ts` (about 3 min); JSON in `target/perf/`, the CPU profile in `target/perf/replay-20.cpuprofile` |
+| Frontend: output → painted, agent state → shown, cold load, memory, CPU profile | `E2E_PORT=<port> bunx playwright test -c e2e/perf.config.ts` from the repository's root (about 3 min; it always makes a fresh production build); JSON in `target/perf/`, the CPU profile in `target/perf/replay-20.cpuprofile` |
 | Load test (1.11) | `E2E_PORT=<port> bunx playwright test -c e2e --project load --no-deps` |
 | The installed app | `scripts/energy.sh <seconds>` (29.10) |
-| Service profile | build with symbols: `CARGO_PROFILE_BENCH_STRIP=false CARGO_PROFILE_BENCH_DEBUG=line-tables-only cargo build -p hive --profile bench --benches --target-dir target/perf-symbols`, start a scenario from `target/perf-symbols/release/deps/service_perf-*`, then `sample <daemon pid> 8 -file <out>` (macOS' `sample`, a host tool) |
+| Service profile | build with symbols: `CARGO_PROFILE_BENCH_STRIP=false CARGO_PROFILE_BENCH_DEBUG=line-tables-only cargo build -p hive --profile bench --benches --target-dir target/perf-symbols`, start a scenario from `target/perf-symbols/release/deps/service_perf-*` (it prints `service pid <n>` on stderr once the service is up), then `sample <n> 8 -file <out>` (macOS' `sample`, a host tool) |
 
 `perf.config.ts` matches `*.perf.ts` only, so `bun run e2e` and CI never run these: they measure, they do not check. Neither `samply` nor `cargo flamegraph` is installed on the host (nothing was installed); `sample` and Chromium's profiler (the Performance panel's, through the DevTools protocol) were used.
 
@@ -33,7 +33,7 @@ CPU is the service process's own user + system time over the wall time (100% = o
 | 1 terminal flooding (flow control is the only limit) | 43% | 10.1 MB | 4.4 MB | 35 MiB/s |
 | 10 terminals flooding | 186% | 16.1 MB | 10.2 MB | 137 MiB/s |
 
-The streaming program is `while :; do cat chunk.txt; sleep 0.04; done` (12 truecolor lines, 1 KB); the flood one `cat`s 64 KB without pause. Memory stays flat: each terminal adds about 0.15 MB, and the flow control (`HIGH_WATER` 512 KiB) bounds the flood.
+The streaming program is `while :; do cat chunk.txt; sleep 0.04; done` (12 truecolor lines, 1 320 bytes); the flood one `cat`s 64 of them (84 480 bytes) without pause. Memory stays flat: each terminal adds about 0.15 MB, and the flow control (`HIGH_WATER` 512 KiB) bounds the flood.
 
 **Start.** `hive bridge` started in a fresh folder until `welcome` (the bridge, the service it starts, its first-run setup, the handshake): **p50 26.5 ms, max 26.9 ms** (10 runs).
 
@@ -45,7 +45,7 @@ The streaming program is `while :; do cat chunk.txt; sleep 0.04; done` (12 truec
 | 10 | 0.06 ms | 0.12 ms | 0.17 ms | 0.3 ms |
 | 30 | 0.10 ms | 0.37 ms | 0.98 ms | 1.9 ms |
 
-This is an upper bound of the service's share of "bytes written in the PTY → painted": a program's output takes only the second half of the trip.
+This is an upper bound of the service's share of "bytes written in the PTY → painted": a program's output takes only the second half of the trip. Every 200 keys the line is ended and the bench waits for both its echo and `cat`'s copy before the next key, so no late echo is counted for a later key.
 
 **Hook → service handled** (`hive hook SessionStart` started until the app connection has its `agent_detected`), 300 runs: **p50 2.8 ms, p99 4.5 ms, max 5.2 ms** (target p99 < 20 ms). Most of it is starting the `hive hook` process.
 
@@ -61,11 +61,11 @@ Linear: about 19 ms per worktree (hot spot 1).
 
 ## 3. The frontend against the mock transport
 
-Headless Playwright builds; WebKit is the engine of WKWebView (close to the app, not identical), Chromium runs WebGL on Metal as the load test does. WebKit's clock is rounded to 1 ms. Headless WebKit does not hold `requestAnimationFrame` to the display's 60 Hz as Chromium does, so its "painted" figures are lower than a real window's.
+Headless Playwright builds; WebKit is the engine of WKWebView (close to the app, not identical), Chromium runs WebGL on Metal as the load test does. WebKit's clock is rounded to 1 ms. Headless WebKit does not hold `requestAnimationFrame` to the display's 60 Hz as Chromium does, so its "painted" figures are lower than a real window's. "Painted" is the next `requestAnimationFrame` callback, the frame the change is drawn in: a lower bound of the moment it reaches the screen (compositing and the display's refresh come after).
 
 **Output → painted** (bytes reach the terminal manager, the mock's echo of `transport.writeTerminal`, delivered as the Tauri transport delivers a PTY frame, until the frame after xterm.js parsed them; 100 keys, 10 a second):
 
-| Browser | Other terminals replaying an agent (~23 KB/s each) | p50 | p95 | p99 | max |
+| Browser | Other terminals replaying an agent (~23 KB/s each; with 10, the measured terminal replays too: 11 stream) | p50 | p95 | p99 | max |
 |---|---|---|---|---|---|
 | Chromium | 0 | 1.2 ms | 9.7 ms | 17.7 ms | 17.7 ms |
 | Chromium | 10 | 11.3 ms | 16.6 ms | 17.4 ms | 17.4 ms |

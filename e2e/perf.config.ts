@@ -1,9 +1,9 @@
 import { defineConfig } from "@playwright/test";
 
 // The frontend baselines of 29.8 (`docs/review/performance.md`): measurements, not checks, so they
-// are kept out of `bun run e2e` (whose config matches `*.e2e.ts` only). Run them on a quiet
-// machine with `E2E_PORT=<port> bunx playwright test -c e2e/perf.config.ts`; results go to
-// `target/perf/`. The dev server serves the mock-transport measurements; a production build on
+// are kept out of `bun run e2e` (whose config matches `*.e2e.ts` only). Run them from the
+// repository's root (the spec reads `dist/` and writes `target/perf/` there) on a quiet machine
+// with `E2E_PORT=<port> bunx playwright test -c e2e/perf.config.ts`. The dev server serves the mock-transport measurements; a production build on
 // the next port serves the cold load, as the app's bundle loads it.
 const port = Number(process.env.E2E_PORT ?? 1420);
 const url = `http://localhost:${port}`;
@@ -36,7 +36,8 @@ export default defineConfig({
       command: `bunx vite build && bunx vite preview --port ${port + 1} --strictPort`,
       cwd: "..",
       url: preview,
-      reuseExistingServer: true,
+      // Always a fresh build: a preview left running would serve an old bundle.
+      reuseExistingServer: false,
       timeout: 600_000,
     },
   ],

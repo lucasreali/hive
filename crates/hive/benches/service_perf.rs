@@ -89,13 +89,26 @@ impl Env {
                 cmd.env_remove(key);
             }
         }
-        cmd.env("GIT_CONFIG_GLOBAL", "/dev/null")
-            .env("GIT_CONFIG_NOSYSTEM", "1")
-            .env("GIT_CEILING_DIRECTORIES", self.dir.path())
+        self.isolate(&mut cmd)
             .env_remove("CLAUDE_CONFIG_DIR")
             .env(hive::power::OFF, "1")
             .env("SHELL", "fish");
         cmd
+    }
+
+    /// git, for `cmd` and its children, sees only this folder: the temporary `HOME` and
+    /// `XDG_CONFIG_HOME` (no user config, ignore or attributes file), no system config, no
+    /// enclosing repository, and none of a git hook's `GIT_DIR`/`GIT_WORK_TREE`/`GIT_INDEX_FILE`
+    /// (as `tests/integration/worktree.rs`'s `isolate`).
+    fn isolate<'a>(&self, cmd: &'a mut Command) -> &'a mut Command {
+        cmd.env("HOME", self.path("home"))
+            .env("XDG_CONFIG_HOME", self.path("config"))
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .env("GIT_CEILING_DIRECTORIES", self.dir.path())
+            .env_remove("GIT_DIR")
+            .env_remove("GIT_WORK_TREE")
+            .env_remove("GIT_INDEX_FILE")
     }
 
     fn socket(&self) -> PathBuf {
@@ -116,7 +129,7 @@ struct Service {
 #[cfg(unix)]
 impl Service {
     async fn start(env: &Env) -> Result<Self> {
-        let child = env.hive().arg("daemon").spawn()?;
+        let mut child = env.hive().arg("daemon").spawn()?;
         let deadline = Instant::now() + Duration::from_secs(10);
         let stream = loop {
             match UnixStream::connect(env.socket()).await {
@@ -124,7 +137,13 @@ impl Service {
                 Err(_) if Instant::now() < deadline => {
                     tokio::time::sleep(Duration::from_millis(10)).await;
                 }
-                Err(e) => return Err(e.into()),
+                Err(e) => {
+                    // Never connected, so no app connection would end it: end it here. (Once
+                    // connected, dropping the connection ends the service.)
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return Err(e.into());
+                }
             }
         };
         let (read, write) = stream.into_split();
@@ -140,6 +159,8 @@ impl Service {
         service
             .until(|f| matches!(f.to_control(), Ok(Control::Welcome { .. })))
             .await?;
+        // For a profiler to attach to (`sample <pid>`) while the scenario runs.
+        eprintln!("service pid {}", service.pid());
         Ok(service)
     }
 
@@ -338,7 +359,7 @@ async fn sample(service: &mut Service, scenario: &str, terminals: u32, secs: u64
     let cpu = (end.cpu.saturating_sub(start.cpu)).as_secs_f64() / wall * 100.0;
     let rate = (service.received - received) as f64 / wall / 1024.0;
     println!(
-        r#"{{"scenario":"{scenario}","terminals":{terminals},"secs":{wall:.1},"cpu_pct":{cpu:.1},"rss_mb":{},"rss_peak_mb":{},"footprint_mb":{},"output_kib_s":{rate:.0}}}"#,
+        r#"{{"scenario":"{scenario}","pid":{pid},"terminals":{terminals},"secs":{wall:.1},"cpu_pct":{cpu:.1},"rss_mb":{},"rss_peak_mb":{},"footprint_mb":{},"output_kib_s":{rate:.0}}}"#,
         mb(end.rss),
         mb(peak),
         mb(footprint(pid)),
@@ -346,8 +367,9 @@ async fn sample(service: &mut Service, scenario: &str, terminals: u32, secs: u64
     Ok(())
 }
 
-/// Writes the streaming programs into `dir`: `stream.sh` prints a 1 KB chunk of coloured lines
-/// every 40 ms, `flood.sh` a 64 KB one without pause; both run until their terminal closes.
+/// Writes the streaming programs into `dir`: `stream.sh` prints a 1 320-byte chunk of 12
+/// truecolor lines every 40 ms, `flood.sh` 64 of them (84 480 bytes) without pause; both run
+/// until their terminal closes.
 #[cfg(unix)]
 fn programs(dir: &Path) -> Result<()> {
     let mut chunk = String::new();
@@ -427,9 +449,19 @@ async fn echo(streaming: u32, runs: usize) -> Result<()> {
     let mut samples = Vec::with_capacity(runs);
     for run in 0..runs {
         // A line ends every 200 keys, within the line discipline's 1024-byte limit.
+        // Wait for both the Enter's echo and `cat`'s copy of the line (two line feeds), so no
+        // late `k` of that line is taken for the next key's echo.
         if run % 200 == 199 {
             service.run(1, "").await?;
-            service.drain(Duration::from_millis(100)).await?;
+            let mut feeds = 0;
+            service
+                .until(|f| {
+                    if f.kind == FrameType::Terminal && f.channel == 1 {
+                        feeds += f.payload.iter().filter(|b| **b == b'\n').count();
+                    }
+                    feeds >= 2
+                })
+                .await?;
         }
         let start = Instant::now();
         service.send(Frame::terminal(1, &b"k"[..])).await?;
@@ -447,8 +479,10 @@ async fn echo(streaming: u32, runs: usize) -> Result<()> {
 }
 
 #[cfg(unix)]
-fn git(dir: &Path, args: &[&str]) -> Result<()> {
-    let status = Command::new("git")
+fn git(env: &Env, dir: &Path, args: &[&str]) -> Result<()> {
+    let mut cmd = Command::new("git");
+    let status = env
+        .isolate(&mut cmd)
         .current_dir(dir)
         .args([
             "-c",
@@ -457,8 +491,6 @@ fn git(dir: &Path, args: &[&str]) -> Result<()> {
             "user.email=bench@example.com",
         ])
         .args(args)
-        .env("GIT_CONFIG_GLOBAL", "/dev/null")
-        .env("GIT_CONFIG_NOSYSTEM", "1")
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
         .status()?;
@@ -472,9 +504,9 @@ fn git(dir: &Path, args: &[&str]) -> Result<()> {
 /// A repository of 500 files in 25 folders, one commit, with `worktrees` linked worktrees under
 /// `.claude/worktrees/`, one commit ahead each; every third one has two files changed.
 #[cfg(unix)]
-fn repository(at: &Path, worktrees: u32) -> Result<()> {
+fn repository(env: &Env, at: &Path, worktrees: u32) -> Result<()> {
     std::fs::create_dir(at)?;
-    git(at, &["init", "-q", "-b", "main"])?;
+    git(env, at, &["init", "-q", "-b", "main"])?;
     for d in 0..25 {
         let dir = at.join(format!("src/mod{d:02}"));
         std::fs::create_dir_all(&dir)?;
@@ -484,16 +516,16 @@ fn repository(at: &Path, worktrees: u32) -> Result<()> {
         }
     }
     std::fs::write(at.join(".gitignore"), ".claude/\n")?;
-    git(at, &["add", "-A"])?;
-    git(at, &["commit", "-q", "-m", "initial"])?;
+    git(env, at, &["add", "-A"])?;
+    git(env, at, &["commit", "-q", "-m", "initial"])?;
     for w in 0..worktrees {
         let name = format!("task-{w:02}");
         let path = at.join(".claude/worktrees").join(&name);
         let path_str = path.display().to_string();
-        git(at, &["worktree", "add", "-q", "-b", &name, &path_str])?;
+        git(env, at, &["worktree", "add", "-q", "-b", &name, &path_str])?;
         std::fs::write(path.join(format!("src/mod00/new{w}.ts")), "export {};\n")?;
-        git(&path, &["add", "-A"])?;
-        git(&path, &["commit", "-q", "-m", "work"])?;
+        git(env, &path, &["add", "-A"])?;
+        git(env, &path, &["commit", "-q", "-m", "work"])?;
         if w % 3 == 0 {
             std::fs::write(path.join("src/mod01/file01.ts"), "changed\n")?;
             std::fs::write(path.join("notes.md"), "untracked\nfile\n")?;
@@ -506,7 +538,7 @@ fn repository(at: &Path, worktrees: u32) -> Result<()> {
 async fn refresh(worktrees: u32, runs: usize) -> Result<()> {
     let env = Env::new()?;
     let repo = env.path("work/repo");
-    repository(&repo, worktrees)?;
+    repository(&env, &repo, worktrees)?;
     let mut service = Service::start(&env).await?;
     let add = Control::AddProject {
         path: repo.display().to_string(),
