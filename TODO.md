@@ -733,7 +733,7 @@ Today: a read-only diff against HEAD or the branch's fork point (9.11), live cha
 | Stage | Content | Points |
 |---|---|---|
 | 28 | The usage fix, skills, performance baselines, interface details, worktrees and tooling, and the designs the later stages need, and the interface fixes (28.17–28.21) | 87 |
-| 29 | Pinned tabs, and working together over SSH | 122 (89 reserved) |
+| 29 | Pinned tabs, and working together over SSH (29.12–29.19 written 2026-11-28) | 122 |
 | 30 | IDE features in the editor, themes from a file, the plugin design | 96 (34 reserved) |
 | 31 | Plugins, and the tooling audit | 97 (89 reserved) |
 | 32 | The full review of Hive's code (audits and approved refactors) | 103 (55 reserved) |
@@ -842,7 +842,23 @@ Reported by the human from v0.32.0 onward, to be spread over the next stages; ea
 
 ## Stage 29 — Pinned tabs, and working together over SSH
 
-≈ 122 points, 89 of them reserved for the multiplayer build that 28.14's design will define. D27.1. Today a remote service serves **one** app: a second one with another `app_id` is refused ("another app is already connected", `docs/spike/ssh.md` §6; "two laptops on one host is out for now").
+≈ 122 points; the 89 reserved for the multiplayer build are now tasks 29.12–29.19 (written 2026-11-28 from 28.14's design). D27.1. Today a remote service serves **one** app: a second one with another `app_id` is refused ("another app is already connected", `docs/spike/ssh.md` §6; "two laptops on one host is out for now").
+
+**Several people on one remote service: the approved design** is [`docs/spike/multiplayer.md`](docs/spike/multiplayer.md). The human approved every recommendation of 28.14's checkpoint on 2026-11-27 ("faça tudo isso por conta própria"), so each question of its §11 takes the recommended answer:
+
+- **D29.1** (Q1) **A Unix user each.** The owner's remote service is shared to a Unix group through a second socket; who connects comes from the kernel (`SO_PEERCRED` → `getpwuid`) and must be in the owner's Sharing list (option A, §3). One shared account (B) and federated services (C) are rejected.
+- **D29.2** (Q2) **Agents a collaborator starts run as the owner**: the owner's `claude` login, with the collaborator as git author (`GIT_AUTHOR_NAME`/`GIT_AUTHOR_EMAIL` from their Sharing entry; the committer stays the owner). A team that wants a team login makes the owner a team account.
+- **D29.3** (Q3) **Each terminal has one driver**: its opener, until a "Hand over" to a connected Collaborator. The driver, the opener and the owner take it back at once; "Ask to drive" is a request the driver accepts or ignores. Only the driver types.
+- **D29.4** (Q4) **Push, pull requests, run actions and workflows (the owner's `gh`) are owner only.**
+- **D29.5** (Q5) **A teammate's app of another version is refused**, with both versions shown; the owner updates (#29 strict). "Restart the remote service" is owner only.
+- **D29.6** (Q6) **An agent alerts its terminal's driver and whoever follows the driver**; a per-app setting "Alert me for: my agents (default) / every shared agent".
+- **D29.7** (Q7) **The PTY takes the driver's size**; a smaller watcher sees it scaled down (never above 100 %).
+- **D29.8** (Q8) **The shared socket is `/tmp/hive-shared-<owner uid>/hive.sock`**: folder `0710`, socket `0660`, group = the sharing group, checked on both ends (owner uid, mode, peer uid).
+- **D29.9** (Q9) **Session history of a shared space is visible to every role**; Resume and Open as Chat for Collaborators; Delete and Move for the owner only.
+- **D29.10** (Q10) **Caps per connection:** 8 sessions in all, 2 per person; an output queue of 1024 frames / 64 MiB; 1000 control frames and 16 MiB per second; 30 comments per minute per person; 100 mentions kept per person; presence out at most 4/s, `view` in at most 20/s.
+- **Not a Hive decision:** whether the owner's Claude plan allows teammates to use the owner's login through a shared host (consumer plans are for one person; a team may need a Team or Enterprise seat, or an API key, on the owner or team account). The human checks it; Hive never chooses or stores it (#45).
+
+The `docs/hive.md` changes these imply (the spike's §13: #14, #18, #24, #45, #48, #5/6.5, 27.1/27.3, and a new Sharing item) are the human's to write; agents never edit `docs/hive.md`.
 
 Created 2026-11-26 at the human's request: "quero conseguir fixar um chat para evitar que feche acidentalmente um chat". Today a chat tab (#40) closes with its close button or menu, with a confirmation only while its agent is 🔵, 🟣, 🟡 or 🟠 (#18); an idle chat closes at once and its conversation is gone from the tab bar (#57). *(From the old Stage 32.)*
 
@@ -850,7 +866,65 @@ Created 2026-11-26 at the human's request: "quero conseguir fixar um chat para e
 - [ ] **29.2 Pinned tabs.** · 5 pts *(Was 32.2.)* `task/29.2-pinned-tabs` — Needs 29.1's approval. Build the approved design. Tests: bun (pin/unpin, the close paths refused or confirmed, the order, the persistence and its fallback when storage is empty or throws); Playwright on the mock transport (pin a chat, try every close path, reload, the pin and the order are kept), in One Dark and One Light.
 - [ ] **29.3 Pinned tabs hand check.** · 1 pt *(Was 32.3.)* `main` — The human pins a chat in the real app, tries to close it every way (button, menu, palette, closing other tabs, closing the worktree), quits and reopens Hive. ⏸ Checkpoint.
 - [ ] **29.5 Stage 27 hand check.** · 2 pts *(Was 27.9.)* `main` — The human reviews a real agent's work with 27.1–27.6 on a test repository and pushes it, checks 27.7 on a real session with subagents, and 27.8 with the real hosts. ⏸ Checkpoint.
-- [ ] **29.4 The multiplayer tasks approved at 28.14.** · 89 pts reserved *(Was "28.2…".)* — Tasks written here after 28.14's checkpoint (several apps on one service, terminal ownership and hand over, presence and follow, shared review), each sized again by planning poker; `security-reviewer` on each.
+- [ ] **29.4 The multiplayer tasks approved at 28.14.** · 89 pts reserved *(Was "28.2…".)* — *Written as 29.12–29.19 (2026-11-28), below; their points replace this reservation.* Tasks written here after 28.14's checkpoint (several apps on one service, terminal ownership and hand over, presence and follow, shared review), each sized again by planning poker; `security-reviewer` on each.
+
+### Several people on one remote service (from 28.14)
+
+The design is [`docs/spike/multiplayer.md`](docs/spike/multiplayer.md) with D29.1–D29.10 (Stage 29's intro). The spike's §12 numbered these tasks 29.4–29.11; they are 29.12–29.19 here, since those numbers were taken. Sharing is a **remote Linux service only** and **off by default**: with no Sharing list the service behaves exactly as today (one socket, one app, the second app refused). Every task that changes `crates/hive`, `crates/hive-protocol` or `src-tauri` gets `security-reviewer`; tests never use the human's hosts, users or `~/.ssh` (temp keys, temp `HOME`/`XDG_*`, containers for real users). A new protocol message keeps `docs/architecture.md`'s catalog exact in the task that adds it.
+
+Sized 2026-11-28 by a planning poker of three voters (service/Rust engineer, frontend engineer, QA/delivery lead), Fibonacci, median (the votes differed by at most one card):
+
+| Task | Rust | Frontend | QA | Points |
+|---|---|---|---|---|
+| 29.12 Sharing and identity | 13 | 8 | 13 | 13 |
+| 29.13 Several apps on one service | 21 | 13 | 21 | 21 |
+| 29.14 Shared terminals | 13 | 13 | 21 | 13 |
+| 29.15 Presence and follow | 5 | 8 | 8 | 8 |
+| 29.16 Alerts per person | 5 | 3 | 5 | 5 |
+| 29.17 Shared review | 13 | 8 | 13 | 13 |
+| 29.18 A teammate cannot harm the owner | 8 | 5 | 13 | 8 |
+| 29.19 Two real users in CI, docs, hand check | 8 | 5 | 13 | 8 |
+| | | | | **89** |
+
+- [ ] **29.12 Sharing and identity.** · 13 pts `task/29.12-sharing-identity` — D29.1, D29.5, D29.8, D29.10. Needs nothing. Scope: spike §3 ("How A works", the Settings → Sharing list, the shared socket, the two gates, joining, versions, what a teammate can see).
+  - **Settings → Sharing** (owner only, remote Linux service only): the Unix group (from the owner's `getgroups`), the shared spaces, the people (login name checked against `^[a-z_][a-z0-9_-]{0,31}$` and `getpwnam`, display name with no control characters and at most 40 characters, git name and e-mail, role Viewer or Collaborator). Validated and stored by the service (#37, #47); the app only renders and sends.
+  - **The shared socket** (D29.8): created when sharing is on, removed when it is off and when the service ends; a folder already there and not the owner's, or writable by others, is refused with its reason.
+  - **The service's gate:** a shared-socket connection is accepted only when its peer uid maps to a name in the Sharing list; only `role: app` (a `role: hook` is refused); `welcome` gains `you {name, role}` and `shared`.
+  - **Joining:** `hive bridge --join <owner>` (validated owner name, given as a separate `sh -c` argument of 26.17's constant command, never spliced in), which refuses a folder not owned by the owner's uid or writable by others, and a peer uid that is not the owner's. Settings → Hosts "Join someone's Hive" (alias + owner login). "alice's Hive is not running on <host>" on the 26.17 ladder; a guest never starts the owner's service.
+  - **Versions** (D29.5): a guest of another version sees both versions and "ask <owner> to update"; "Restart the remote service" offered to the owner only.
+  - **Tests:** Rust unit (name, group and display-name validation; the Sharing list's parse and limits; the folder and socket checks with a fake `peer_cred`/`getpwuid` behind a trait), integration (`common::Env`: sharing off keeps today's refusal; on, the socket's modes; a hook role refused; a name not in the list refused; a planted folder refused), protocol round trips (`welcome.you`), bun (the Sharing section, Join someone's Hive, the version message), e2e on the mock (Sharing and Join, One Dark and One Light). Two real Unix users come in 29.19. `security-reviewer`.
+- [ ] **29.13 Several apps on one service.** · 21 pts `task/29.13-several-apps` — D29.4, D29.9, D29.10. Needs 29.12. Scope: spike §4 (sessions, the three kinds of message, protocol changes, limits per connection, when one app drops) and §3's role table.
+  - **Per-connection sessions:** person, role, `app_id`, channel map, `watching`, `view`, `listed`, `scripted` and a bounded output queue move out of the global `State`. `to_app` splits into `to_session` and `to_shared(space, …)`; terminal channels are translated through each session's map, both ways.
+  - **Authorization:** the role table (§3) and the shared-space filter checked in the service on every request before any work; every path-bearing request resolved inside a project of a shared space (`projects::place`, resolved: `..` and links cannot escape); a refusal answers `not_allowed {request}`, shown by the app, logged at debug level without the payload. Never shown to a guest: Settings, accounts, `gh` logins, usage, diagnostics, `open_shared`, Uninstall, unshared spaces (§3). Sessions per D29.9.
+  - **Caps** (D29.10): a session past its queue or rate cap is dropped with `disconnected {kind: limit}`; the ninth session, or a third of one person, refused with a message.
+  - **Drops and life:** a guest's `bye {end}` ends only its session; takeover keyed by person + `app_id`; the service ends when no session is left and the owner's `keep_secs` has passed.
+  - **The app:** renders `you`/`shared`, hides what the role cannot do (the service still refuses it), shows `not_allowed`.
+  - **Tests:** Rust unit (routing by kind, channel maps, the role table for every request type, the caps), integration (two app connections as two names on one service: each gets its own replies and the shared state of shared spaces only; a guest's request outside a shared space and every owner-only request answered `not_allowed`; a guest that stops reading is dropped while the owner keeps receiving; takeover; the service's life with a guest connected), protocol round trips, bun (role-hidden controls, `not_allowed` shown), e2e on the mock with a guest session (`?mock=guest` or similar), both themes. `security-reviewer`.
+- [ ] **29.14 Shared terminals.** · 13 pts `task/29.14-shared-terminals` — D29.2, D29.3, D29.7. Needs 29.13. Scope: spike §5 (who types, PTY size, output to several apps, watching from the sidebar, a collaborator's terminals) and §8's app side point 3.
+  - **Service:** service-wide terminal ids and `terminals {…}` (opener, driver, cwd, worktree, size, account); every terminal of a shared service has a ring (26.15), paced by the driver's acknowledgements (9.19), each watcher at its own offset, `terminal_reset` for one left behind; `watch_terminal` / `unwatch_terminal` (26.16's attach path); `hand_over {to}` (a connected Collaborator only), `take_back`, "Ask to drive"; a non-driver's input dropped and its resize ignored; the PTY at the driver's size; `GIT_AUTHOR_*` from the person's Sharing entry for a collaborator's terminal, never from the app.
+  - **App:** every terminal of a shared space under its worktree, tagged with its opener; a watched tab read-only until handed over; "bob is typing" on the tab; the watcher's note "alice is driving · Ask to drive"; scaled-down view with "120×40 · alice".
+  - **Tests:** Rust unit and integration (two sessions on one terminal: driver's input reaches the PTY, the watcher's never; hand over and take back by driver, opener and owner; a slow watcher never stalls the PTY and gets a reset; the PTY resized to the new driver; a collaborator's `git commit` has their author and the owner as committer), bun (read-only tab, notes, scaling never above 100 %, and a test that xterm has **no OSC 52 handler**), e2e on the mock (watch, ask, hand over, take back), both themes. `security-reviewer`.
+- [ ] **29.15 Presence and follow.** · 8 pts `task/29.15-presence-follow` — Needs 29.13. Scope: spike §6, and `view`'s new fields and `presence` in §4.
+  - **Service:** `view` gains `worktree`, `tab` and `line`; `presence {people}` sent on change, throttled (D29.10), shared spaces only, nothing of an unshared space; "bob (reconnecting)" for 30 s after a drop, then gone; avatar colour picked by the service from the name.
+  - **App:** chips in the title bar, on the sidebar's worktree and agent rows and on the tab each person has open; "away" after 5 minutes without focus; Follow (a chip or the palette's "Follow…", 6.3) as UI state (#37): their worktree, tab and top line, stopped by a click, a key or a scroll, with "Following bob · Stop"; following a terminal tab watches it (29.14 if done, else the tab only); follow never reaches what the role cannot see.
+  - **Tests:** Rust (the throttle, the shared-space filter, the reconnecting grace with a fake clock), protocol round trips, bun (chips, away, follow and each way it stops), e2e on the mock (follow a person across a worktree, a file line and a tab), both themes. `security-reviewer`.
+- [ ] **29.16 Alerts per person.** · 5 pts `task/29.16-alerts-per-person` — D29.6. Needs 29.14, 29.15. Scope: spike §7, the "Agent alerts" point.
+  - `agent_state.pending` and `notify` computed per session, 5.6's "already seen" exception against that session's own `view`; an agent alerts its terminal's driver and the people following the driver; the per-app setting "Alert me for: my agents / every shared agent" (#47; default my agents); everyone else keeps the state dot and the propagated state, with no sound, notification or bell count (#5).
+  - **Tests:** Rust (who gets `notify` for driver, follower, other, the setting; the seen exception per session), bun (the setting, no tone for others), e2e on the mock, both themes. `security-reviewer`.
+- [ ] **29.17 Shared review.** · 13 pts `task/29.17-shared-review` — Needs 29.13. Scope: spike §7 (seen marks per person, shared comments, `@name` mentions).
+  - **Seen** (27.1): `seen.json` keyed by person, worktree and base; each `changes` carries the asker's own marks and `seen_by: [{name, count}]` (at most 8); chips in the diff header ("bob saw 4 of 9").
+  - **Comments** (27.3): author and `author_name` set by the service from the session, never the app; add, resolve, reopen for every role; delete by the author or the owner; `edit_comment {id, body}` by the author only; at most 30 per minute per person (D29.10); "Send to agent" only to a terminal you drive.
+  - **Mentions:** `@<login>` and `@<display name with no spaces>` parsed against the Sharing list (at most 8 per comment); kept in `<data>/mentions.json` (`0600`, atomic, 256 KiB, 100 per person); `mentions {items}` live or at the next `welcome`, `read_mention {id}`; a deleted comment removes its mentions; in the app an inbox item (6.5), the bell's badge, the tone and an OS notification under #5's rules (not while that comment is in view).
+  - **Tests:** Rust (seen migration from today's file without a person, per-person keys, authorship forced by the service, edit and delete rights, mention parsing incl. unknown names and the caps, the file's mode and corrupt-file fallback), integration (two sessions: a mention delivered live and at `welcome`), protocol round trips, bun (chips, edit, inbox items), e2e on the mock, both themes. `security-reviewer`.
+- [ ] **29.18 A teammate cannot harm the owner.** · 8 pts `task/29.18-hostile-teammate` — Needs 29.12–29.17. Scope: spike §8 (service side 1–8, app side 1–4, what is not prevented).
+  - Fake guest apps against a real service (integration, `common::Env`): a forged name, role or author in a message; paths outside shared spaces (`..`, links); every owner-only request; input and resize to an undriven terminal; `role: hook` on the shared socket; floods of frames, comments, `view`s and mentions; a guest that stops reading; a ninth session and a third per person; a planted `/tmp/hive-shared-<uid>` folder; a person removed from the Sharing list (their sessions end at once). Each refused, dropped or capped, with the owner's service up and its other sessions unaffected.
+  - App side: a hostile teammate's text (names, comment bodies, mention text, presence paths, terminal output with OSC 52 and OSC 8) through a shared service, as 26.19's fake remote.
+  - **Review:** `security-reviewer` on the whole shared path (29.12–29.17); `fp-check` on any suspected finding before it is reported.
+- [ ] **29.19 Two real users in CI, docs, hand check.** · 8 pts `task/29.19-multiplayer-ci` — Needs 29.12–29.18. Scope: spike §10's untried points and §12.
+  - **CI:** a Linux job (as 26.20's `remote` job) with sshd and two Unix users in a group in a container, temp keys and `HOME`: the owner shares, the guest joins over its own `ssh`, and the test runs watch, hand over, take back, comment, mention, drop and rejoin, plus a third user outside the group refused at the socket's permission and a group member not in the Sharing list refused by the service. `SO_PEERCRED` across users and the group `chown` of the folder verified for real.
+  - **Docs:** README ("Sharing a remote Hive": the group the admin sets up, Sharing, Join someone's Hive, roles, what is not prevented, the Claude plan note), `docs/architecture.md` (sessions, the shared socket, the message catalog exact).
+  - **`docs/hive.md`:** the human updates it from the spike's §13.
+  - ⏸ **Checkpoint:** the human checks it on a real host with a second account.
 
 ### Small fixes the human found in use
 
